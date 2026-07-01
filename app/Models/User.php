@@ -53,8 +53,7 @@ class User extends Authenticatable
     public function hotels(): BelongsToMany
     {
         return $this->belongsToMany(Hotel::class, 'user_hotels')
-            ->withPivot(['granted_at', 'expires_at'])
-            ->withTimestamps();
+            ->withPivot(['granted_at', 'expires_at']);
     }
 
     public function authorityProfile(): HasOne
