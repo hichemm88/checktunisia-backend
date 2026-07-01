@@ -8,6 +8,9 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Drop and recreate with uuidMorphs because User model uses UUID primary keys
+        Schema::dropIfExists('personal_access_tokens');
+
         Schema::create('personal_access_tokens', function (Blueprint $table) {
             $table->id();
             $table->uuidMorphs('tokenable');
