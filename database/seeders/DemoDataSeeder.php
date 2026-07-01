@@ -15,7 +15,6 @@ use Illuminate\Support\Facades\Hash;
 
 class DemoDataSeeder extends Seeder {
     public function run(): void {
-        if (app()->isProduction()) return;
 
         // Demo hotel
         $hotel = Hotel::updateOrCreate(['slug'=>'hotel-sousse-azur'],['name'=>'Hôtel Sousse Azur','type'=>'hotel','room_count'=>45,'registration_number'=>'TN-HOT-2023-0041','stars'=>4,'status'=>'active']);
