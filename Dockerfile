@@ -25,6 +25,9 @@ WORKDIR /var/www/html
 # Copy source
 COPY . .
 
+# Create .env from example so artisan commands work
+RUN cp .env.example .env
+
 # Set permissions
 RUN mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
     && chmod -R 775 storage bootstrap/cache
