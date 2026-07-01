@@ -15,82 +15,81 @@ class AuthoritySearchController extends Controller
     /**
      * GET /authority/search
      * Cross-tenant guest search — every call is logged.
+     *
+     * Accepted params (aligned with frontend SearchPage):
+     *   first_name, last_name, document_number, nationality_code,
+     *   date_of_birth, check_in_from, check_in_to, hotel_governorate
      */
     public function search(Request $request): JsonResponse
     {
         $request->validate([
-            'q'             => ['nullable', 'string', 'min:2', 'max:100'],
-            'passport_number' => ['nullable', 'string', 'max:100'],
-            'nationality'   => ['nullable', 'string', 'size:3'],
-            'date_of_birth' => ['nullable', 'date'],
-            'stay_from'     => ['nullable', 'date'],
-            'stay_to'       => ['nullable', 'date'],
-            'hotel_id'      => ['nullable', 'uuid'],
+            'first_name'       => ['nullable', 'string', 'min:2', 'max:100'],
+            'last_name'        => ['nullable', 'string', 'min:2', 'max:100'],
+            'document_number'  => ['nullable', 'string', 'max:100'],
+            'nationality_code' => ['nullable', 'string', 'min:2', 'max:3'],
+            'date_of_birth'    => ['nullable', 'date'],
+            'check_in_from'    => ['nullable', 'date'],
+            'check_in_to'      => ['nullable', 'date'],
+            'hotel_governorate'=> ['nullable', 'string', 'max:100'],
+            'per_page'         => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
 
-        // Require at least one search parameter
-        if (!$request->hasAny(['q', 'passport_number', 'nationality', 'date_of_birth', 'stay_from', 'stay_to', 'hotel_id'])) {
+        $searchableParams = collect($request->only([
+            'first_name','last_name','document_number','nationality_code',
+            'date_of_birth','check_in_from','check_in_to','hotel_governorate',
+        ]))->filter()->isNotEmpty();
+
+        if (!$searchableParams) {
             return response()->json([
-                'data'   => null,
-                'errors' => [['code' => 'VALIDATION_ERROR', 'message' => 'At least one search parameter is required.', 'field' => null]],
+                'errors' => [['code' => 'VALIDATION_ERROR', 'message' => 'Au moins un critère de recherche est requis.', 'field' => null]],
             ], 422);
         }
 
         $start = microtime(true);
 
-        $query = Guest::with(['primaryDocument', 'checkIns.hotel'])
-            ->select('guests.*');
+        $query = Guest::with(['primaryDocument', 'checkIns.hotel'])->select('guests.*');
 
-        // Full-text search on name
-        if ($request->filled('q')) {
-            $q = $request->q;
-            $query->where(function ($sub) use ($q) {
-                $sub->where('first_name', 'ilike', "%{$q}%")
-                    ->orWhere('last_name', 'ilike', "%{$q}%");
-            });
+        if ($request->filled('first_name')) {
+            $query->where('first_name', 'ilike', "%{$request->first_name}%");
         }
-
-        // Exact passport number match
-        if ($request->filled('passport_number')) {
+        if ($request->filled('last_name')) {
+            $query->where('last_name', 'ilike', "%{$request->last_name}%");
+        }
+        if ($request->filled('document_number')) {
             $query->whereHas('documents', fn($d) =>
-                $d->where('document_number', $request->passport_number)
+                $d->where('document_number', 'ilike', "%{$request->document_number}%")
             );
         }
-
-        // Nationality filter
-        if ($request->filled('nationality')) {
-            $query->where('nationality_code', strtoupper($request->nationality));
+        if ($request->filled('nationality_code')) {
+            $query->where('nationality_code', strtoupper($request->nationality_code));
         }
-
-        // Date of birth filter
         if ($request->filled('date_of_birth')) {
             $query->whereDate('date_of_birth', $request->date_of_birth);
         }
-
-        // Stay period filter
-        if ($request->filled('stay_from') || $request->filled('stay_to')) {
+        if ($request->filled('check_in_from') || $request->filled('check_in_to')) {
             $query->whereHas('checkIns', function ($ci) use ($request) {
-                if ($request->filled('stay_from')) {
-                    $ci->where('expected_check_out_date', '>=', $request->stay_from);
+                if ($request->filled('check_in_from')) {
+                    $ci->where('expected_check_out_date', '>=', $request->check_in_from);
                 }
-                if ($request->filled('stay_to')) {
-                    $ci->where('check_in_date', '<=', $request->stay_to);
+                if ($request->filled('check_in_to')) {
+                    $ci->where('check_in_date', '<=', $request->check_in_to);
                 }
             });
         }
-
-        // Hotel filter
-        if ($request->filled('hotel_id')) {
-            $query->whereHas('checkIns', fn($ci) => $ci->where('hotel_id', $request->hotel_id));
+        if ($request->filled('hotel_governorate')) {
+            $query->whereHas('checkIns.hotel.address', fn($a) =>
+                $a->where('governorate', 'ilike', "%{$request->hotel_governorate}%")
+            );
         }
 
-        $results = $query->paginate($request->integer('per_page', 20));
-
+        $results     = $query->orderBy('last_name')->paginate($request->integer('per_page', 20));
         $executionMs = (int) ((microtime(true) - $start) * 1000);
 
-        // Log the search
         AuditLogger::logAuthoritySearch(
-            searchParams: $request->only(['q', 'passport_number', 'nationality', 'date_of_birth', 'stay_from', 'stay_to', 'hotel_id']),
+            searchParams: $request->only([
+                'first_name','last_name','document_number','nationality_code',
+                'date_of_birth','check_in_from','check_in_to','hotel_governorate',
+            ]),
             resultCount: $results->total(),
             executionTimeMs: $executionMs,
         );
@@ -113,7 +112,7 @@ class AuthoritySearchController extends Controller
     public function show(string $id): JsonResponse
     {
         $guest = Guest::with(['documents', 'checkIns' => function ($q) {
-            $q->with('hotel.address')->orderByDesc('check_in_date');
+            $q->with('hotel.address', 'room')->orderByDesc('check_in_date');
         }])->findOrFail($id);
 
         AuditLogger::logAuthorityView($guest->id);
@@ -127,25 +126,27 @@ class AuthoritySearchController extends Controller
                 'sex'              => $guest->sex,
                 'nationality_code' => $guest->nationality_code,
                 'documents'        => $guest->documents->map(fn($d) => [
+                    'id'                   => $d->id,
                     'type'                 => $d->type,
                     'document_number'      => $d->document_number,
                     'issuing_country_code' => $d->issuing_country_code,
                     'issue_date'           => $d->issue_date,
                     'expiry_date'          => $d->expiry_date,
+                    'is_verified'          => (bool) $d->is_verified,
                 ]),
                 'stays' => $guest->checkIns->map(fn(CheckIn $c) => [
-                    'check_in_id'           => $c->id,
-                    'hotel'                 => [
-                        'name'                => $c->hotel->name,
-                        'city'                => $c->hotel->address?->city,
-                        'governorate'         => $c->hotel->address?->governorate,
-                        'registration_number' => $c->hotel->registration_number,
+                    'check_in_id'             => $c->id,
+                    'hotel'                   => [
+                        'name'                => $c->hotel?->name,
+                        'city'                => $c->hotel?->address?->city,
+                        'governorate'         => $c->hotel?->address?->governorate,
+                        'registration_number' => $c->hotel?->registration_number,
                     ],
-                    'room_number'           => $c->room?->number,
-                    'check_in_date'         => $c->check_in_date,
+                    'room_number'             => $c->room?->number,
+                    'check_in_date'           => $c->check_in_date,
                     'expected_check_out_date' => $c->expected_check_out_date,
-                    'actual_check_out_date' => $c->actual_check_out_date,
-                    'status'                => $c->status,
+                    'actual_check_out_date'   => $c->actual_check_out_date,
+                    'status'                  => $c->status,
                 ]),
             ],
         ]);
@@ -156,32 +157,26 @@ class AuthoritySearchController extends Controller
      */
     public function hotels(Request $request): JsonResponse
     {
-        $query = Hotel::with('address')->where('status', 'active');
+        $query = Hotel::with('address');
 
         if ($request->filled('search')) {
             $query->where('name', 'ilike', "%{$request->search}%");
         }
         if ($request->filled('governorate')) {
-            $query->whereHas('address', fn($a) => $a->where('governorate', 'ilike', "%{$request->governorate}%"));
+            $query->whereHas('address', fn($a) =>
+                $a->where('governorate', 'ilike', "%{$request->governorate}%")
+            );
         }
 
-        $hotels = $query->orderBy('name')->paginate(20);
+        $hotels = $query->orderBy('name')->paginate($request->integer('per_page', 20));
 
         return response()->json([
-            'data' => $hotels->map(fn(Hotel $h) => [
-                'id'   => $h->id,
-                'name' => $h->name,
-                'type' => $h->type,
-                'stars' => $h->stars,
-                'room_count' => $h->room_count,
-                'registration_number' => $h->registration_number,
-                'status' => $h->status,
-                'address' => $h->address ? [
-                    'city'        => $h->address->city,
-                    'governorate' => $h->address->governorate,
-                ] : null,
-            ]),
-            'meta' => ['total' => $hotels->total()],
+            'data' => $hotels->map(fn(Hotel $h) => $this->summarizeHotel($h)),
+            'meta' => [
+                'total'        => $hotels->total(),
+                'current_page' => $hotels->currentPage(),
+                'per_page'     => $hotels->perPage(),
+            ],
         ]);
     }
 
@@ -190,31 +185,29 @@ class AuthoritySearchController extends Controller
      */
     public function showHotel(string $id): JsonResponse
     {
-        $hotel = Hotel::with(['address', 'contacts'])->findOrFail($id);
+        $hotel = Hotel::with(['address'])->findOrFail($id);
 
         AuditLogger::log('authority.hotel_viewed', $hotel);
 
-        return response()->json([
-            'data' => [
-                'id'                  => $hotel->id,
-                'name'                => $hotel->name,
-                'type'                => $hotel->type,
-                'stars'               => $hotel->stars,
-                'room_count'          => $hotel->room_count,
-                'registration_number' => $hotel->registration_number,
-                'status'              => $hotel->status,
-                'address'             => $hotel->address,
-                'contacts'            => $hotel->contacts->where('is_primary', true)->values(),
-            ],
+        $summary = $this->summarizeHotel($hotel);
+
+        // Add full address string for detail page
+        $addressParts = array_filter([
+            $hotel->address?->street,
+            $hotel->address?->city,
+            $hotel->address?->governorate,
         ]);
+        $summary['address'] = implode(', ', $addressParts) ?: null;
+
+        return response()->json(['data' => $summary]);
     }
 
     // ─── Private ─────────────────────────────────────────────────────
 
     private function summarize(Guest $g): array
     {
-        $doc       = $g->primaryDocument;
-        $lastStay  = $g->checkIns->sortByDesc('check_in_date')->first();
+        $doc      = $g->primaryDocument;
+        $lastStay = $g->checkIns->sortByDesc('check_in_date')->first();
 
         return [
             'guest_id'         => $g->id,
@@ -230,6 +223,29 @@ class AuthoritySearchController extends Controller
                 'check_in_date' => $lastStay->check_in_date,
                 'status'        => $lastStay->status,
             ] : null,
+        ];
+    }
+
+    private function summarizeHotel(Hotel $h): array
+    {
+        $sub             = $h->activeSubscription;
+        $activeGuests    = CheckIn::where('hotel_id', $h->id)->where('status', 'active')->count();
+        $totalCheckIns   = CheckIn::where('hotel_id', $h->id)->count();
+
+        return [
+            'id'                     => $h->id,
+            'name'                   => $h->name,
+            'type'                   => $h->type,
+            'stars'                  => $h->stars,
+            'room_count'             => $h->room_count,
+            'registration_number'    => $h->registration_number,
+            'status'                 => $h->status,
+            'subscription_status'    => $sub?->status,
+            'subscription_expires_at'=> $sub?->expires_at,
+            'city'                   => $h->address?->city,
+            'governorate'            => $h->address?->governorate,
+            'active_guests_count'    => $activeGuests,
+            'total_check_ins'        => $totalCheckIns,
         ];
     }
 }
