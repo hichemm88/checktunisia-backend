@@ -91,7 +91,7 @@ class Hotel extends Model
     {
         return $this->hasOne(Subscription::class)
             ->where('status', 'active')
-            ->latestOfMany('started_at');
+            ->latest('started_at');
     }
 
     public function checkIns(): HasMany

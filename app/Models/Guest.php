@@ -57,7 +57,7 @@ class Guest extends Model
     {
         return $this->hasOne(TravelDocument::class)
             ->where('type', 'passport')
-            ->latestOfMany('created_at');
+            ->latest('created_at');
     }
 
     public function scans(): HasMany
