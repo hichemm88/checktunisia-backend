@@ -12,7 +12,7 @@ return new class extends Migration
         // ── Watchlist entries — persons flagged by authority organizations ──
         Schema::create('watchlist_entries', function (Blueprint $table) {
             $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
-            $table->foreignUuid('organization_id')->constrained('authority_organizations');
+            $table->foreignId('organization_id')->constrained('authority_organizations');
             $table->foreignUuid('added_by')->constrained('users');
 
             // ── Identification criteria (at least one required) ─────────────

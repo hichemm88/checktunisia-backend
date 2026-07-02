@@ -49,7 +49,7 @@ class WatchlistEntry extends Model
 
     public function organization(): BelongsTo
     {
-        return $this->belongsTo(AuthorityOrganization::class);
+        return $this->belongsTo(AuthorityOrganization::class, 'organization_id');
     }
 
     public function addedBy(): BelongsTo
