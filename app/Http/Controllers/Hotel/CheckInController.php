@@ -150,6 +150,22 @@ class CheckInController extends Controller
         return response()->json(['data' => ['id' => $result->id, 'status' => $result->status]]);
     }
 
+    public function destroy(string $id): JsonResponse
+    {
+        $checkIn = $this->findForTenant($id);
+
+        if ($checkIn->status !== 'draft') {
+            return response()->json([
+                'errors' => [['code' => 'FORBIDDEN', 'message' => 'Seuls les brouillons peuvent être supprimés.']],
+            ], 403);
+        }
+
+        $checkIn->guests()->delete();
+        $checkIn->delete();
+
+        return response()->json(null, 204);
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────
 
     private function findForTenant(string $id): CheckIn

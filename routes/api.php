@@ -63,6 +63,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             // Rooms (read for all staff)
             Route::get('rooms', [RoomController::class, 'index']);
 
+            // Draft deletion — no subscription gate (allow cleanup even if sub expired)
+            Route::delete('check-ins/{id}', [CheckInController::class, 'destroy']);
+
             // Check-ins (read for all staff)
             Route::get('check-ins', [CheckInController::class, 'index']);
             Route::get('check-ins/{id}', [CheckInController::class, 'show']);
