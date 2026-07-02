@@ -48,18 +48,19 @@ class AuthController extends Controller
                 'token_type' => 'Bearer',
                 'expires_at' => $token->accessToken->expires_at,
                 'user'       => [
-                    'id'         => $user->id,
-                    'email'      => $user->email,
-                    'first_name' => $user->first_name,
-                    'last_name'  => $user->last_name,
-                    'role'       => $user->primary_role,
-                    'hotel'      => $hotel ? [
+                    'id'                => $user->id,
+                    'email'             => $user->email,
+                    'first_name'        => $user->first_name,
+                    'last_name'         => $user->last_name,
+                    'role'              => $user->primary_role,
+                    'hotel'             => $hotel ? [
                         'id'                  => $hotel->id,
                         'name'                => $hotel->name,
                         'slug'                => $hotel->slug,
                         'subscription_status' => $hotel->activeSubscription?->status ?? 'none',
                     ] : null,
-                    'permissions' => $user->getAllPermissions()->pluck('name'),
+                    'authority_profile' => $this->buildAuthorityProfile($user),
+                    'permissions'       => $user->getAllPermissions()->pluck('name'),
                 ],
             ],
         ]);
@@ -79,20 +80,21 @@ class AuthController extends Controller
 
         return response()->json([
             'data' => [
-                'id'          => $user->id,
-                'email'       => $user->email,
-                'first_name'  => $user->first_name,
-                'last_name'   => $user->last_name,
-                'phone'       => $user->phone,
-                'role'        => $user->primary_role,
-                'hotel'       => $hotel ? [
-                    'id'                  => $hotel->id,
-                    'name'                => $hotel->name,
-                    'slug'                => $hotel->slug,
-                    'subscription_status' => $hotel->activeSubscription?->status ?? 'none',
+                'id'                => $user->id,
+                'email'             => $user->email,
+                'first_name'        => $user->first_name,
+                'last_name'         => $user->last_name,
+                'phone'             => $user->phone,
+                'role'              => $user->primary_role,
+                'hotel'             => $hotel ? [
+                    'id'                      => $hotel->id,
+                    'name'                    => $hotel->name,
+                    'slug'                    => $hotel->slug,
+                    'subscription_status'     => $hotel->activeSubscription?->status ?? 'none',
                     'subscription_expires_at' => $hotel->activeSubscription?->expires_at,
                 ] : null,
-                'permissions' => $user->getAllPermissions()->pluck('name'),
+                'authority_profile' => $this->buildAuthorityProfile($user),
+                'permissions'       => $user->getAllPermissions()->pluck('name'),
             ],
         ]);
     }
@@ -100,19 +102,16 @@ class AuthController extends Controller
     public function forgotPassword(Request $request): JsonResponse
     {
         $request->validate(['email' => ['required', 'email']]);
-
         Password::sendResetLink($request->only('email'));
-
-        // Always return 200 even if email not found (security)
         return response()->json(['data' => ['message' => 'If this email exists, a reset link has been sent.']]);
     }
 
     public function resetPassword(Request $request): JsonResponse
     {
         $request->validate([
-            'token'                 => ['required'],
-            'email'                 => ['required', 'email'],
-            'password'              => ['required', 'min:8', 'confirmed'],
+            'token'    => ['required'],
+            'email'    => ['required', 'email'],
+            'password' => ['required', 'min:8', 'confirmed'],
         ]);
 
         $status = Password::reset(
@@ -132,7 +131,7 @@ class AuthController extends Controller
 
     public function updateProfile(Request $request): JsonResponse
     {
-        $user = $request->user();
+        $user      = $request->user();
         $validated = $request->validate([
             'first_name' => ['sometimes', 'string', 'max:100'],
             'last_name'  => ['sometimes', 'string', 'max:100'],
@@ -164,5 +163,35 @@ class AuthController extends Controller
         AuditLogger::log('profile.password_changed', $user);
 
         return response()->json(['data' => ['message' => 'Password updated successfully.']]);
+    }
+
+    // ─── Private ─────────────────────────────────────────────────────────────
+
+    /**
+     * Build the authority_profile payload for login/me responses.
+     * Returns null for non-authority users.
+     */
+    private function buildAuthorityProfile(User $user): ?array
+    {
+        if (!$user->isAuthorityUser()) {
+            return null;
+        }
+
+        $profile = $user->authorityProfile()->with('organization')->first();
+        if (!$profile) {
+            return null;
+        }
+
+        $org = $profile->organization;
+
+        return [
+            'org_id'       => $org?->id,
+            'org_name'     => $org?->name,
+            'org_type'     => $org?->type,      // 'ministry' | 'police'
+            'governorate'  => $org?->governorate, // null for ministry (national scope)
+            'badge_number' => $profile->badge_number,
+            'rank'         => $profile->rank,
+            'expires_at'   => $profile->expires_at?->toDateString(),
+        ];
     }
 }

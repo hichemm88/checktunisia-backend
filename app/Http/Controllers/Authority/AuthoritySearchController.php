@@ -12,13 +12,20 @@ use Illuminate\Http\Request;
 
 class AuthoritySearchController extends Controller
 {
+    /** Resolve org type + governorate for the authenticated authority user. */
+    private function authorityProfile(Request $request): array
+    {
+        $profile = $request->user()->authorityProfile()->with('organization')->first();
+        return [
+            'org_type'    => $profile?->organization?->type,
+            'governorate' => $profile?->organization?->governorate,
+        ];
+    }
+
     /**
      * GET /authority/search
      * Cross-tenant guest search — every call is logged.
-     *
-     * Accepted params (aligned with frontend SearchPage):
-     *   first_name, last_name, document_number, nationality_code,
-     *   date_of_birth, check_in_from, check_in_to, hotel_governorate
+     * Police users are auto-scoped to their governorate.
      */
     public function search(Request $request): JsonResponse
     {
@@ -33,6 +40,12 @@ class AuthoritySearchController extends Controller
             'hotel_governorate'=> ['nullable', 'string', 'max:100'],
             'per_page'         => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
+
+        // Police are auto-scoped to their governorate unless overridden
+        $profile = $this->authorityProfile($request);
+        if (($profile['org_type'] ?? null) === 'police' && $profile['governorate'] && !$request->filled('hotel_governorate')) {
+            $request->merge(['hotel_governorate' => $profile['governorate']]);
+        }
 
         $searchableParams = collect($request->only([
             'first_name','last_name','document_number','nationality_code',
@@ -154,9 +167,16 @@ class AuthoritySearchController extends Controller
 
     /**
      * GET /authority/hotels
+     * Police are auto-scoped to their governorate.
      */
     public function hotels(Request $request): JsonResponse
     {
+        // Auto-scope for police
+        $profile = $this->authorityProfile($request);
+        if (($profile['org_type'] ?? null) === 'police' && $profile['governorate'] && !$request->filled('governorate')) {
+            $request->merge(['governorate' => $profile['governorate']]);
+        }
+
         $query = Hotel::with('address');
 
         if ($request->filled('search')) {

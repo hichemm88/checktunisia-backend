@@ -14,6 +14,7 @@ use App\Http\Controllers\Hotel\HotelProfileController;
 use App\Http\Controllers\Hotel\HotelUserController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Authority\AuthoritySearchController;
+use App\Http\Controllers\Authority\AuthorityDashboardController;
 use App\Http\Controllers\Referential\ReferentialController;
 use Illuminate\Support\Facades\Route;
 
@@ -115,10 +116,18 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     Route::prefix('authority')
         ->middleware('role:authority_user')
         ->group(function () {
-            Route::get('search', [AuthoritySearchController::class, 'search']);
-            Route::get('guests/{id}', [AuthoritySearchController::class, 'show']);
-            Route::get('hotels', [AuthoritySearchController::class, 'hotels']);
-            Route::get('hotels/{id}', [AuthoritySearchController::class, 'showHotel']);
+            // Dashboard (ministry = national stats, police = zone stats)
+            Route::get('dashboard',        [AuthorityDashboardController::class, 'dashboard']);
+            // Expiring documents alert feed
+            Route::get('alerts',           [AuthorityDashboardController::class, 'alerts']);
+            // Audit activity log (ministry=all, police=own)
+            Route::get('activity',         [AuthorityDashboardController::class, 'activity']);
+            // Guest search & profile
+            Route::get('search',           [AuthoritySearchController::class, 'search']);
+            Route::get('guests/{id}',      [AuthoritySearchController::class, 'show']);
+            // Hotel directory
+            Route::get('hotels',           [AuthoritySearchController::class, 'hotels']);
+            Route::get('hotels/{id}',      [AuthoritySearchController::class, 'showHotel']);
         });
 
     /*
