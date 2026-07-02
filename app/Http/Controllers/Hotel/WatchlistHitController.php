@@ -19,6 +19,8 @@ class WatchlistHitController extends Controller
     {
         $hotel = app('tenant');
 
+        AuditLogger::log('watchlist.hits_viewed', null, [], ['hotel_id' => $hotel->id]);
+
         $hits = WatchlistHit::with(['checkIn'])
             ->where('hotel_id', $hotel->id)
             ->whereNull('acknowledged_at')
@@ -52,12 +54,16 @@ class WatchlistHitController extends Controller
             ->where('hotel_id', $hotel->id)
             ->firstOrFail();
 
+        $old = ['acknowledged_at' => null, 'acknowledged_by' => null];
         $hit->update([
             'acknowledged_at' => now(),
             'acknowledged_by' => $request->user()->id,
         ]);
 
-        AuditLogger::log('watchlist.hit_acknowledged', $hit, hotelId: $hotel->id);
+        AuditLogger::log('watchlist.hit_acknowledged', $hit, $old, [
+            'acknowledged_at' => $hit->acknowledged_at,
+            'acknowledged_by' => $request->user()->id,
+        ], hotelId: $hotel->id);
 
         return response()->json(['data' => ['acknowledged_at' => $hit->acknowledged_at]]);
     }

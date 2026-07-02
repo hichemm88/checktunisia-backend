@@ -187,14 +187,14 @@ class WatchlistController extends Controller
                 WatchlistEntry::create([
                     'organization_id'  => $profile['org_id'],
                     'added_by'         => $request->user()->id,
-                    'document_number'  => $docNumber ?: null,
-                    'document_type'    => $data['document_type'] ?? null,
-                    'first_name'       => $data['first_name'] ?? null,
-                    'last_name'        => $lastName ?: null,
+                    'document_number'  => $this->sanitizeCsvField($docNumber) ?: null,
+                    'document_type'    => $this->sanitizeCsvField($data['document_type'] ?? null),
+                    'first_name'       => $this->sanitizeCsvField($data['first_name'] ?? null),
+                    'last_name'        => $this->sanitizeCsvField($lastName) ?: null,
                     'date_of_birth'    => $data['date_of_birth'] ?? null,
-                    'nationality_code' => strtoupper($data['nationality_code'] ?? '') ?: null,
+                    'nationality_code' => strtoupper($this->sanitizeCsvField($data['nationality_code'] ?? '') ?? '') ?: null,
                     'severity'         => $severity,
-                    'reason'           => $data['reason'] ?? null,
+                    'reason'           => $this->sanitizeCsvField($data['reason'] ?? null),
                     'reason_code'      => $reasonCode,
                     'source'           => 'import',
                     'import_batch_id'  => $batchId,
@@ -221,6 +221,19 @@ class WatchlistController extends Controller
                 'batch_id' => $batchId,
             ],
         ]);
+    }
+
+    // ─── CSV Injection protection ─────────────────────────────────────────────
+
+    /**
+     * Strip formula-injection prefixes from CSV string values.
+     * Prevents =CMD(), @SUM, +1+1 etc. from executing if opened in Excel/Sheets.
+     */
+    private function sanitizeCsvField(?string $value): ?string
+    {
+        if ($value === null || $value === '') return $value;
+        // Strip leading characters that trigger formula execution
+        return ltrim($value, "=+-@\t\r");
     }
 
     // ─── Template CSV ─────────────────────────────────────────────────────────
@@ -262,14 +275,20 @@ class WatchlistController extends Controller
         ];
     }
 
+    private ?array $cachedProfile = null;
+
     private function authorityProfile(Request $request): array
     {
+        if ($this->cachedProfile !== null) {
+            return $this->cachedProfile;
+        }
         $profile = $request->user()->authorityProfile()->with('organization')->first();
-        return [
+        $this->cachedProfile = [
             'org_type'    => $profile?->organization?->type,
             'org_id'      => $profile?->organization?->id,
             'governorate' => $profile?->organization?->governorate,
         ];
+        return $this->cachedProfile;
     }
 
     private function findEntry(string $id, array $profile): WatchlistEntry

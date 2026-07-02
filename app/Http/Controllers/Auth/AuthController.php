@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
+use Illuminate\Validation\Rules\Password as PasswordRule;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -36,7 +37,7 @@ class AuthController extends Controller
 
         $user->update(['last_login_at' => now()]);
 
-        $token = $user->createToken('api-token', ['*'], now()->addDays(30));
+        $token = $user->createToken('api-token', ['*'], now()->addHours(8));
 
         AuditLogger::log('user.login', $user, actor: $user);
 
@@ -62,6 +63,31 @@ class AuthController extends Controller
                     'authority_profile' => $this->buildAuthorityProfile($user),
                     'permissions'       => $user->getAllPermissions()->pluck('name'),
                 ],
+            ],
+        ]);
+    }
+
+    public function refresh(Request $request): JsonResponse
+    {
+        $user  = $request->user();
+        $old   = $user->currentAccessToken();
+
+        // Only allow refresh within 24h after expiry (grace window)
+        if ($old->expires_at && $old->expires_at->lt(now()->subHours(24))) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'TOKEN_EXPIRED', 'message' => 'Session expired. Please log in again.', 'field' => null]],
+            ], 401);
+        }
+
+        $newToken = $user->createToken('api-token', ['*'], now()->addHours(8));
+        $old->delete();
+
+        return response()->json([
+            'data' => [
+                'token'      => $newToken->plainTextToken,
+                'token_type' => 'Bearer',
+                'expires_at' => $newToken->accessToken->expires_at,
             ],
         ]);
     }
@@ -111,7 +137,7 @@ class AuthController extends Controller
         $request->validate([
             'token'    => ['required'],
             'email'    => ['required', 'email'],
-            'password' => ['required', 'min:8', 'confirmed'],
+            'password' => $this->passwordRules(),
         ]);
 
         $status = Password::reset(
@@ -149,7 +175,7 @@ class AuthController extends Controller
     {
         $validated = $request->validate([
             'current_password' => ['required'],
-            'password'         => ['required', 'min:8', 'confirmed'],
+            'password'         => $this->passwordRules(),
         ]);
 
         $user = $request->user();
@@ -166,6 +192,19 @@ class AuthController extends Controller
     }
 
     // ─── Private ─────────────────────────────────────────────────────────────
+
+    private function passwordRules(): array
+    {
+        return [
+            'required',
+            'confirmed',
+            PasswordRule::min(12)
+                ->mixedCase()
+                ->numbers()
+                ->symbols()
+                ->uncompromised(),
+        ];
+    }
 
     /**
      * Build the authority_profile payload for login/me responses.

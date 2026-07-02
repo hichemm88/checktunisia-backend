@@ -112,8 +112,12 @@ class AuthoritySearchController extends Controller
 
         $isMinistry = ($this->authorityProfile($request)['org_type'] === 'ministry');
 
+        // Batch watchlist check — single DB query for all results
+        $guestCollection   = $results->getCollection();
+        $watchlistHits     = $this->watchlist->batchCheckGuests($guestCollection);
+
         return response()->json([
-            'data' => $results->map(fn(Guest $g) => $this->summarize($g, $isMinistry)),
+            'data' => $results->map(fn(Guest $g) => $this->summarize($g, $isMinistry, $watchlistHits[$g->id] ?? null)),
             'meta' => [
                 'total'         => $results->total(),
                 'current_page'  => $results->currentPage(),
@@ -229,11 +233,10 @@ class AuthoritySearchController extends Controller
 
     // ─── Private ─────────────────────────────────────────────────────
 
-    private function summarize(Guest $g, bool $isMinistry = false): array
+    private function summarize(Guest $g, bool $isMinistry = false, ?array $watchlistHit = null): array
     {
-        $doc           = $g->primaryDocument;
-        $lastStay      = $g->checkIns->sortByDesc('check_in_date')->first();
-        $watchlistHit  = $this->watchlist->checkGuest($g);
+        $doc      = $g->primaryDocument;
+        $lastStay = $g->checkIns->sortByDesc('check_in_date')->first();
 
         return [
             'guest_id'         => $g->id,

@@ -25,7 +25,7 @@ use Illuminate\Support\Facades\Route;
 | Public Routes
 |--------------------------------------------------------------------------
 */
-Route::prefix('auth')->group(function () {
+Route::prefix('auth')->middleware('throttle:5,1')->group(function () {
     Route::post('login', [AuthController::class, 'login']);
     Route::post('password/forgot', [AuthController::class, 'forgotPassword']);
     Route::post('password/reset', [AuthController::class, 'resetPassword']);
@@ -43,8 +43,9 @@ Route::get('subscriptions/plans', [ReferentialController::class, 'plans']);
 Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
     // Auth
-    Route::post('auth/logout', [AuthController::class, 'logout']);
-    Route::get('auth/me', [AuthController::class, 'me']);
+    Route::post('auth/logout',  [AuthController::class, 'logout']);
+    Route::post('auth/refresh', [AuthController::class, 'refresh']);
+    Route::get('auth/me',       [AuthController::class, 'me']);
     Route::patch('profile', [AuthController::class, 'updateProfile']);
     Route::post('profile/password', [AuthController::class, 'changePassword']);
 
@@ -119,7 +120,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     |----------------------------------------------------------------------
     */
     Route::prefix('authority')
-        ->middleware('role:authority_user')
+        ->middleware(['role:authority_user', 'authority.credential', 'throttle:60,1'])
         ->group(function () {
             // Dashboard (ministry = national stats, police = zone stats)
             Route::get('dashboard',        [AuthorityDashboardController::class, 'dashboard']);

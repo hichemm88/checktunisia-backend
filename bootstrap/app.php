@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnsureActiveSubscription;
+use App\Http\Middleware\EnsureAuthorityCredentialValid;
 use App\Http\Middleware\ResolveTenant;
 use App\Http\Middleware\AuditRequestMiddleware;
 use Illuminate\Foundation\Application;
@@ -20,6 +21,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'tenant'               => ResolveTenant::class,
             'subscription.active'  => EnsureActiveSubscription::class,
+            'authority.credential' => EnsureAuthorityCredentialValid::class,
             'audit'                => AuditRequestMiddleware::class,
             'role'                 => \Spatie\Permission\Middleware\RoleMiddleware::class,
             'permission'           => \Spatie\Permission\Middleware\PermissionMiddleware::class,

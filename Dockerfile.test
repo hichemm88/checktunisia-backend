@@ -1,0 +1,36 @@
+FROM php:8.3-cli-alpine
+
+# System dependencies
+RUN apk add --no-cache \
+    bash curl git unzip libpng-dev libzip-dev oniguruma-dev \
+    postgresql-dev icu-dev libxml2-dev \
+    autoconf g++ make
+
+# PHP extensions
+RUN docker-php-ext-install \
+    pdo pdo_pgsql pgsql \
+    zip bcmath mbstring \
+    exif pcntl intl
+
+# Redis
+RUN pecl install redis && docker-php-ext-enable redis
+
+# Composer
+COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
+ENV COMPOSER_ALLOW_SUPERUSER=1
+
+WORKDIR /var/www/html
+
+# Install ALL dependencies (including dev — phpunit, faker, etc.)
+COPY composer.json composer.lock ./
+RUN composer install --no-scripts --no-autoloader --no-interaction
+
+# Copy source
+COPY . .
+
+RUN composer dump-autoload --optimize
+
+# Storage dirs
+RUN mkdir -p storage/framework/cache storage/framework/sessions \
+             storage/framework/views storage/logs bootstrap/cache \
+    && chmod -R 775 storage bootstrap/cache
