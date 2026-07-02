@@ -22,7 +22,7 @@ ENV COMPOSER_ALLOW_SUPERUSER=1
 WORKDIR /var/www/html
 
 # Install ALL dependencies (including dev — phpunit, faker, etc.)
-COPY composer.json composer.lock ./
+COPY composer.json ./
 RUN composer install --no-scripts --no-autoloader --no-interaction
 
 # Copy source

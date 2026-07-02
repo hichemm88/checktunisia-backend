@@ -52,6 +52,15 @@ class WatchlistEntry extends Model
         return $this->belongsTo(AuthorityOrganization::class, 'organization_id');
     }
 
+    /**
+     * Alias so Laravel's factory ->for($org) resolves correctly.
+     * Factory derives method name from model class: AuthorityOrganization → authorityOrganization().
+     */
+    public function authorityOrganization(): BelongsTo
+    {
+        return $this->belongsTo(AuthorityOrganization::class, 'organization_id');
+    }
+
     public function addedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'added_by');

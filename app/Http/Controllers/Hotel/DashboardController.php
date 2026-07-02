@@ -70,8 +70,8 @@ class DashboardController extends Controller
 
         // ── Document expiry alerts (next 30 days) ─────────────────────────────
         $expiryAlerts = TravelDocument::join('guests', 'travel_documents.guest_id', '=', 'guests.id')
-            ->join('check_in_guest', 'guests.id', '=', 'check_in_guest.guest_id')
-            ->join('check_ins', 'check_in_guest.check_in_id', '=', 'check_ins.id')
+            ->join('check_in_guests', 'guests.id', '=', 'check_in_guests.guest_id')
+            ->join('check_ins', 'check_in_guests.check_in_id', '=', 'check_ins.id')
             ->where('check_ins.hotel_id', $hotel->id)
             ->where('check_ins.status', 'active')
             ->whereNotNull('travel_documents.expiry_date')

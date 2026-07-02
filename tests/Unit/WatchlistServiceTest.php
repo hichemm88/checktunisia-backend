@@ -233,17 +233,19 @@ class WatchlistServiceTest extends TestCase
     {
         $hotel = \App\Models\Hotel::factory()->withActiveSubscription()->create();
 
-        \App\Models\WatchlistHit::factory()
-            ->for($hotel)
-            ->count(3)
-            ->pending()
-            ->create([
-                'watchlist_entry_id' => WatchlistEntry::factory()->for($this->org)->create(['added_by' => $this->authorizer->id])->id,
-                'guest_id'           => Guest::factory()->create()->id,
-                'check_in_id'        => \App\Models\CheckIn::factory()->for($hotel)->create([
-                    'created_by' => $this->authorizer->id,
-                ])->id,
-            ]);
+        // Create 3 pending hits — each needs a unique (entry, guest, check_in) triple
+        collect(range(1, 3))->each(function () use ($hotel) {
+            \App\Models\WatchlistHit::factory()
+                ->for($hotel)
+                ->pending()
+                ->create([
+                    'watchlist_entry_id' => WatchlistEntry::factory()->for($this->org)->create(['added_by' => $this->authorizer->id])->id,
+                    'guest_id'           => Guest::factory()->create()->id,
+                    'check_in_id'        => \App\Models\CheckIn::factory()->for($hotel)->create([
+                        'created_by' => $this->authorizer->id,
+                    ])->id,
+                ]);
+        });
 
         \App\Models\WatchlistHit::factory()
             ->for($hotel)

@@ -47,5 +47,9 @@ services:
       BCRYPT_ROUNDS:    4
     volumes:
       - .:/var/www/html
+      - vendor_cache:/var/www/html/vendor   # preserve vendor from build layer
     working_dir: /var/www/html
-    command: ["tail", "-f", "/dev/null"]   # keep container alive
+    command: ["sh", "-c", "composer install --no-interaction --quiet && tail -f /dev/null"]
+
+volumes:
+  vendor_cache:

@@ -63,7 +63,7 @@ class AuthoritySearchController extends Controller
 
         $start = microtime(true);
 
-        $query = Guest::with(['primaryDocument', 'checkIns.hotel'])->select('guests.*');
+        $query = Guest::with(['primaryDocument', 'checkIns.hotel.address'])->select('guests.*');
 
         if ($request->filled('first_name')) {
             $query->where('first_name', 'ilike', "%{$request->first_name}%");
@@ -249,6 +249,11 @@ class AuthoritySearchController extends Controller
             'document_type'    => $doc?->type,
             'last_stay'        => $lastStay ? [
                 'hotel_name'    => $lastStay->hotel?->name,
+                'hotel'         => [
+                    'name'        => $lastStay->hotel?->name,
+                    'governorate' => $lastStay->hotel?->address?->governorate,
+                    'city'        => $lastStay->hotel?->address?->city,
+                ],
                 'check_in_date' => $lastStay->check_in_date,
                 'status'        => $lastStay->status,
             ] : null,

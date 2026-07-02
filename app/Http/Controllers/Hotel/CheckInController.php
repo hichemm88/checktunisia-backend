@@ -115,7 +115,14 @@ class CheckInController extends Controller
     public function complete(Request $request, string $id): JsonResponse
     {
         $checkIn = $this->findForTenant($id);
-        $result  = $this->service->complete($checkIn, $request->user());
+
+        try {
+            $result = $this->service->complete($checkIn, $request->user());
+        } catch (\DomainException $e) {
+            return response()->json([
+                'errors' => [['code' => 'INVALID_STATUS', 'message' => $e->getMessage()]],
+            ], 422);
+        }
 
         return response()->json(['data' => [
             'id'           => $result->id,
