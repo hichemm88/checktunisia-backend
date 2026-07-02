@@ -10,6 +10,7 @@ use App\Http\Controllers\Hotel\GuestController;
 use App\Http\Controllers\Hotel\ScanController;
 use App\Http\Controllers\Hotel\RoomController;
 use App\Http\Controllers\Hotel\DashboardController;
+use App\Http\Controllers\Hotel\HotelProfileController;
 use App\Http\Controllers\Hotel\HotelUserController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Authority\AuthoritySearchController;
@@ -88,6 +89,10 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             // ── Hotel admin only ───────────────────────────────────────────
             Route::middleware('role:hotel_admin')->group(function () {
+                // Hotel profile (read available to all staff above, write admin only)
+                Route::get('profile', [HotelProfileController::class, 'show']);
+                Route::patch('profile', [HotelProfileController::class, 'update']);
+
                 Route::get('users', [HotelUserController::class, 'index']);
                 Route::post('users', [HotelUserController::class, 'store']);
                 Route::patch('users/{id}', [HotelUserController::class, 'update']);
