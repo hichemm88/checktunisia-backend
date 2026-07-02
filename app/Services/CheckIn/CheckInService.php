@@ -11,6 +11,7 @@ use App\Models\TravelDocument;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
 use App\Services\OCR\OcrService;
+use App\Services\Watchlist\WatchlistService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -155,6 +156,9 @@ class CheckInService
             ]);
 
             AuditLogger::log('check_in.completed', $checkIn, ['status' => 'draft'], ['status' => 'active'], hotelId: $checkIn->hotel_id);
+
+            // ── Watchlist check: flag hotel if any guest is on a watchlist ──
+            app(WatchlistService::class)->checkCheckIn($checkIn->load('guests.documents'));
 
             return $checkIn->fresh()->load(['room', 'guests.documents', 'creator']);
         });

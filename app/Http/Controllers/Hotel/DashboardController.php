@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\CheckIn;
 use App\Models\Hotel;
 use App\Models\TravelDocument;
+use App\Models\WatchlistHit;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -108,6 +109,11 @@ class DashboardController extends Controller
                 'check_in_date' => $c->check_in_date,
             ]);
 
+        // ── Watchlist hits pending acknowledgement ────────────────────────────
+        $pendingWatchlistHits = WatchlistHit::where('hotel_id', $hotel->id)
+            ->whereNull('acknowledged_at')
+            ->count();
+
         $sub = $hotel->activeSubscription;
 
         return response()->json([
@@ -130,7 +136,8 @@ class DashboardController extends Controller
                     'days_remaining' => $sub->days_remaining,
                     'plan'           => $sub->plan?->name,
                 ] : ['status' => 'none'],
-                'recent_check_ins' => $recentCheckIns,
+                'recent_check_ins'         => $recentCheckIns,
+                'pending_watchlist_hits'   => $pendingWatchlistHits,
             ],
         ]);
     }

@@ -15,6 +15,8 @@ use App\Http\Controllers\Hotel\HotelUserController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Authority\AuthoritySearchController;
 use App\Http\Controllers\Authority\AuthorityDashboardController;
+use App\Http\Controllers\Authority\WatchlistController;
+use App\Http\Controllers\Hotel\WatchlistHitController;
 use App\Http\Controllers\Referential\ReferentialController;
 use Illuminate\Support\Facades\Route;
 
@@ -66,6 +68,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             // Draft deletion — no subscription gate (allow cleanup even if sub expired)
             Route::delete('check-ins/{id}', [CheckInController::class, 'destroy']);
+            // Watchlist hits (security alerts for hotel)
+            Route::get('watchlist-hits',                         [WatchlistHitController::class, 'index']);
+            Route::post('watchlist-hits/{id}/acknowledge',       [WatchlistHitController::class, 'acknowledge']);
 
             // Check-ins (read for all staff)
             Route::get('check-ins', [CheckInController::class, 'index']);
@@ -128,6 +133,13 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             // Hotel directory
             Route::get('hotels',           [AuthoritySearchController::class, 'hotels']);
             Route::get('hotels/{id}',      [AuthoritySearchController::class, 'showHotel']);
+            // Watchlist management
+            Route::get('watchlist',                    [WatchlistController::class, 'index']);
+            Route::post('watchlist',                   [WatchlistController::class, 'store']);
+            Route::patch('watchlist/{id}',             [WatchlistController::class, 'update']);
+            Route::delete('watchlist/{id}',            [WatchlistController::class, 'destroy']);
+            Route::post('watchlist/import',            [WatchlistController::class, 'import']);
+            Route::get('watchlist/template',           [WatchlistController::class, 'template']);
         });
 
     /*

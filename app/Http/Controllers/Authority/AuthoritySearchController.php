@@ -7,11 +7,14 @@ use App\Models\CheckIn;
 use App\Models\Guest;
 use App\Models\Hotel;
 use App\Services\Audit\AuditLogger;
+use App\Services\Watchlist\WatchlistService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class AuthoritySearchController extends Controller
 {
+    public function __construct(private WatchlistService $watchlist) {}
+
     /** Resolve org type + governorate for the authenticated authority user. */
     private function authorityProfile(Request $request): array
     {
@@ -107,8 +110,10 @@ class AuthoritySearchController extends Controller
             executionTimeMs: $executionMs,
         );
 
+        $isMinistry = ($this->authorityProfile($request)['org_type'] === 'ministry');
+
         return response()->json([
-            'data' => $results->map(fn(Guest $g) => $this->summarize($g)),
+            'data' => $results->map(fn(Guest $g) => $this->summarize($g, $isMinistry)),
             'meta' => [
                 'total'         => $results->total(),
                 'current_page'  => $results->currentPage(),
@@ -224,10 +229,11 @@ class AuthoritySearchController extends Controller
 
     // ─── Private ─────────────────────────────────────────────────────
 
-    private function summarize(Guest $g): array
+    private function summarize(Guest $g, bool $isMinistry = false): array
     {
-        $doc      = $g->primaryDocument;
-        $lastStay = $g->checkIns->sortByDesc('check_in_date')->first();
+        $doc           = $g->primaryDocument;
+        $lastStay      = $g->checkIns->sortByDesc('check_in_date')->first();
+        $watchlistHit  = $this->watchlist->checkGuest($g);
 
         return [
             'guest_id'         => $g->id,
@@ -242,6 +248,13 @@ class AuthoritySearchController extends Controller
                 'hotel_name'    => $lastStay->hotel?->name,
                 'check_in_date' => $lastStay->check_in_date,
                 'status'        => $lastStay->status,
+            ] : null,
+            'watchlist_hit'    => $watchlistHit ? [
+                'severity'    => $watchlistHit['severity'],
+                'reason_code' => $watchlistHit['reason_code'],
+                'hit_type'    => $watchlistHit['hit_type'],
+                // reason (full text) only exposed to ministry users
+                'reason'      => $isMinistry ? $watchlistHit['reason'] : null,
             ] : null,
         ];
     }
