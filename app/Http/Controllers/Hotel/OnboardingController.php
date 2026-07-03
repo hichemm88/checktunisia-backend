@@ -67,9 +67,9 @@ class OnboardingController extends Controller
 
         $hotel = $org ? $this->resolveHotel($request, $org) : null;
 
-        // Legacy fallback
-        if (!$hotel && app()->bound('tenant')) {
-            $hotel = app('tenant');
+        // Legacy fallback: user has no org yet, try pivot-based hotel lookup
+        if (!$hotel && !$org) {
+            $hotel = $user->hotel();
         }
 
         if (!$hotel) {

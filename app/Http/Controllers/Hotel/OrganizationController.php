@@ -153,8 +153,10 @@ class OrganizationController extends Controller
         $org  = $user->organization;
 
         if (!$org) {
-            // Auto-migrate legacy hotel_admin to the org architecture
-            $hotel = app('tenant');
+            // Auto-migrate legacy hotel_admin (no organization_id yet) to the org architecture.
+            // NOTE: This route is NOT behind the tenant middleware, so app('tenant') is NOT
+            // bound. We use $user->hotel() (pivot-based lookup) instead.
+            $hotel = $user->hotel();
             if (!$hotel) {
                 return response()->json([
                     'errors' => [['code' => 'ORG_NOT_FOUND', 'message' => 'Aucune organisation liée à ce compte.']],
