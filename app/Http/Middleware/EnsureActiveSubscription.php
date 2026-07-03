@@ -33,15 +33,21 @@ class EnsureActiveSubscription
         /** @var Organization|null $org */
         $org = app('organization');
 
+        // ResolveTenant only binds 'organization' when the user has organization_id set.
+        // For legacy users (organization_id still null), fall back to the hotel's own org link.
+        if (!$org && $hotel->organization_id) {
+            $org = Organization::find($hotel->organization_id);
+        }
+
         // Determine which entity holds the subscription
         if ($org) {
             $cacheKey = "org_subscription_active:{$org->id}";
-            $isActive = Cache::remember($cacheKey, 300, fn() => $org->hasActiveSubscription());
+            $isActive = Cache::remember($cacheKey, 60, fn() => $org->hasActiveSubscription());
             $sub      = $org->activeSubscription ?? $org->subscriptions()->latest()->first();
         } else {
-            // Legacy: subscription on hotel itself
+            // True legacy: hotel not in any org — check hotel-level subscription
             $cacheKey = "hotel_subscription_active:{$hotel->id}";
-            $isActive = Cache::remember($cacheKey, 300, fn() => $hotel->hasActiveSubscription());
+            $isActive = Cache::remember($cacheKey, 60, fn() => $hotel->hasActiveSubscription());
             $sub      = $hotel->activeSubscription ?? $hotel->subscriptions()->latest()->first();
         }
 
