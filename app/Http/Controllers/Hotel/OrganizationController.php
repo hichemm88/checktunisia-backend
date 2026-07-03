@@ -37,27 +37,40 @@ class OrganizationController extends Controller
         $org  = $user->organization;
 
         if (!$org) {
-            // Legacy fallback: no organization_id yet — build synthetic response from tenant
+            // Legacy fallback: no organization_id on user yet
             $hotel = app('tenant');
             if (!$hotel) {
                 return response()->json(['data' => null], 404);
             }
-            $hotel->load('address');
 
-            return response()->json([
-                'data' => [
-                    'id'                  => null,
-                    'name'                => $hotel->name,
-                    'entity_type'         => 'company',
-                    'registration_number' => $hotel->registration_number ?? null,
-                    'contact_email'       => $user->email,
-                    'contact_phone'       => null,
-                    'address'             => [],
-                    'status'              => $hotel->status,
-                    'properties'          => [$this->formatProperty($hotel)],
-                    'total_rooms'         => $hotel->room_count ?? 0,
-                ],
-            ]);
+            // If the hotel already belongs to an org but the user wasn't linked, fix the gap silently
+            if ($hotel->organization_id) {
+                $org = Organization::find($hotel->organization_id);
+                if ($org) {
+                    $user->update(['organization_id' => $org->id]);
+                    // Fall through to the org branch below
+                }
+            }
+
+            if (!$org) {
+                // True legacy: hotel not in any org — return synthetic single-property response
+                $hotel->load('address');
+
+                return response()->json([
+                    'data' => [
+                        'id'                  => null,
+                        'name'                => $hotel->name,
+                        'entity_type'         => 'company',
+                        'registration_number' => $hotel->registration_number ?? null,
+                        'contact_email'       => $user->email,
+                        'contact_phone'       => null,
+                        'address'             => [],
+                        'status'              => $hotel->status,
+                        'properties'          => [$this->formatProperty($hotel)],
+                        'total_rooms'         => $hotel->room_count ?? 0,
+                    ],
+                ]);
+            }
         }
 
         $properties = $org->properties()
