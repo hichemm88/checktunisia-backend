@@ -126,10 +126,16 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
                 Route::post('onboarding/complete', [OnboardingController::class, 'complete']);
 
                 // Organization & multi-property management
-                Route::get('organization',                      [OrganizationController::class, 'show']);
-                Route::patch('organization',                    [OrganizationController::class, 'update']);
-                Route::get('organization/properties',           [OrganizationController::class, 'properties']);
-                Route::post('organization/properties',          [OrganizationController::class, 'addProperty']);
+                Route::get('organization',                                                        [OrganizationController::class, 'show']);
+                Route::patch('organization',                                                      [OrganizationController::class, 'update']);
+                Route::get('organization/properties',                                             [OrganizationController::class, 'properties']);
+                Route::post('organization/properties',                                            [OrganizationController::class, 'addProperty']);
+                Route::patch('organization/properties/{id}',                                     [OrganizationController::class, 'updateProperty']);
+                // Per-property room management
+                Route::get('organization/properties/{id}/rooms',                                 [OrganizationController::class, 'propertyRooms']);
+                Route::post('organization/properties/{id}/rooms',                                [OrganizationController::class, 'addPropertyRoom']);
+                Route::patch('organization/properties/{id}/rooms/{roomId}',                      [OrganizationController::class, 'updatePropertyRoom']);
+                Route::delete('organization/properties/{id}/rooms/{roomId}',                     [OrganizationController::class, 'deletePropertyRoom']);
 
                 // Hotel profile (read available to all staff above, write admin only)
                 Route::get('profile', [HotelProfileController::class, 'show']);

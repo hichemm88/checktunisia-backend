@@ -7,28 +7,57 @@ use App\Models\Hotel;
 use App\Models\HotelAddress;
 use App\Models\HotelContact;
 use App\Models\Organization;
+use App\Models\Room;
+use App\Models\Subscription;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Organization & multi-property management for hotel_admin.
  *
- * GET  /hotel/organization          → org info + all properties
- * PATCH /hotel/organization         → update org info
- * GET  /hotel/organization/properties → list all properties
- * POST /hotel/organization/properties → add a new property to the org
+ * GET    /hotel/organization                              → org info + all properties
+ * PATCH  /hotel/organization                             → update org info
+ * GET    /hotel/organization/properties                  → list all properties
+ * POST   /hotel/organization/properties                  → add a new property
+ * PATCH  /hotel/organization/properties/{id}             → update a property
+ * GET    /hotel/organization/properties/{id}/rooms       → list rooms for a property
+ * POST   /hotel/organization/properties/{id}/rooms       → add room to a property
+ * PATCH  /hotel/organization/properties/{id}/rooms/{rid} → update a room
+ * DELETE /hotel/organization/properties/{id}/rooms/{rid} → delete a room
  */
 class OrganizationController extends Controller
 {
-    /** Return the org info and its properties list. */
+    // ── Org endpoints ──────────────────────────────────────────────────────────
+
+    /** Return org info and its properties list. Falls back to tenant hotel for legacy users. */
     public function show(Request $request): JsonResponse
     {
-        /** @var \App\Models\User $user */
         $user = $request->user();
         $org  = $user->organization;
 
         if (!$org) {
-            return response()->json(['data' => null, 'errors' => [['code' => 'ORG_NOT_FOUND', 'message' => 'No organization linked to this account.']]], 404);
+            // Legacy fallback: no organization_id yet — build synthetic response from tenant
+            $hotel = app('tenant');
+            if (!$hotel) {
+                return response()->json(['data' => null], 404);
+            }
+            $hotel->load('address');
+
+            return response()->json([
+                'data' => [
+                    'id'                  => null,
+                    'name'                => $hotel->name,
+                    'entity_type'         => 'company',
+                    'registration_number' => $hotel->registration_number ?? null,
+                    'contact_email'       => $user->email,
+                    'contact_phone'       => null,
+                    'address'             => [],
+                    'status'              => $hotel->status,
+                    'properties'          => [$this->formatProperty($hotel)],
+                    'total_rooms'         => $hotel->room_count ?? 0,
+                ],
+            ]);
         }
 
         $properties = $org->properties()
@@ -56,7 +85,6 @@ class OrganizationController extends Controller
     /** Update org-level info (name, registration number, phone). */
     public function update(Request $request): JsonResponse
     {
-        /** @var \App\Models\User $user */
         $user = $request->user();
         $org  = $user->organization;
 
@@ -86,12 +114,14 @@ class OrganizationController extends Controller
     /** List all properties under the org. */
     public function properties(Request $request): JsonResponse
     {
-        /** @var \App\Models\User $user */
         $user = $request->user();
         $org  = $user->organization;
 
         if (!$org) {
-            return response()->json(['data' => []]);
+            $hotel = app('tenant');
+            return response()->json([
+                'data' => $hotel ? [$this->formatProperty($hotel->load('address'))] : [],
+            ]);
         }
 
         $properties = $org->properties()
@@ -103,15 +133,34 @@ class OrganizationController extends Controller
         return response()->json(['data' => $properties]);
     }
 
-    /** Add a new property to the org. */
+    /** Add a new property to the org. Auto-creates org for legacy users. */
     public function addProperty(Request $request): JsonResponse
     {
-        /** @var \App\Models\User $user */
         $user = $request->user();
         $org  = $user->organization;
 
         if (!$org) {
-            return response()->json(['data' => null, 'errors' => [['code' => 'ORG_NOT_FOUND', 'message' => 'No organization linked to this account.']]], 404);
+            // Auto-migrate legacy hotel_admin to the org architecture
+            $hotel = app('tenant');
+            if (!$hotel) {
+                return response()->json([
+                    'errors' => [['code' => 'ORG_NOT_FOUND', 'message' => 'Aucune organisation liée à ce compte.']],
+                ], 404);
+            }
+
+            DB::transaction(function () use ($user, $hotel, &$org) {
+                $org = Organization::create([
+                    'name'          => $hotel->name,
+                    'entity_type'   => 'company',
+                    'contact_email' => $user->email,
+                    'status'        => 'active',
+                ]);
+                $hotel->update(['organization_id' => $org->id]);
+                $user->update(['organization_id'  => $org->id]);
+                Subscription::where('hotel_id', $hotel->id)
+                    ->whereNull('organization_id')
+                    ->update(['organization_id' => $org->id]);
+            });
         }
 
         $validated = $request->validate([
@@ -129,7 +178,7 @@ class OrganizationController extends Controller
         // Check plan limits on total rooms
         $sub = $org->activeSubscription;
         if ($sub) {
-            $plan = $sub->plan;
+            $plan     = $sub->plan;
             $newTotal = $org->totalRooms() + $validated['room_count'];
             if ($plan->max_rooms && $newTotal > $plan->max_rooms) {
                 return response()->json([
@@ -139,7 +188,7 @@ class OrganizationController extends Controller
             }
         }
 
-        $hotel = Hotel::create([
+        $property = Hotel::create([
             'organization_id'     => $org->id,
             'name'                => $validated['name'],
             'type'                => $validated['type'],
@@ -151,7 +200,7 @@ class OrganizationController extends Controller
         ]);
 
         HotelAddress::create([
-            'hotel_id'    => $hotel->id,
+            'hotel_id'    => $property->id,
             'line1'       => $validated['address']['line1'],
             'city'        => $validated['address']['city'],
             'governorate' => $validated['address']['governorate'],
@@ -161,19 +210,165 @@ class OrganizationController extends Controller
         ]);
 
         HotelContact::create([
-            'hotel_id'   => $hotel->id,
+            'hotel_id'   => $property->id,
             'type'       => 'email',
             'value'      => $org->contact_email,
             'is_primary' => true,
         ]);
 
         // Give hotel_admin access to new property via pivot
-        $hotel->users()->attach($user->id, ['granted_at' => now()]);
+        $property->users()->attach($user->id, ['granted_at' => now()]);
 
         return response()->json([
-            'data'    => $this->formatProperty($hotel->load('address')),
+            'data'    => $this->formatProperty($property->load('address')),
             'message' => 'Propriété ajoutée avec succès.',
         ], 201);
+    }
+
+    /** Update a property's details. */
+    public function updateProperty(Request $request, string $propertyId): JsonResponse
+    {
+        $property = $this->resolveProperty($request, $propertyId);
+        if ($property instanceof JsonResponse) return $property;
+
+        $validated = $request->validate([
+            'name'                => ['sometimes', 'string', 'max:255'],
+            'type'                => ['sometimes', 'in:hotel,guesthouse,appartement,villa,riad,maison_hotes,hostel,resort,bungalow,rental'],
+            'room_count'          => ['sometimes', 'integer', 'min:1', 'max:9999'],
+            'stars'               => ['nullable', 'integer', 'between:1,5'],
+            'registration_number' => ['nullable', 'string', 'max:100'],
+            'address.line1'       => ['sometimes', 'string', 'max:255'],
+            'address.city'        => ['sometimes', 'string', 'max:100'],
+            'address.governorate' => ['sometimes', 'string', 'max:100'],
+            'address.postal_code' => ['nullable', 'string', 'max:20'],
+        ]);
+
+        $addressData = $validated['address'] ?? null;
+        unset($validated['address']);
+
+        $property->update($validated);
+
+        if ($addressData) {
+            $addr = $property->address;
+            if ($addr) {
+                $addr->update($addressData);
+            } else {
+                HotelAddress::create(array_merge(
+                    $addressData,
+                    ['hotel_id' => $property->id, 'country' => 'TN', 'is_primary' => true]
+                ));
+            }
+        }
+
+        return response()->json([
+            'data'    => $this->formatProperty($property->load('address')),
+            'message' => 'Propriété mise à jour.',
+        ]);
+    }
+
+    // ── Per-property room endpoints ────────────────────────────────────────────
+
+    /** List rooms for a specific property. */
+    public function propertyRooms(Request $request, string $propertyId): JsonResponse
+    {
+        $property = $this->resolveProperty($request, $propertyId);
+        if ($property instanceof JsonResponse) return $property;
+
+        $rooms = $property->rooms()
+            ->orderBy('floor')
+            ->orderBy('number')
+            ->get(['id', 'hotel_id', 'number', 'floor', 'type', 'capacity', 'status']);
+
+        return response()->json(['data' => $rooms]);
+    }
+
+    /** Add a room to a specific property. */
+    public function addPropertyRoom(Request $request, string $propertyId): JsonResponse
+    {
+        $property = $this->resolveProperty($request, $propertyId);
+        if ($property instanceof JsonResponse) return $property;
+
+        $validated = $request->validate([
+            'number'   => ['required', 'string', 'max:20'],
+            'floor'    => ['nullable', 'integer'],
+            'type'     => ['required', 'string', 'in:single,double,twin,triple,quadruple,suite,junior_suite,apartment,studio,family,villa,dormitory,standard'],
+            'capacity' => ['required', 'integer', 'min:1', 'max:20'],
+            'status'   => ['sometimes', 'in:available,occupied,maintenance,inactive'],
+        ]);
+
+        $room = $property->rooms()->create(array_merge(
+            $validated,
+            ['status' => $validated['status'] ?? 'available']
+        ));
+
+        return response()->json(['data' => $room], 201);
+    }
+
+    /** Update a room within a specific property. */
+    public function updatePropertyRoom(Request $request, string $propertyId, string $roomId): JsonResponse
+    {
+        $property = $this->resolveProperty($request, $propertyId);
+        if ($property instanceof JsonResponse) return $property;
+
+        $room = Room::where('id', $roomId)->where('hotel_id', $property->id)->first();
+        if (!$room) {
+            return response()->json(['errors' => [['code' => 'ROOM_NOT_FOUND']]], 404);
+        }
+
+        $validated = $request->validate([
+            'number'   => ['sometimes', 'string', 'max:20'],
+            'floor'    => ['nullable', 'integer'],
+            'type'     => ['sometimes', 'string', 'in:single,double,twin,triple,quadruple,suite,junior_suite,apartment,studio,family,villa,dormitory,standard'],
+            'capacity' => ['sometimes', 'integer', 'min:1', 'max:20'],
+            'status'   => ['sometimes', 'in:available,occupied,maintenance,inactive'],
+        ]);
+
+        $room->update($validated);
+        return response()->json(['data' => $room]);
+    }
+
+    /** Delete a room within a specific property. */
+    public function deletePropertyRoom(Request $request, string $propertyId, string $roomId): JsonResponse
+    {
+        $property = $this->resolveProperty($request, $propertyId);
+        if ($property instanceof JsonResponse) return $property;
+
+        $room = Room::where('id', $roomId)->where('hotel_id', $property->id)->first();
+        if (!$room) {
+            return response()->json(['errors' => [['code' => 'ROOM_NOT_FOUND']]], 404);
+        }
+
+        $room->delete();
+        return response()->json(null, 204);
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+
+    /**
+     * Resolve a property by ID, ensuring it belongs to the user's org.
+     * Falls back to pivot check for legacy users without an org.
+     */
+    private function resolveProperty(Request $request, string $propertyId): Hotel|JsonResponse
+    {
+        $user = $request->user();
+        $org  = $user->organization;
+
+        if ($org) {
+            $hotel = Hotel::where('id', $propertyId)
+                ->where('organization_id', $org->id)
+                ->first();
+        } else {
+            // Legacy: validate via pivot table
+            $hotel = $user->hotels()->where('hotels.id', $propertyId)->first();
+        }
+
+        if (!$hotel) {
+            return response()->json([
+                'errors' => [['code' => 'PROPERTY_NOT_FOUND', 'message' => 'Propriété introuvable ou accès refusé.']],
+            ], 404);
+        }
+
+        return $hotel;
     }
 
     private function formatProperty(Hotel $h): array
