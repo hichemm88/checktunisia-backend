@@ -14,6 +14,7 @@ use App\Http\Controllers\Hotel\DashboardController;
 use App\Http\Controllers\Hotel\HotelProfileController;
 use App\Http\Controllers\Hotel\HotelUserController;
 use App\Http\Controllers\Hotel\OnboardingController;
+use App\Http\Controllers\Hotel\OrganizationController;
 use App\Http\Controllers\Authority\ExportController;
 use App\Http\Controllers\Public\PublicRegistrationController;
 use App\Http\Controllers\Hotel\SubscriptionController;
@@ -123,6 +124,12 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
                 // Onboarding
                 Route::get('onboarding/status',   [OnboardingController::class, 'status']);
                 Route::post('onboarding/complete', [OnboardingController::class, 'complete']);
+
+                // Organization & multi-property management
+                Route::get('organization',                      [OrganizationController::class, 'show']);
+                Route::patch('organization',                    [OrganizationController::class, 'update']);
+                Route::get('organization/properties',           [OrganizationController::class, 'properties']);
+                Route::post('organization/properties',          [OrganizationController::class, 'addProperty']);
 
                 // Hotel profile (read available to all staff above, write admin only)
                 Route::get('profile', [HotelProfileController::class, 'show']);

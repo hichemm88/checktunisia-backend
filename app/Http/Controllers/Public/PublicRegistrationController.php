@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Hotel;
 use App\Models\HotelAddress;
 use App\Models\HotelContact;
+use App\Models\Organization;
 use App\Models\Subscription;
 use App\Models\SubscriptionEvent;
 use App\Models\SubscriptionPlan;
@@ -20,23 +21,33 @@ use Illuminate\Validation\Rules\Password;
 class PublicRegistrationController extends Controller
 {
     /**
-     * Self-service hotel registration.
+     * Self-service registration.
      *
-     * Creates the hotel, the hotel_admin account, and a 30-day trial subscription
-     * for the chosen plan. No payment required at this stage — the admin will
-     * receive an invoice and initiate payment via the hotel portal.
+     * Creates:
+     *   1. Organization (société ou particulier)
+     *   2. First property under that org
+     *   3. hotel_admin user linked to the org
+     *   4. 30-day trial subscription at org level
+     *
+     * No payment required at sign-up.
      */
     public function register(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            // Hotel info
-            'hotel_name'          => ['required', 'string', 'max:255'],
-            'hotel_type'          => ['required', 'in:hotel,guesthouse,rental,hostel,resort'],
-            'room_count'          => ['required', 'integer', 'min:1', 'max:9999'],
-            'stars'               => ['nullable', 'integer', 'between:1,5'],
-            'registration_number' => ['nullable', 'string', 'max:100'],
+            // Organization
+            'entity_type'               => ['required', 'in:company,individual'],
+            'org_name'                  => ['required', 'string', 'max:255'],
+            'org_registration_number'   => ['nullable', 'string', 'max:100'],
+            'org_phone'                 => ['nullable', 'string', 'max:30'],
 
-            // Address
+            // First property
+            'property_name'   => ['required', 'string', 'max:255'],
+            'property_type'   => ['required', 'in:hotel,guesthouse,appartement,villa,riad,maison_hotes,hostel,resort,bungalow,rental'],
+            'room_count'      => ['required', 'integer', 'min:1', 'max:9999'],
+            'stars'           => ['nullable', 'integer', 'between:1,5'],
+            'registration_number' => ['nullable', 'string', 'max:100'], // property's RC
+
+            // Property address
             'address.line1'       => ['required', 'string', 'max:255'],
             'address.city'        => ['required', 'string', 'max:100'],
             'address.governorate' => ['required', 'string', 'max:100'],
@@ -50,7 +61,7 @@ class PublicRegistrationController extends Controller
             'password'    => ['required', 'confirmed', Password::min(12)
                 ->mixedCase()->numbers()->symbols()],
 
-            // Subscription
+            // Subscription plan
             'plan_slug'   => ['required', 'string', 'exists:subscription_plans,slug'],
         ]);
 
@@ -58,7 +69,7 @@ class PublicRegistrationController extends Controller
             ->where('is_active', true)
             ->firstOrFail();
 
-        // Validate room count fits the plan
+        // Validate room count fits the chosen plan
         if ($plan->max_rooms && $validated['room_count'] > $plan->max_rooms) {
             return response()->json([
                 'message' => 'Le nombre de chambres dépasse la limite du plan sélectionné.',
@@ -67,10 +78,23 @@ class PublicRegistrationController extends Controller
         }
 
         $result = DB::transaction(function () use ($validated, $plan) {
-            // 1. Create hotel (pending until first payment)
+
+            // ── 1. Create Organization ────────────────────────────────────
+            $org = Organization::create([
+                'name'                => $validated['org_name'],
+                'entity_type'         => $validated['entity_type'],
+                'registration_number' => $validated['org_registration_number'] ?? null,
+                'contact_email'       => $validated['email'],
+                'contact_phone'       => $validated['org_phone'] ?? null,
+                'address'             => $validated['address'],
+                'status'              => 'pending',
+            ]);
+
+            // ── 2. Create first property ──────────────────────────────────
             $hotel = Hotel::create([
-                'name'                => $validated['hotel_name'],
-                'type'                => $validated['hotel_type'],
+                'organization_id'     => $org->id,
+                'name'                => $validated['property_name'],
+                'type'                => $validated['property_type'],
                 'room_count'          => $validated['room_count'],
                 'stars'               => $validated['stars'] ?? null,
                 'registration_number' => $validated['registration_number'] ?? null,
@@ -94,8 +118,9 @@ class PublicRegistrationController extends Controller
                 'is_primary' => true,
             ]);
 
-            // 2. Create hotel admin user
+            // ── 3. Create admin user ──────────────────────────────────────
             $user = User::create([
+                'organization_id'   => $org->id,
                 'first_name'        => $validated['first_name'],
                 'last_name'         => $validated['last_name'],
                 'email'             => $validated['email'],
@@ -106,22 +131,24 @@ class PublicRegistrationController extends Controller
             ]);
             $user->assignRole('hotel_admin');
 
-            // Link user ↔ hotel
+            // Link user ↔ property (pivot) for backwards-compat resolution
             $hotel->users()->attach($user->id, ['granted_at' => now()]);
             $hotel->update(['created_by' => $user->id]);
+            $org->update(['status' => 'active']);
 
-            // 3. Create 30-day trial subscription
+            // ── 4. Trial subscription at org level ────────────────────────
             $trialEnds = now()->addDays(30);
             $sub = Subscription::create([
-                'hotel_id'      => $hotel->id,
-                'plan_id'       => $plan->id,
-                'status'        => 'active',
-                'billing_cycle' => 'monthly',
-                'started_at'    => now(),
-                'expires_at'    => $trialEnds,
-                'auto_renew'    => false,
-                'created_by'    => $user->id,
-                'metadata'      => ['trial' => true],
+                'organization_id' => $org->id,
+                'hotel_id'        => $hotel->id, // kept for legacy compat
+                'plan_id'         => $plan->id,
+                'status'          => 'active',
+                'billing_cycle'   => 'monthly',
+                'started_at'      => now(),
+                'expires_at'      => $trialEnds,
+                'auto_renew'      => false,
+                'created_by'      => $user->id,
+                'metadata'        => ['trial' => true],
             ]);
 
             SubscriptionEvent::create([
@@ -133,23 +160,29 @@ class PublicRegistrationController extends Controller
                 'created_at'      => now(),
             ]);
 
-            AuditLogger::log('hotel.registered', $hotel, [], [
-                'hotel_id' => $hotel->id,
-                'plan'     => $plan->slug,
-                'trial'    => true,
+            AuditLogger::log('organization.registered', $org, [], [
+                'organization_id' => $org->id,
+                'entity_type'     => $org->entity_type,
+                'plan'            => $plan->slug,
+                'trial'           => true,
+                'properties'      => 1,
             ]);
 
-            return compact('hotel', 'user', 'sub', 'trialEnds');
+            return compact('org', 'hotel', 'user', 'sub', 'trialEnds');
         });
 
         return response()->json([
             'data' => [
-                'hotel'      => [
+                'organization' => [
+                    'id'   => $result['org']->id,
+                    'name' => $result['org']->name,
+                ],
+                'property' => [
                     'id'   => $result['hotel']->id,
                     'name' => $result['hotel']->name,
                     'slug' => $result['hotel']->slug,
                 ],
-                'user'       => [
+                'user' => [
                     'id'    => $result['user']->id,
                     'email' => $result['user']->email,
                     'name'  => $result['user']->first_name . ' ' . $result['user']->last_name,

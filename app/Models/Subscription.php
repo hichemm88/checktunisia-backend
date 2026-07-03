@@ -17,7 +17,7 @@ class Subscription extends Model
     protected $keyType = 'string';
 
     protected $fillable = [
-        'hotel_id', 'plan_id', 'status', 'billing_cycle',
+        'hotel_id', 'organization_id', 'plan_id', 'status', 'billing_cycle',
         'started_at', 'expires_at', 'cancelled_at', 'suspended_at',
         'suspended_reason', 'auto_renew', 'metadata', 'created_by',
     ];
@@ -34,8 +34,9 @@ class Subscription extends Model
         ];
     }
 
-    public function hotel(): BelongsTo { return $this->belongsTo(Hotel::class); }
-    public function plan(): BelongsTo  { return $this->belongsTo(SubscriptionPlan::class, 'plan_id'); }
+    public function hotel(): BelongsTo        { return $this->belongsTo(Hotel::class); }
+    public function organization(): BelongsTo { return $this->belongsTo(Organization::class, 'organization_id'); }
+    public function plan(): BelongsTo         { return $this->belongsTo(SubscriptionPlan::class, 'plan_id'); }
     public function creator(): BelongsTo { return $this->belongsTo(User::class, 'created_by'); }
     public function events(): HasMany  { return $this->hasMany(SubscriptionEvent::class); }
     public function invoices(): HasMany { return $this->hasMany(Invoice::class); }

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -23,6 +24,7 @@ class User extends Authenticatable
     protected string $guard_name = 'api';
 
     protected $fillable = [
+        'organization_id',
         'email',
         'password',
         'first_name',
@@ -53,6 +55,11 @@ class User extends Authenticatable
     }
 
     // ─── Relationships ───────────────────────────────────────────────
+
+    public function organization(): BelongsTo
+    {
+        return $this->belongsTo(Organization::class, 'organization_id');
+    }
 
     public function hotels(): BelongsToMany
     {
