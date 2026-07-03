@@ -7,7 +7,7 @@ return [
         'https://checktunisia.vercel.app',
     ],
     'allowed_origins_patterns' => [],
-    'allowed_headers'          => ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+    'allowed_headers'          => ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'X-Property-Id'],
     'exposed_headers'          => [],
     'max_age'                  => 86400,
     'supports_credentials'     => false,
