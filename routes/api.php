@@ -69,7 +69,10 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
     /*
     |----------------------------------------------------------------------
-    | Hotel Staff Routes (hotel_admin + receptionist)
+    | Hotel Staff Routes — Group A: require a resolved tenant (property)
+    |
+    | These routes need app('tenant') to be bound. Only reachable once the
+    | org has at least one property.
     |----------------------------------------------------------------------
     */
     Route::prefix('hotel')
@@ -79,77 +82,95 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             // Dashboard
             Route::get('dashboard', [DashboardController::class, 'index']);
 
-            // Subscription (read)
-            Route::get('subscription', [SubscriptionController::class, 'current']);
-
             // Rooms (read for all staff)
             Route::get('rooms', [RoomController::class, 'index']);
 
-            // Draft deletion — no subscription gate (allow cleanup even if sub expired)
+            // Draft deletion — no subscription gate
             Route::delete('check-ins/{id}', [CheckInController::class, 'destroy']);
-            // Watchlist hits (security alerts for hotel)
+
+            // Watchlist hits
             Route::get('watchlist-hits',                         [WatchlistHitController::class, 'index']);
             Route::post('watchlist-hits/{id}/acknowledge',       [WatchlistHitController::class, 'acknowledge']);
 
             // Check-ins (read for all staff)
-            Route::get('check-ins', [CheckInController::class, 'index']);
+            Route::get('check-ins',      [CheckInController::class, 'index']);
             Route::get('check-ins/{id}', [CheckInController::class, 'show']);
 
-            // OCR scan status (no subscription gate — just viewing status)
+            // OCR scan status
             Route::get('scans/{scan_id}/status', [ScanController::class, 'status']);
 
             // ── Subscription-gated: write operations ──────────────────────
             Route::middleware('subscription.active')->group(function () {
-                Route::post('check-ins', [CheckInController::class, 'store']);
-                Route::patch('check-ins/{id}', [CheckInController::class, 'update']);
-                Route::post('check-ins/{id}/complete', [CheckInController::class, 'complete']);
-                Route::post('check-ins/{id}/checkout', [CheckInController::class, 'checkout']);
-                Route::post('check-ins/{id}/cancel', [CheckInController::class, 'cancel']);
-
-                // Guests
-                Route::post('check-ins/{check_in_id}/guests', [GuestController::class, 'store']);
-                Route::patch('check-ins/{check_in_id}/guests/{guest_id}', [GuestController::class, 'update']);
-                Route::delete('check-ins/{check_in_id}/guests/{guest_id}', [GuestController::class, 'destroy']);
-
-                // Passport scan upload
-                Route::post('check-ins/{check_in_id}/scans', [ScanController::class, 'store']);
+                Route::post('check-ins',                                    [CheckInController::class, 'store']);
+                Route::patch('check-ins/{id}',                              [CheckInController::class, 'update']);
+                Route::post('check-ins/{id}/complete',                      [CheckInController::class, 'complete']);
+                Route::post('check-ins/{id}/checkout',                      [CheckInController::class, 'checkout']);
+                Route::post('check-ins/{id}/cancel',                        [CheckInController::class, 'cancel']);
+                Route::post('check-ins/{check_in_id}/guests',               [GuestController::class, 'store']);
+                Route::patch('check-ins/{check_in_id}/guests/{guest_id}',   [GuestController::class, 'update']);
+                Route::delete('check-ins/{check_in_id}/guests/{guest_id}',  [GuestController::class, 'destroy']);
+                Route::post('check-ins/{check_in_id}/scans',                [ScanController::class, 'store']);
             });
 
-            // ── Hotel admin only ───────────────────────────────────────────
-            // Payments (Flouci) — available to all hotel staff
+            // Payments (Flouci) — hotel-scoped (uses hotel for invoice lookup)
             Route::post('payments/initiate',   [PaymentController::class, 'initiate']);
             Route::get('payments/{id}/verify', [PaymentController::class, 'verify']);
 
+            // ── Hotel admin only (tenant-aware) ────────────────────────────
             Route::middleware('role:hotel_admin')->group(function () {
-                // Onboarding
-                Route::get('onboarding/status',   [OnboardingController::class, 'status']);
-                Route::post('onboarding/complete', [OnboardingController::class, 'complete']);
+                // Hotel profile
+                Route::get('profile',        [HotelProfileController::class, 'show']);
+                Route::patch('profile',      [HotelProfileController::class, 'update']);
 
-                // Organization & multi-property management
-                Route::get('organization',                                                        [OrganizationController::class, 'show']);
-                Route::patch('organization',                                                      [OrganizationController::class, 'update']);
-                Route::get('organization/properties',                                             [OrganizationController::class, 'properties']);
-                Route::post('organization/properties',                                            [OrganizationController::class, 'addProperty']);
-                Route::patch('organization/properties/{id}',                                     [OrganizationController::class, 'updateProperty']);
-                // Per-property room management
-                Route::get('organization/properties/{id}/rooms',                                 [OrganizationController::class, 'propertyRooms']);
-                Route::post('organization/properties/{id}/rooms',                                [OrganizationController::class, 'addPropertyRoom']);
-                Route::patch('organization/properties/{id}/rooms/{roomId}',                      [OrganizationController::class, 'updatePropertyRoom']);
-                Route::delete('organization/properties/{id}/rooms/{roomId}',                     [OrganizationController::class, 'deletePropertyRoom']);
+                // Staff management
+                Route::get('users',          [HotelUserController::class, 'index']);
+                Route::post('users',         [HotelUserController::class, 'store']);
+                Route::patch('users/{id}',   [HotelUserController::class, 'update']);
+                Route::delete('users/{id}',  [HotelUserController::class, 'destroy']);
 
-                // Hotel profile (read available to all staff above, write admin only)
-                Route::get('profile', [HotelProfileController::class, 'show']);
-                Route::patch('profile', [HotelProfileController::class, 'update']);
-
-                Route::get('users', [HotelUserController::class, 'index']);
-                Route::post('users', [HotelUserController::class, 'store']);
-                Route::patch('users/{id}', [HotelUserController::class, 'update']);
-                Route::delete('users/{id}', [HotelUserController::class, 'destroy']);
-
-                Route::post('rooms', [RoomController::class, 'store']);
-                Route::patch('rooms/{id}', [RoomController::class, 'update']);
-                Route::delete('rooms/{id}', [RoomController::class, 'destroy']);
+                // Room CRUD (write)
+                Route::post('rooms',         [RoomController::class, 'store']);
+                Route::patch('rooms/{id}',   [RoomController::class, 'update']);
+                Route::delete('rooms/{id}',  [RoomController::class, 'destroy']);
             });
+        });
+
+    /*
+    |----------------------------------------------------------------------
+    | Hotel Staff Routes — Group B: org-level, NO tenant required
+    |
+    | Reachable before any property exists (new registration flow).
+    | Subscription is org-level; onboarding and org management don't
+    | need a resolved property.
+    |----------------------------------------------------------------------
+    */
+
+    // Subscription read — available to all hotel staff (org-level)
+    Route::prefix('hotel')
+        ->middleware(['role:hotel_admin|receptionist'])
+        ->group(function () {
+            Route::get('subscription', [SubscriptionController::class, 'current']);
+        });
+
+    // Onboarding + org management — hotel_admin only, no tenant needed
+    Route::prefix('hotel')
+        ->middleware(['role:hotel_admin'])
+        ->group(function () {
+
+            // Onboarding (works before first property exists)
+            Route::get('onboarding/status',    [OnboardingController::class, 'status']);
+            Route::post('onboarding/complete', [OnboardingController::class, 'complete']);
+
+            // Organization info & multi-property management
+            Route::get('organization',                                     [OrganizationController::class, 'show']);
+            Route::patch('organization',                                   [OrganizationController::class, 'update']);
+            Route::get('organization/properties',                          [OrganizationController::class, 'properties']);
+            Route::post('organization/properties',                         [OrganizationController::class, 'addProperty']);
+            Route::patch('organization/properties/{id}',                   [OrganizationController::class, 'updateProperty']);
+            Route::get('organization/properties/{id}/rooms',               [OrganizationController::class, 'propertyRooms']);
+            Route::post('organization/properties/{id}/rooms',              [OrganizationController::class, 'addPropertyRoom']);
+            Route::patch('organization/properties/{id}/rooms/{roomId}',    [OrganizationController::class, 'updatePropertyRoom']);
+            Route::delete('organization/properties/{id}/rooms/{roomId}',   [OrganizationController::class, 'deletePropertyRoom']);
         });
 
     /*
@@ -160,26 +181,19 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     Route::prefix('authority')
         ->middleware(['role:authority_user', 'authority.credential', 'throttle:60,1'])
         ->group(function () {
-            // Dashboard (ministry = national stats, police = zone stats)
             Route::get('dashboard',        [AuthorityDashboardController::class, 'dashboard']);
-            // Expiring documents alert feed
             Route::get('alerts',           [AuthorityDashboardController::class, 'alerts']);
-            // Audit activity log (ministry=all, police=own)
             Route::get('activity',         [AuthorityDashboardController::class, 'activity']);
-            // Guest search & profile
             Route::get('search',           [AuthoritySearchController::class, 'search']);
             Route::get('guests/{id}',      [AuthoritySearchController::class, 'show']);
-            // Hotel directory
             Route::get('hotels',           [AuthoritySearchController::class, 'hotels']);
             Route::get('hotels/{id}',      [AuthoritySearchController::class, 'showHotel']);
-            // Watchlist management
             Route::get('watchlist',                    [WatchlistController::class, 'index']);
             Route::post('watchlist',                   [WatchlistController::class, 'store']);
             Route::patch('watchlist/{id}',             [WatchlistController::class, 'update']);
             Route::delete('watchlist/{id}',            [WatchlistController::class, 'destroy']);
             Route::post('watchlist/import',            [WatchlistController::class, 'import']);
             Route::get('watchlist/template',           [WatchlistController::class, 'template']);
-            // Exports
             Route::get('guests/{id}/export/pdf',   [ExportController::class, 'guestPdf']);
             Route::get('export/stays',             [ExportController::class, 'staysCsv']);
         });
@@ -196,39 +210,39 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('dashboard', [HotelAdminController::class, 'dashboard']);
 
             // Hotels
-            Route::get('hotels', [HotelAdminController::class, 'index']);
-            Route::post('hotels', [HotelAdminController::class, 'store']);
-            Route::get('hotels/{id}', [HotelAdminController::class, 'show']);
-            Route::patch('hotels/{id}', [HotelAdminController::class, 'update']);
-            Route::post('hotels/{id}/suspend', [HotelAdminController::class, 'suspend']);
+            Route::get('hotels',            [HotelAdminController::class, 'index']);
+            Route::post('hotels',           [HotelAdminController::class, 'store']);
+            Route::get('hotels/{id}',       [HotelAdminController::class, 'show']);
+            Route::patch('hotels/{id}',     [HotelAdminController::class, 'update']);
+            Route::post('hotels/{id}/suspend',  [HotelAdminController::class, 'suspend']);
             Route::post('hotels/{id}/activate', [HotelAdminController::class, 'activate']);
 
             // Hotel users
-            Route::get('hotels/{hotel_id}/users', [HotelAdminController::class, 'getUsers']);
+            Route::get('hotels/{hotel_id}/users',  [HotelAdminController::class, 'getUsers']);
             Route::post('hotels/{hotel_id}/users', [HotelAdminController::class, 'createUser']);
 
             // Subscriptions
-            Route::get('hotels/{hotel_id}/subscriptions', [SubscriptionAdminController::class, 'index']);
-            Route::post('hotels/{hotel_id}/subscriptions', [SubscriptionAdminController::class, 'store']);
+            Route::get('hotels/{hotel_id}/subscriptions',        [SubscriptionAdminController::class, 'index']);
+            Route::post('hotels/{hotel_id}/subscriptions',       [SubscriptionAdminController::class, 'store']);
             Route::patch('hotels/{hotel_id}/subscriptions/{id}', [SubscriptionAdminController::class, 'update']);
 
             // Invoices
-            Route::get('hotels/{hotel_id}/invoices', [SubscriptionAdminController::class, 'invoices']);
-            Route::post('hotels/{hotel_id}/invoices', [SubscriptionAdminController::class, 'createInvoice']);
+            Route::get('hotels/{hotel_id}/invoices',        [SubscriptionAdminController::class, 'invoices']);
+            Route::post('hotels/{hotel_id}/invoices',       [SubscriptionAdminController::class, 'createInvoice']);
             Route::patch('hotels/{hotel_id}/invoices/{id}', [SubscriptionAdminController::class, 'updateInvoice']);
 
             // Authority users
-            Route::get('authority-users', [AuthorityAdminController::class, 'index']);
-            Route::post('authority-users', [AuthorityAdminController::class, 'store']);
-            Route::patch('authority-users/{id}', [AuthorityAdminController::class, 'update']);
+            Route::get('authority-users',       [AuthorityAdminController::class, 'index']);
+            Route::post('authority-users',      [AuthorityAdminController::class, 'store']);
+            Route::patch('authority-users/{id}',[AuthorityAdminController::class, 'update']);
 
             // Organizations
-            Route::get('organizations', [AuthorityAdminController::class, 'organizations']);
-            Route::post('organizations', [AuthorityAdminController::class, 'createOrganization']);
+            Route::get('organizations',   [AuthorityAdminController::class, 'organizations']);
+            Route::post('organizations',  [AuthorityAdminController::class, 'createOrganization']);
 
             // Audit logs
-            Route::get('audit-logs', [AuditLogController::class, 'index']);
-            Route::get('audit-logs/{id}', [AuditLogController::class, 'show']);
-            Route::get('authority-search-logs', [AuditLogController::class, 'searchLogs']);
+            Route::get('audit-logs',             [AuditLogController::class, 'index']);
+            Route::get('audit-logs/{id}',        [AuditLogController::class, 'show']);
+            Route::get('authority-search-logs',  [AuditLogController::class, 'searchLogs']);
         });
 });

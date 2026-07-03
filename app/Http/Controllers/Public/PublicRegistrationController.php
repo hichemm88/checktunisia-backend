@@ -3,9 +3,6 @@
 namespace App\Http\Controllers\Public;
 
 use App\Http\Controllers\Controller;
-use App\Models\Hotel;
-use App\Models\HotelAddress;
-use App\Models\HotelContact;
 use App\Models\Organization;
 use App\Models\Subscription;
 use App\Models\SubscriptionEvent;
@@ -25,10 +22,10 @@ class PublicRegistrationController extends Controller
      *
      * Creates:
      *   1. Organization (société ou particulier)
-     *   2. First property under that org
-     *   3. hotel_admin user linked to the org
-     *   4. 30-day trial subscription at org level
+     *   2. hotel_admin user linked to the org
+     *   3. 30-day trial subscription at org level
      *
+     * Properties are added post-login via the onboarding wizard.
      * No payment required at sign-up.
      */
     public function register(Request $request): JsonResponse
@@ -39,19 +36,6 @@ class PublicRegistrationController extends Controller
             'org_name'                  => ['required', 'string', 'max:255'],
             'org_registration_number'   => ['nullable', 'string', 'max:100'],
             'org_phone'                 => ['nullable', 'string', 'max:30'],
-
-            // First property
-            'property_name'   => ['required', 'string', 'max:255'],
-            'property_type'   => ['required', 'in:hotel,guesthouse,appartement,villa,riad,maison_hotes,hostel,resort,bungalow,rental'],
-            'room_count'      => ['required', 'integer', 'min:1', 'max:9999'],
-            'stars'           => ['nullable', 'integer', 'between:1,5'],
-            'registration_number' => ['nullable', 'string', 'max:100'], // property's RC
-
-            // Property address
-            'address.line1'       => ['required', 'string', 'max:255'],
-            'address.city'        => ['required', 'string', 'max:100'],
-            'address.governorate' => ['required', 'string', 'max:100'],
-            'address.postal_code' => ['nullable', 'string', 'max:20'],
 
             // Admin account
             'first_name'  => ['required', 'string', 'max:100'],
@@ -69,14 +53,6 @@ class PublicRegistrationController extends Controller
             ->where('is_active', true)
             ->firstOrFail();
 
-        // Validate room count fits the chosen plan
-        if ($plan->max_rooms && $validated['room_count'] > $plan->max_rooms) {
-            return response()->json([
-                'message' => 'Le nombre de chambres dépasse la limite du plan sélectionné.',
-                'errors'  => ['room_count' => ["Ce plan accepte au maximum {$plan->max_rooms} chambres."]],
-            ], 422);
-        }
-
         $result = DB::transaction(function () use ($validated, $plan) {
 
             // ── 1. Create Organization ────────────────────────────────────
@@ -86,40 +62,10 @@ class PublicRegistrationController extends Controller
                 'registration_number' => $validated['org_registration_number'] ?? null,
                 'contact_email'       => $validated['email'],
                 'contact_phone'       => $validated['org_phone'] ?? null,
-                'address'             => $validated['address'],
-                'status'              => 'pending',
+                'status'              => 'active',
             ]);
 
-            // ── 2. Create first property ──────────────────────────────────
-            $hotel = Hotel::create([
-                'organization_id'     => $org->id,
-                'name'                => $validated['property_name'],
-                'type'                => $validated['property_type'],
-                'room_count'          => $validated['room_count'],
-                'stars'               => $validated['stars'] ?? null,
-                'registration_number' => $validated['registration_number'] ?? null,
-                'status'              => 'active',   // activated immediately with the org
-                'setup_completed_at'  => now(),      // onboarding wizard not needed for self-registered hotels
-            ]);
-
-            HotelAddress::create([
-                'hotel_id'    => $hotel->id,
-                'line1'       => $validated['address']['line1'],
-                'city'        => $validated['address']['city'],
-                'governorate' => $validated['address']['governorate'],
-                'postal_code' => $validated['address']['postal_code'] ?? null,
-                'country'     => 'TN',
-                'is_primary'  => true,
-            ]);
-
-            HotelContact::create([
-                'hotel_id'   => $hotel->id,
-                'type'       => 'email',
-                'value'      => $validated['email'],
-                'is_primary' => true,
-            ]);
-
-            // ── 3. Create admin user ──────────────────────────────────────
+            // ── 2. Create admin user ──────────────────────────────────────
             $user = User::create([
                 'organization_id'   => $org->id,
                 'first_name'        => $validated['first_name'],
@@ -132,16 +78,12 @@ class PublicRegistrationController extends Controller
             ]);
             $user->assignRole('hotel_admin');
 
-            // Link user ↔ property (pivot) for backwards-compat resolution
-            $hotel->users()->attach($user->id, ['granted_at' => now()]);
-            $hotel->update(['created_by' => $user->id]);
-            $org->update(['status' => 'active']);
-
-            // ── 4. Trial subscription at org level ────────────────────────
+            // ── 3. Trial subscription at org level (no property yet) ──────
             $trialEnds = now()->addDays(30);
             $sub = Subscription::create([
                 'organization_id' => $org->id,
-                'hotel_id'        => $hotel->id, // kept for legacy compat
+                // hotel_id is intentionally omitted (nullable since migration 2026_07_03_200001)
+                // it will be back-filled when the first property is created in onboarding
                 'plan_id'         => $plan->id,
                 'status'          => 'active',
                 'billing_cycle'   => 'monthly',
@@ -166,10 +108,10 @@ class PublicRegistrationController extends Controller
                 'entity_type'     => $org->entity_type,
                 'plan'            => $plan->slug,
                 'trial'           => true,
-                'properties'      => 1,
+                'properties'      => 0, // property added during onboarding
             ]);
 
-            return compact('org', 'hotel', 'user', 'sub', 'trialEnds');
+            return compact('org', 'user', 'sub', 'trialEnds');
         });
 
         return response()->json([
@@ -177,11 +119,6 @@ class PublicRegistrationController extends Controller
                 'organization' => [
                     'id'   => $result['org']->id,
                     'name' => $result['org']->name,
-                ],
-                'property' => [
-                    'id'   => $result['hotel']->id,
-                    'name' => $result['hotel']->name,
-                    'slug' => $result['hotel']->slug,
                 ],
                 'user' => [
                     'id'    => $result['user']->id,
