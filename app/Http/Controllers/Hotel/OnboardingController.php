@@ -8,12 +8,9 @@ use Illuminate\Http\Request;
 
 class OnboardingController extends Controller
 {
-    /**
-     * Get onboarding status for the current hotel.
-     */
     public function status(Request $request): JsonResponse
     {
-        $hotel = $request->user()->currentHotel();
+        $hotel = app('tenant');
 
         return response()->json([
             'data' => [
@@ -23,12 +20,9 @@ class OnboardingController extends Controller
         ]);
     }
 
-    /**
-     * Mark setup as complete.
-     */
     public function complete(Request $request): JsonResponse
     {
-        $hotel = $request->user()->currentHotel();
+        $hotel = app('tenant');
 
         if (is_null($hotel->setup_completed_at)) {
             $hotel->update(['setup_completed_at' => now()]);
