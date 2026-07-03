@@ -18,6 +18,7 @@ use App\Http\Controllers\Authority\AuthoritySearchController;
 use App\Http\Controllers\Authority\AuthorityDashboardController;
 use App\Http\Controllers\Authority\WatchlistController;
 use App\Http\Controllers\Hotel\WatchlistHitController;
+use App\Http\Controllers\Hotel\PaymentController;
 use App\Http\Controllers\Referential\ReferentialController;
 use Illuminate\Support\Facades\Route;
 
@@ -107,6 +108,10 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             });
 
             // ── Hotel admin only ───────────────────────────────────────────
+            // Payments (Flouci) — available to all hotel staff
+            Route::post('payments/initiate',   [PaymentController::class, 'initiate']);
+            Route::get('payments/{id}/verify', [PaymentController::class, 'verify']);
+
             Route::middleware('role:hotel_admin')->group(function () {
                 // Hotel profile (read available to all staff above, write admin only)
                 Route::get('profile', [HotelProfileController::class, 'show']);
