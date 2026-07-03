@@ -239,7 +239,9 @@ class CheckInService
                 ->where('type', $data['document']['type'] ?? 'passport')
                 ->first();
 
-            if ($doc) return $doc->guest;
+            // $doc->guest peut être null si l'enregistrement Guest a été supprimé
+            // sans cascader sur travel_documents (orphelin). On ignore et on recrée.
+            if ($doc && $doc->guest) return $doc->guest;
         }
 
         return Guest::create([
