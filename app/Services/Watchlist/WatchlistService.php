@@ -4,8 +4,10 @@ namespace App\Services\Watchlist;
 
 use App\Models\CheckIn;
 use App\Models\Guest;
+use App\Models\User;
 use App\Models\WatchlistEntry;
 use App\Models\WatchlistHit;
+use App\Notifications\WatchlistHitNotification;
 use Illuminate\Support\Collection;
 
 class WatchlistService
@@ -159,6 +161,24 @@ class WatchlistService
                     'notified_hotel_at' => now(),
                 ]
             );
+
+            // Notify hotel admin(s) by email
+            $entry = WatchlistEntry::find($match['entry_id']);
+            if ($entry) {
+                $hotel    = $checkIn->hotel;
+                $admins   = $hotel->users()
+                    ->whereHas('roles', fn($q) => $q->where('name', 'hotel_admin'))
+                    ->get();
+
+                foreach ($admins as $admin) {
+                    $admin->notify(new WatchlistHitNotification(
+                        hotel:      $hotel,
+                        guest:      $guest,
+                        entry:      $entry,
+                        checkInId:  $checkIn->id,
+                    ));
+                }
+            }
 
             $hitCount++;
         }

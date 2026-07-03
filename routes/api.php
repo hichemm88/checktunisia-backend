@@ -13,6 +13,9 @@ use App\Http\Controllers\Hotel\RoomController;
 use App\Http\Controllers\Hotel\DashboardController;
 use App\Http\Controllers\Hotel\HotelProfileController;
 use App\Http\Controllers\Hotel\HotelUserController;
+use App\Http\Controllers\Hotel\OnboardingController;
+use App\Http\Controllers\Authority\ExportController;
+use App\Http\Controllers\Public\PublicRegistrationController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Authority\AuthoritySearchController;
 use App\Http\Controllers\Authority\AuthorityDashboardController;
@@ -36,6 +39,10 @@ Route::prefix('auth')->middleware('throttle:5,1')->group(function () {
 Route::get('referential/countries', [ReferentialController::class, 'countries']);
 Route::get('referential/document-types', [ReferentialController::class, 'documentTypes']);
 Route::get('subscriptions/plans', [ReferentialController::class, 'plans']);
+
+// Self-service hotel registration (public)
+Route::post('public/register', [PublicRegistrationController::class, 'register'])
+    ->middleware('throttle:5,10');
 
 /*
 |--------------------------------------------------------------------------
@@ -113,6 +120,10 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('payments/{id}/verify', [PaymentController::class, 'verify']);
 
             Route::middleware('role:hotel_admin')->group(function () {
+                // Onboarding
+                Route::get('onboarding/status',   [OnboardingController::class, 'status']);
+                Route::post('onboarding/complete', [OnboardingController::class, 'complete']);
+
                 // Hotel profile (read available to all staff above, write admin only)
                 Route::get('profile', [HotelProfileController::class, 'show']);
                 Route::patch('profile', [HotelProfileController::class, 'update']);
@@ -155,6 +166,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::delete('watchlist/{id}',            [WatchlistController::class, 'destroy']);
             Route::post('watchlist/import',            [WatchlistController::class, 'import']);
             Route::get('watchlist/template',           [WatchlistController::class, 'template']);
+            // Exports
+            Route::get('guests/{id}/export/pdf',   [ExportController::class, 'guestPdf']);
+            Route::get('export/stays',             [ExportController::class, 'staysCsv']);
         });
 
     /*

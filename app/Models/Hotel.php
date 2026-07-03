@@ -29,14 +29,16 @@ class Hotel extends Model
         'status',
         'metadata',
         'created_by',
+        'setup_completed_at',
     ];
 
     protected function casts(): array
     {
         return [
-            'metadata' => 'array',
-            'stars'    => 'integer',
-            'room_count' => 'integer',
+            'metadata'           => 'array',
+            'stars'              => 'integer',
+            'room_count'         => 'integer',
+            'setup_completed_at' => 'datetime',
         ];
     }
 
