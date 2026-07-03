@@ -27,6 +27,14 @@ class EnsureAuthorityCredentialValid
             ], 403);
         }
 
+        // 2FA mandatory: redirect user to setup if not yet configured
+        if (!$user->two_factor_confirmed_at) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => '2FA_SETUP_REQUIRED', 'message' => 'Two-factor authentication must be configured before accessing this resource.', 'field' => null]],
+            ], 403);
+        }
+
         return $next($request);
     }
 }

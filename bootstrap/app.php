@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\EnsureActiveSubscription;
 use App\Http\Middleware\EnsureAuthorityCredentialValid;
+use App\Http\Middleware\Require2FA;
 use App\Http\Middleware\ResolveTenant;
 use App\Http\Middleware\AuditRequestMiddleware;
 use Illuminate\Foundation\Application;
@@ -22,6 +23,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'tenant'               => ResolveTenant::class,
             'subscription.active'  => EnsureActiveSubscription::class,
             'authority.credential' => EnsureAuthorityCredentialValid::class,
+            'require.2fa'          => Require2FA::class,
             'audit'                => AuditRequestMiddleware::class,
             'role'                 => \Spatie\Permission\Middleware\RoleMiddleware::class,
             'permission'           => \Spatie\Permission\Middleware\PermissionMiddleware::class,

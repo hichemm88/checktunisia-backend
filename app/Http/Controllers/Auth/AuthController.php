@@ -37,10 +37,25 @@ class AuthController extends Controller
 
         $user->update(['last_login_at' => now()]);
 
-        $token = $user->createToken('api-token', ['*'], now()->addHours(8));
-
         AuditLogger::log('user.login', $user, actor: $user);
 
+        // Authority users with confirmed 2FA → issue a short-lived partial token
+        // that can only be used on POST /auth/2fa/verify to complete login.
+        if ($user->hasRole('authority_user') && $user->two_factor_confirmed_at) {
+            $partial = $user->createToken('api-token-2fa', ['2fa-pending'], now()->addMinutes(15));
+
+            return response()->json([
+                'data' => [
+                    'requires_2fa'  => true,
+                    'partial_token' => $partial->plainTextToken,
+                    'token_type'    => 'Bearer',
+                    'expires_in'    => 900,
+                    'user'          => null,
+                ],
+            ]);
+        }
+
+        $token = $user->createToken('api-token', ['*'], now()->addHours(8));
         $hotel = $user->isHotelStaff() ? $user->hotel() : null;
 
         return response()->json([

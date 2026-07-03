@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Auth\AuthController;
+use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Admin\HotelAdminController;
 use App\Http\Controllers\Admin\SubscriptionAdminController;
 use App\Http\Controllers\Admin\AuditLogController;
@@ -42,12 +43,20 @@ Route::get('subscriptions/plans', [ReferentialController::class, 'plans']);
 */
 Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
-    // Auth
+    // Auth (no require.2fa here — these must be reachable with partial tokens too)
     Route::post('auth/logout',  [AuthController::class, 'logout']);
     Route::post('auth/refresh', [AuthController::class, 'refresh']);
     Route::get('auth/me',       [AuthController::class, 'me']);
-    Route::patch('profile', [AuthController::class, 'updateProfile']);
-    Route::post('profile/password', [AuthController::class, 'changePassword']);
+
+    // 2FA — verify accepts partial token; setup/disable require full token
+    Route::post('auth/2fa/verify',          [TwoFactorController::class, 'verify']);
+    Route::middleware('require.2fa')->group(function () {
+        Route::get('auth/2fa/setup',            [TwoFactorController::class, 'setup']);
+        Route::post('auth/2fa/setup/confirm',   [TwoFactorController::class, 'confirmSetup']);
+        Route::delete('auth/2fa/setup',         [TwoFactorController::class, 'disable']);
+        Route::patch('profile',                 [AuthController::class, 'updateProfile']);
+        Route::post('profile/password',         [AuthController::class, 'changePassword']);
+    });
 
     /*
     |----------------------------------------------------------------------

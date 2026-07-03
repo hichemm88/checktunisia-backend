@@ -32,19 +32,23 @@ class User extends Authenticatable
         'email_verified_at',
         'last_login_at',
         'metadata',
+        'two_factor_secret',
+        'two_factor_confirmed_at',
     ];
 
     protected $hidden = [
         'password',
         'remember_token',
+        'two_factor_secret',  // never expose the encrypted secret
     ];
 
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
-            'last_login_at'     => 'datetime',
-            'metadata'          => 'array',
+            'email_verified_at'       => 'datetime',
+            'last_login_at'           => 'datetime',
+            'two_factor_confirmed_at' => 'datetime',
+            'metadata'                => 'array',
         ];
     }
 
