@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 
 class CheckIn extends Model
 {
@@ -59,11 +60,27 @@ class CheckIn extends Model
         });
     }
 
+    /**
+     * Atomically hand out the next reference number for today via an
+     * upsert-based counter (INSERT ... ON CONFLICT DO UPDATE). A previous
+     * COUNT(*) + 1 approach could race under concurrent check-ins and
+     * generate duplicate references (unique constraint violation).
+     */
     public static function generateReference(): string
     {
-        $date = now()->format('Ymd');
-        $count = static::whereDate('created_at', today())->count() + 1;
-        return sprintf('CT-%s-%04d', $date, $count);
+        $today = now()->toDateString();
+
+        $sequence = DB::selectOne(
+            'insert into check_in_sequences (date, last_number, created_at, updated_at)
+             values (?, 1, now(), now())
+             on conflict (date) do update
+                set last_number = check_in_sequences.last_number + 1,
+                    updated_at  = now()
+             returning last_number',
+            [$today]
+        );
+
+        return sprintf('CT-%s-%04d', now()->format('Ymd'), $sequence->last_number);
     }
 
     // ─── Relationships ───────────────────────────────────────────────
