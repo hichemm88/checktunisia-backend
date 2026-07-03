@@ -98,7 +98,8 @@ class PublicRegistrationController extends Controller
                 'room_count'          => $validated['room_count'],
                 'stars'               => $validated['stars'] ?? null,
                 'registration_number' => $validated['registration_number'] ?? null,
-                'status'              => 'pending',
+                'status'              => 'active',   // activated immediately with the org
+                'setup_completed_at'  => now(),      // onboarding wizard not needed for self-registered hotels
             ]);
 
             HotelAddress::create([

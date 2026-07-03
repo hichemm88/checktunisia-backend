@@ -190,7 +190,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     |----------------------------------------------------------------------
     */
     Route::prefix('admin')
-        ->middleware('role:platform_admin')
+        ->middleware(['role:platform_admin', 'throttle:60,1'])
         ->group(function () {
 
             Route::get('dashboard', [HotelAdminController::class, 'dashboard']);

@@ -178,7 +178,7 @@ class OrganizationController extends Controller
 
         $validated = $request->validate([
             'name'                => ['required', 'string', 'max:255'],
-            'type'                => ['required', 'in:hotel,guesthouse,appartement,villa,riad,maison_hotes,hostel,resort,bungalow,rental'],
+            'type'                => ['required', 'in:hotel,guesthouse,appartement,villa,riad,maison_hotes,hostel,resort,bungalow,rental,residence'],
             'room_count'          => ['required', 'integer', 'min:1', 'max:9999'],
             'stars'               => ['nullable', 'integer', 'between:1,5'],
             'registration_number' => ['nullable', 'string', 'max:100'],
@@ -248,7 +248,7 @@ class OrganizationController extends Controller
 
         $validated = $request->validate([
             'name'                => ['sometimes', 'string', 'max:255'],
-            'type'                => ['sometimes', 'in:hotel,guesthouse,appartement,villa,riad,maison_hotes,hostel,resort,bungalow,rental'],
+            'type'                => ['sometimes', 'in:hotel,guesthouse,appartement,villa,riad,maison_hotes,hostel,resort,bungalow,rental,residence'],
             'room_count'          => ['sometimes', 'integer', 'min:1', 'max:9999'],
             'stars'               => ['nullable', 'integer', 'between:1,5'],
             'registration_number' => ['nullable', 'string', 'max:100'],
