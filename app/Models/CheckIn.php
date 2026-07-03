@@ -62,25 +62,44 @@ class CheckIn extends Model
 
     /**
      * Atomically hand out the next reference number for today via an
-     * upsert-based counter (INSERT ... ON CONFLICT DO UPDATE). A previous
-     * COUNT(*) + 1 approach could race under concurrent check-ins and
-     * generate duplicate references (unique constraint violation).
+     * upsert-based counter (INSERT … ON CONFLICT DO UPDATE).
+     *
+     * The counter is self-healing: if the check_in_sequences table is ever
+     * cleared/reset while check_ins retains its rows, the CTE seeds the
+     * sequence from MAX(existing reference) so duplicates can never occur.
+     *
+     * GREATEST() in the ON CONFLICT branch ensures the sequence always
+     * advances past whatever is already in check_ins, even mid-day.
      */
     public static function generateReference(): string
     {
-        $today = now()->toDateString();
+        $today   = now()->toDateString();
+        $dateStr = now()->format('Ymd');
 
-        $sequence = DB::selectOne(
-            'insert into check_in_sequences (date, last_number, created_at, updated_at)
-             values (?, 1, now(), now())
-             on conflict (date) do update
-                set last_number = check_in_sequences.last_number + 1,
-                    updated_at  = now()
-             returning last_number',
-            [$today]
-        );
+        // Match only well-formed references for today (e.g. CT-20260703-0001)
+        $like = "CT-{$dateStr}-%";
 
-        return sprintf('CT-%s-%04d', now()->format('Ymd'), $sequence->last_number);
+        $sequence = DB::selectOne("
+            WITH current_max AS (
+                SELECT COALESCE(
+                    MAX(CAST(SPLIT_PART(reference, '-', 3) AS INTEGER)), 0
+                ) AS n
+                FROM check_ins
+                WHERE reference LIKE ?
+                  AND reference ~ '^CT-[0-9]{8}-[0-9]{4}$'
+            )
+            INSERT INTO check_in_sequences (date, last_number, created_at, updated_at)
+            SELECT ?, (SELECT n FROM current_max) + 1, now(), now()
+            ON CONFLICT (date) DO UPDATE
+                SET last_number = GREATEST(
+                        check_in_sequences.last_number + 1,
+                        (SELECT n FROM current_max) + 1
+                    ),
+                    updated_at = now()
+            RETURNING last_number
+        ", [$like, $today]);
+
+        return sprintf('CT-%s-%04d', $dateStr, $sequence->last_number);
     }
 
     // ─── Relationships ───────────────────────────────────────────────
