@@ -210,6 +210,8 @@ class OrganizationController extends Controller
             'registration_number' => $validated['registration_number'] ?? null,
             'status'              => 'active',
             'created_by'          => $user->id,
+            // Properties added via the multi-property UI are already "set up" — no onboarding wizard needed
+            'setup_completed_at'  => now(),
         ]);
 
         HotelAddress::create([
