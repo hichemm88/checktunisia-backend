@@ -33,7 +33,7 @@ return new class extends Migration
             $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
             $table->foreignUuid('hotel_id')->constrained('hotels');
             $table->foreignUuid('room_id')->nullable()->constrained('rooms')->nullOnDelete();
-            $table->string('reference', 50)->unique(); // CT-20250701-0042
+            $table->string('reference', 50)->unique(); // QYD-20250701-0042
             $table->string('booking_reference', 100)->nullable();
             $table->string('booking_source', 50)->nullable(); // direct | booking | airbnb | expedia | phone
             $table->date('check_in_date');

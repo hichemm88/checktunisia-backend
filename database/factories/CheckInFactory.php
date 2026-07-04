@@ -22,7 +22,7 @@ class CheckInFactory extends Factory
         return [
             'hotel_id'                 => Hotel::factory()->withActiveSubscription(),
             'room_id'                  => null,
-            'reference'                => 'CT-' . now()->format('Ymd') . '-' . fake()->unique()->numberBetween(1000, 9999),
+            'reference'                => 'QYD-' . now()->format('Ymd') . '-' . fake()->unique()->numberBetween(1000, 9999),
             'booking_source'           => 'direct',
             'check_in_date'            => now()->toDateString(),
             'expected_check_out_date'  => now()->addDays(3)->toDateString(),

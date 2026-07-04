@@ -50,7 +50,7 @@ class TwoFactorController extends Controller
         }
 
         $qrUri = $this->totp->getQRCodeUrl(
-            config('app.name', 'CheckTunisia'),
+            config('app.name', 'Qayed'),
             $user->email,
             $secret
         );

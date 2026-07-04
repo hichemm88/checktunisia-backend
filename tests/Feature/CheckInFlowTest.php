@@ -54,7 +54,7 @@ class CheckInFlowTest extends TestCase
             ->assertCreated();
 
         $this->assertEquals('draft', $response->json('data.status'));
-        $this->assertStringStartsWith('CT-', $response->json('data.reference'));
+        $this->assertStringStartsWith('QYD-', $response->json('data.reference'));
     }
 
     // ── 2. Add a guest to the check-in ───────────────────────────────────────

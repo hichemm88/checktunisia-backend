@@ -72,7 +72,7 @@ class ExportController extends Controller
 </style>
 </head>
 <body>
-<h1>CheckTunisia — Fiche Voyageur</h1>
+<h1>Qayed — Fiche Voyageur</h1>
 <p class="subtitle">Document confidentiel — Usage officiel uniquement — Généré le {$date}</p>
 
 <div class="section">
@@ -103,7 +103,7 @@ class ExportController extends Controller
 </div>
 
 <div class="footer">
-  Généré par CheckTunisia — Plateforme de contrôle hôtelier — Confidentiel
+  Généré par Qayed — Plateforme de contrôle hôtelier — Confidentiel
 </div>
 </body>
 </html>

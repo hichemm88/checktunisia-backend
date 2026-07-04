@@ -76,8 +76,8 @@ class CheckIn extends Model
         $today   = now()->toDateString();
         $dateStr = now()->format('Ymd');
 
-        // Match only well-formed references for today (e.g. CT-20260703-0001)
-        $like = "CT-{$dateStr}-%";
+        // Match only well-formed references for today (e.g. QYD-20260703-0001)
+        $like = "QYD-{$dateStr}-%";
 
         $sequence = DB::selectOne("
             WITH current_max AS (
@@ -86,7 +86,7 @@ class CheckIn extends Model
                 ) AS n
                 FROM check_ins
                 WHERE reference LIKE ?
-                  AND reference ~ '^CT-[0-9]{8}-[0-9]{4}$'
+                  AND reference ~ '^QYD-[0-9]{8}-[0-9]{4}$'
             )
             INSERT INTO check_in_sequences (date, last_number, created_at, updated_at)
             SELECT ?, (SELECT n FROM current_max) + 1, now(), now()
@@ -99,7 +99,7 @@ class CheckIn extends Model
             RETURNING last_number
         ", [$like, $today]);
 
-        return sprintf('CT-%s-%04d', $dateStr, $sequence->last_number);
+        return sprintf('QYD-%s-%04d', $dateStr, $sequence->last_number);
     }
 
     // ─── Relationships ───────────────────────────────────────────────

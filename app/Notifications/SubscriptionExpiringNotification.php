@@ -31,12 +31,12 @@ class SubscriptionExpiringNotification extends Notification implements ShouldQue
         $urgency    = $this->daysRemaining <= 3 ? '⚠️ URGENT — ' : '';
 
         return (new MailMessage)
-            ->subject("{$urgency}[CheckTunisia] Votre abonnement expire dans {$this->daysRemaining} jour(s)")
+            ->subject("{$urgency}[Qayed] Votre abonnement expire dans {$this->daysRemaining} jour(s)")
             ->greeting("Bonjour,")
             ->line("L'abonnement **{$planName}** de **{$this->hotel->name}** expire le **{$expiresAt}** ({$this->daysRemaining} jour(s) restant(s)).")
-            ->line("Pour continuer à utiliser CheckTunisia et rester en conformité avec la réglementation tunisienne, veuillez renouveler votre abonnement.")
+            ->line("Pour continuer à utiliser Qayed et rester en conformité avec la réglementation tunisienne, veuillez renouveler votre abonnement.")
             ->action('Renouveler mon abonnement', url('/hotel/settings'))
             ->line("Sans renouvellement, l'accès aux fonctionnalités de check-in sera suspendu à l'expiration.")
-            ->salutation("L'équipe CheckTunisia");
+            ->salutation("L'équipe Qayed");
     }
 }

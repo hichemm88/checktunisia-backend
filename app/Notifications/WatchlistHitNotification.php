@@ -36,7 +36,7 @@ class WatchlistHitNotification extends Notification implements ShouldQueue
         };
 
         return (new MailMessage)
-            ->subject("[CheckTunisia] Alerte watchlist — {$alertLabel}")
+            ->subject("[Qayed] Alerte watchlist — {$alertLabel}")
             ->greeting("Alerte de sécurité — {$this->hotel->name}")
             ->line("Un voyageur figurant sur la liste de surveillance a effectué un check-in dans votre établissement.")
             ->line("**Voyageur :** {$guestName}")
@@ -44,6 +44,6 @@ class WatchlistHitNotification extends Notification implements ShouldQueue
             ->line("**Référence check-in :** {$this->checkInId}")
             ->action('Voir les alertes', url('/hotel/security'))
             ->line("Ne partagez pas cette information. Contactez les autorités compétentes si nécessaire.")
-            ->salutation("L'équipe CheckTunisia");
+            ->salutation("L'équipe Qayed");
     }
 }

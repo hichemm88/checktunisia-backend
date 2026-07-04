@@ -1,6 +1,6 @@
 {
-    "name": "checktunisia/backend",
-    "description": "CheckTunisia — Digital Guest Registration SaaS for Tunisia",
+    "name": "qayed/backend",
+    "description": "Qayed — Digital Guest Registration SaaS for Tunisia",
     "keywords": ["laravel", "saas", "multitenant", "tourism"],
     "license": "proprietary",
     "require": {
