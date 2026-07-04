@@ -17,6 +17,8 @@ use App\Http\Controllers\Hotel\OnboardingController;
 use App\Http\Controllers\Hotel\OrganizationController;
 use App\Http\Controllers\Authority\ExportController;
 use App\Http\Controllers\Public\PublicRegistrationController;
+use App\Http\Controllers\Public\PublicPlatformController;
+use App\Http\Controllers\Admin\PlatformSettingController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Authority\AuthoritySearchController;
 use App\Http\Controllers\Authority\AuthorityDashboardController;
@@ -44,6 +46,10 @@ Route::get('subscriptions/plans', [ReferentialController::class, 'plans']);
 // Self-service hotel registration (public)
 Route::post('public/register', [PublicRegistrationController::class, 'register'])
     ->middleware('throttle:5,10');
+
+// Public platform info (no auth)
+Route::get('public/plans',    [PublicPlatformController::class, 'plans']);
+Route::get('public/settings', [PublicPlatformController::class, 'settings']);
 
 /*
 |--------------------------------------------------------------------------
@@ -244,5 +250,13 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('audit-logs',             [AuditLogController::class, 'index']);
             Route::get('audit-logs/{id}',        [AuditLogController::class, 'show']);
             Route::get('authority-search-logs',  [AuditLogController::class, 'searchLogs']);
+
+            // Platform settings (payment methods, Flouci config, RIB)
+            Route::get('platform-settings',      [PlatformSettingController::class, 'show']);
+            Route::patch('platform-settings',    [PlatformSettingController::class, 'update']);
+
+            // Subscription plans management
+            Route::get('plans',                  [PlatformSettingController::class, 'listPlans']);
+            Route::patch('plans/{id}',           [PlatformSettingController::class, 'updatePlan']);
         });
 });
