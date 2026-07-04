@@ -5,6 +5,8 @@ return [
     'allowed_methods'          => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     'allowed_origins'          => [
         'https://checktunisia.vercel.app',
+        'https://qayed.tn',
+        'https://www.qayed.tn',
     ],
     'allowed_origins_patterns' => [],
     'allowed_headers'          => ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'X-Property-Id'],
