@@ -126,10 +126,12 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::post('payments/initiate',   [PaymentController::class, 'initiate']);
             Route::get('payments/{id}/verify', [PaymentController::class, 'verify']);
 
+            // Hotel profile (read) — both roles need this to print fiches de police
+            Route::get('profile', [HotelProfileController::class, 'show']);
+
             // ── Hotel admin only (tenant-aware) ────────────────────────────
             Route::middleware('role:hotel_admin')->group(function () {
-                // Hotel profile
-                Route::get('profile',        [HotelProfileController::class, 'show']);
+                // Hotel profile (write)
                 Route::patch('profile',      [HotelProfileController::class, 'update']);
 
                 // Staff management

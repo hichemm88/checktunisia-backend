@@ -10,12 +10,13 @@ class HotelProfileController extends Controller
 {
     public function show(): JsonResponse
     {
-        $hotel = app('tenant')->load(['address', 'contacts']);
+        $hotel = app('tenant')->load(['address', 'contacts', 'organization']);
 
         $address = $hotel->address;
         $phone   = $hotel->contacts()->where('type', 'phone')->where('is_primary', true)->first();
         $email   = $hotel->contacts()->where('type', 'email')->where('is_primary', true)->first();
         $website = $hotel->contacts()->where('type', 'website')->where('is_primary', true)->first();
+        $org     = $hotel->organization;
 
         return response()->json([
             'data' => [
@@ -37,6 +38,15 @@ class HotelProfileController extends Controller
                 'phone'   => $phone?->value,
                 'email'   => $email?->value,
                 'website' => $website?->value,
+                // Owning company/individual — printed alongside the property on official documents.
+                'organization' => $org ? [
+                    'name'                => $org->name,
+                    'entity_type'         => $org->entity_type,
+                    'registration_number' => $org->registration_number,
+                    'contact_email'       => $org->contact_email,
+                    'contact_phone'       => $org->contact_phone,
+                    'address'             => $org->address,
+                ] : null,
             ],
         ]);
     }
