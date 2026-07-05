@@ -13,6 +13,7 @@ use App\Http\Controllers\Hotel\RoomController;
 use App\Http\Controllers\Hotel\DashboardController;
 use App\Http\Controllers\Hotel\HotelProfileController;
 use App\Http\Controllers\Hotel\HotelUserController;
+use App\Http\Controllers\Hotel\MyPropertiesController;
 use App\Http\Controllers\Hotel\OnboardingController;
 use App\Http\Controllers\Hotel\OrganizationController;
 use App\Http\Controllers\Authority\ExportController;
@@ -87,6 +88,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             // Dashboard
             Route::get('dashboard', [DashboardController::class, 'index']);
+
+            // Properties this account is attached to (switcher) — for both roles
+            Route::get('my-properties', [MyPropertiesController::class, 'index']);
 
             // Rooms (read for all staff)
             Route::get('rooms', [RoomController::class, 'index']);

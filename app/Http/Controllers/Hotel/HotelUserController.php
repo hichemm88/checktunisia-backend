@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class HotelUserController extends Controller {
     /**
@@ -55,16 +56,22 @@ class HotelUserController extends Controller {
 
     public function store(Request $request): JsonResponse {
         $hotel = app('tenant');
+        $manageableIds = $this->manageableHotelIds();
         $v = $request->validate([
             'first_name' => ['required','string','max:100'],
             'last_name'  => ['required','string','max:100'],
             'email'      => ['required','email','unique:users,email'],
             'role'       => ['required','in:hotel_admin,receptionist'],
+            // Which propertie(s) to grant access to. Defaults to the currently active one.
+            // A staff member (receptionist or admin) can be assigned several properties at once.
+            'hotel_ids'   => ['sometimes','array','min:1'],
+            'hotel_ids.*' => ['string', Rule::in($manageableIds->all())],
         ]);
 
+        $targetHotelIds = !empty($v['hotel_ids']) ? $v['hotel_ids'] : [$hotel->id];
         $tempPassword = Str::random(12);
 
-        $user = DB::transaction(function() use ($v, $hotel, $tempPassword) {
+        $user = DB::transaction(function() use ($v, $targetHotelIds, $tempPassword) {
             $u = User::create([
                 'first_name'        => $v['first_name'],
                 'last_name'         => $v['last_name'],
@@ -74,12 +81,13 @@ class HotelUserController extends Controller {
                 'email_verified_at' => now(),
             ]);
             $u->assignRole($v['role']);
-            $hotel->users()->attach($u->id, ['granted_at' => now()]);
-            AuditLogger::log('user.created', $u, [], $u->only(['email','first_name','last_name']), hotelId: $hotel->id);
+            $u->hotels()->attach($targetHotelIds, ['granted_at' => now()]);
+            AuditLogger::log('user.created', $u, [], $u->only(['email','first_name','last_name']), hotelId: $targetHotelIds[0]);
             return $u;
         });
 
-        $this->sendWelcomeEmail($user, $tempPassword, $hotel->name, $v['role']);
+        $assignedNames = Hotel::whereIn('id', $targetHotelIds)->pluck('name')->implode(', ');
+        $this->sendWelcomeEmail($user, $tempPassword, $assignedNames, $v['role']);
 
         return response()->json(['data' => [
             'id'    => $user->id,
@@ -89,13 +97,17 @@ class HotelUserController extends Controller {
     }
 
     public function update(Request $request, string $id): JsonResponse {
-        $user = $this->manageableUsersQuery($this->manageableHotelIds())->findOrFail($id);
+        $manageableIds = $this->manageableHotelIds();
+        $user = $this->manageableUsersQuery($manageableIds)->findOrFail($id);
         $hotel = $user->hotels->first() ?? app('tenant');
         $v = $request->validate([
             'first_name' => ['sometimes','string','max:100'],
             'last_name'  => ['sometimes','string','max:100'],
             'role'       => ['sometimes','in:hotel_admin,receptionist'],
             'status'     => ['sometimes','in:active,inactive,suspended'],
+            // Full replacement of this user's property assignments.
+            'hotel_ids'   => ['sometimes','array','min:1'],
+            'hotel_ids.*' => ['string', Rule::in($manageableIds->all())],
         ]);
         $fields = array_filter([
             'first_name' => $v['first_name'] ?? null,
@@ -104,6 +116,9 @@ class HotelUserController extends Controller {
         ], fn($val) => $val !== null);
         if ($fields) { $user->update($fields); }
         if (isset($v['role'])) { $user->syncRoles([$v['role']]); }
+        if (isset($v['hotel_ids'])) {
+            $user->hotels()->sync(array_fill_keys($v['hotel_ids'], ['granted_at' => now()]));
+        }
         AuditLogger::log('user.updated', $user, hotelId: $hotel->id);
         return response()->json(['data' => [
             'id'         => $user->id,
@@ -111,6 +126,7 @@ class HotelUserController extends Controller {
             'last_name'  => $user->last_name,
             'role'       => $user->primary_role,
             'status'     => $user->status,
+            'properties' => $user->hotels()->get()->map(fn($h) => ['id' => $h->id, 'name' => $h->name])->values(),
         ]]);
     }
 
@@ -132,12 +148,13 @@ class HotelUserController extends Controller {
         $hotelIds = $this->manageableHotelIds();
         $user = $this->manageableUsersQuery($hotelIds)->findOrFail($id);
         $hotel = $user->hotels->first() ?? app('tenant');
+        $assignedNames = $user->hotels->pluck('name')->implode(', ') ?: $hotel->name;
 
         $tempPassword = Str::random(12);
         $user->update(['password' => Hash::make($tempPassword)]);
         AuditLogger::log('user.invite_resent', $user, hotelId: $hotel->id);
 
-        $sent = $this->sendWelcomeEmail($user, $tempPassword, $hotel->name, $user->primary_role);
+        $sent = $this->sendWelcomeEmail($user, $tempPassword, $assignedNames, $user->primary_role);
 
         return response()->json(['data' => [
             'id'         => $user->id,

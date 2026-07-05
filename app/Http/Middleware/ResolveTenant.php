@@ -2,7 +2,6 @@
 
 namespace App\Http\Middleware;
 
-use App\Models\Hotel;
 use App\Models\Organization;
 use Closure;
 use Illuminate\Http\Request;
@@ -11,10 +10,13 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * Resolves the current tenant (hotel/property) and organization from the authenticated user.
  *
- * Multi-property logic:
- *  - hotel_admin → organization is resolved via user.organization_id; a specific property can be
- *    selected by sending the `X-Property-Id` UUID header. Defaults to the first active property.
- *  - receptionist → resolved from the user_hotels pivot (fixed assignment to one property).
+ * Multi-property logic (same for hotel_admin and receptionist):
+ *  - A user can be attached to one or several properties via the `user_hotels` pivot
+ *    (hotel_admin gets a pivot row for every property they own/create; receptionist gets
+ *    a pivot row for each property their manager assigns them to).
+ *  - The active property is whichever one the `X-Property-Id` header names, as long as the
+ *    user actually has a pivot row for it. Otherwise it defaults to the first active property
+ *    among the ones they're attached to (oldest first), then any attached property.
  *
  * Bound into the service container:
  *  - app('tenant')       → Hotel  (current active property)
@@ -33,43 +35,26 @@ class ResolveTenant
             ], 403);
         }
 
-        $hotel = null;
-        $org   = null;
+        $org = $user->organization_id
+            ? Organization::find($user->organization_id)
+            : null;
 
-        if ($user->isHotelAdmin()) {
-            // ── hotel_admin: org-aware multi-property resolution ──────────
-            $org = $user->organization_id
-                ? Organization::find($user->organization_id)
-                : null;
+        $accessible = $user->hotels()->orderBy('hotels.created_at')->get();
 
-            $requestedPropertyId = $request->header('X-Property-Id');
+        // Safety net for accounts whose pivot rows never got backfilled when the
+        // multi-property/org architecture was introduced — falls back to "any org property"
+        // instead of locking the account out entirely.
+        if ($accessible->isEmpty() && $org) {
+            $accessible = $org->properties()->orderBy('created_at')->get();
+        }
 
-            if ($requestedPropertyId && $org) {
-                // Validate the requested property belongs to this org
-                $hotel = Hotel::where('id', $requestedPropertyId)
-                    ->where('organization_id', $org->id)
-                    ->first();
-            }
+        $requestedPropertyId = $request->header('X-Property-Id');
+        $hotel = $requestedPropertyId
+            ? $accessible->firstWhere('id', $requestedPropertyId)
+            : null;
 
-            if (!$hotel) {
-                // Fall back to first active property, then any property
-                if ($org) {
-                    $hotel = $org->properties()
-                        ->where('status', 'active')
-                        ->orderBy('created_at')
-                        ->first()
-                        ?? $org->properties()->orderBy('created_at')->first();
-                } else {
-                    // Legacy: no org yet, use pivot table
-                    $hotel = $user->hotel();
-                }
-            }
-        } else {
-            // ── receptionist: still resolved from user_hotels pivot ───────
-            $hotel = $user->hotel();
-            if ($hotel?->organization_id) {
-                $org = Organization::find($hotel->organization_id);
-            }
+        if (!$hotel) {
+            $hotel = $accessible->firstWhere('status', 'active') ?? $accessible->first();
         }
 
         if (!$hotel) {
