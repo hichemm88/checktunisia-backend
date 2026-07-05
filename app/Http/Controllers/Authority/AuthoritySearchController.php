@@ -255,13 +255,20 @@ class AuthoritySearchController extends Controller
                     'adults_count'            => $ci->adults_count,
                     'children_count'          => $ci->children_count,
                     'room_number'             => $ci->room?->number,
-                    'primary_guest'           => $primary ? [
+                    'primary_guest' => $primary ? [
                         'id'               => $primary->id,
                         'first_name'       => $primary->first_name,
                         'last_name'        => $primary->last_name,
                         'nationality_code' => $primary->nationality_code,
                         'date_of_birth'    => $primary->date_of_birth,
                     ] : null,
+                    'guests' => $ci->guests->map(fn($g) => [
+                        'id'               => $g->id,
+                        'first_name'       => $g->first_name,
+                        'last_name'        => $g->last_name,
+                        'nationality_code' => $g->nationality_code,
+                        'is_primary'       => (bool) $g->is_primary,
+                    ])->values()->toArray(),
                     'guests_count' => $ci->guests->count(),
                 ];
             }),
@@ -276,22 +283,74 @@ class AuthoritySearchController extends Controller
 
     /**
      * GET /authority/hotels/{id}
+     * Full hotel detail: address, owner/org, staff, subscription.
      */
     public function showHotel(string $id): JsonResponse
     {
-        $hotel = Hotel::with(['address'])->findOrFail($id);
+        $hotel = Hotel::with([
+            'address',
+            'organization',
+            'users.roles',
+        ])->findOrFail($id);
 
         AuditLogger::log('authority.hotel_viewed', $hotel);
 
         $summary = $this->summarizeHotel($hotel);
 
-        // Add full address string for detail page
+        // ── Full address ───────────────────────────────────────────────
+        $addr = $hotel->address;
         $addressParts = array_filter([
-            $hotel->address?->street,
-            $hotel->address?->city,
-            $hotel->address?->governorate,
+            $addr?->line1,
+            $addr?->line2,
+            $addr?->city,
+            $addr?->governorate,
+            $addr?->postal_code,
         ]);
-        $summary['address'] = implode(', ', $addressParts) ?: null;
+        $summary['address_full'] = implode(', ', $addressParts) ?: null;
+        $summary['address_structured'] = $addr ? [
+            'line1'       => $addr->line1,
+            'line2'       => $addr->line2,
+            'city'        => $addr->city,
+            'governorate' => $addr->governorate,
+            'postal_code' => $addr->postal_code,
+            'country_code'=> $addr->country_code,
+        ] : null;
+
+        // ── Type label ─────────────────────────────────────────────────
+        $typeLabels = [
+            'hotel'        => 'Hôtel',
+            'guesthouse'   => 'Maison d\'hôtes',
+            'appartement'  => 'Appartement',
+            'villa'        => 'Villa',
+            'riad'         => 'Riad',
+            'maison_hotes' => 'Maison d\'hôtes',
+            'hostel'       => 'Auberge de jeunesse',
+            'resort'       => 'Resort',
+            'bungalow'     => 'Bungalow',
+            'rental'       => 'Location saisonnière',
+        ];
+        $summary['type_label'] = $typeLabels[$hotel->type] ?? ucfirst($hotel->type);
+
+        // ── Owner / Organisation ───────────────────────────────────────
+        $org = $hotel->organization;
+        $summary['owner'] = $org ? [
+            'entity_type'         => $org->entity_type,         // company | individual
+            'name'                => $org->name,
+            'registration_number' => $org->registration_number,
+            'contact_email'       => $org->contact_email,
+            'contact_phone'       => $org->contact_phone,
+            'address'             => $org->address,             // JSON array from DB
+        ] : null;
+
+        // ── Staff (hotel users) ────────────────────────────────────────
+        $summary['staff'] = $hotel->users->map(fn($u) => [
+            'id'         => $u->id,
+            'first_name' => $u->first_name,
+            'last_name'  => $u->last_name,
+            'email'      => $u->email,
+            'phone'      => $u->phone,
+            'role'       => $u->roles->first()?->name ?? 'unknown',
+        ])->values()->toArray();
 
         return response()->json(['data' => $summary]);
     }
