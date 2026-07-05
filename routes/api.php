@@ -12,6 +12,7 @@ use App\Http\Controllers\Hotel\ScanController;
 use App\Http\Controllers\Hotel\RoomController;
 use App\Http\Controllers\Hotel\DashboardController;
 use App\Http\Controllers\Hotel\HotelProfileController;
+use App\Http\Controllers\Hotel\ActivityLogController;
 use App\Http\Controllers\Hotel\HotelUserController;
 use App\Http\Controllers\Hotel\MyPropertiesController;
 use App\Http\Controllers\Hotel\OnboardingController;
@@ -140,6 +141,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
                 Route::patch('users/{id}',   [HotelUserController::class, 'update']);
                 Route::delete('users/{id}',  [HotelUserController::class, 'destroy']);
                 Route::post('users/{id}/resend-invite', [HotelUserController::class, 'resendInvite']);
+
+                // Staff activity feed
+                Route::get('activity', [ActivityLogController::class, 'index']);
 
                 // Room CRUD (write)
                 Route::post('rooms',         [RoomController::class, 'store']);
