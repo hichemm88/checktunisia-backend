@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light" />
+  <meta name="supported-color-schemes" content="light" />
   <title>Bienvenue sur Qayed</title>
   <style>
     body { margin: 0; padding: 0; background: #F3F4F6; font-family: 'Segoe UI', Arial, sans-serif; color: #1F2937; }
@@ -12,8 +14,6 @@
     .header p  { margin: 6px 0 0; font-size: 13px; color: #9CB3CC; }
     .body { padding: 32px 40px; }
     .body p { font-size: 15px; line-height: 1.6; margin: 0 0 16px; }
-    .cta { text-align: center; margin: 28px 0 8px; }
-    .cta a { display: inline-block; background: #1B3A5F; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-size: 14px; font-weight: 600; letter-spacing: 0.2px; }
     .warning { background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: #92400E; margin-top: 24px; }
     .footer { padding: 20px 40px; text-align: center; font-size: 12px; color: #9CA3AF; border-top: 1px solid #F3F4F6; }
   </style>
@@ -53,11 +53,16 @@
         </tr>
       </table>
 
-      <div class="cta">
-        <a href="{{ $loginUrl }}">
-          Se connecter →
-        </a>
-      </div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 8px;">
+        <tr>
+          <td align="center">
+            <a href="{{ $loginUrl }}"
+              style="display:inline-block;background-color:#1B3A5F;color:#ffffff !important;text-decoration:none;padding:12px 28px;border-radius:8px;font-size:14px;font-weight:600;letter-spacing:0.2px;font-family:'Segoe UI', Arial, sans-serif;">
+              Se connecter &rarr;
+            </a>
+          </td>
+        </tr>
+      </table>
 
       <div class="warning">
         ⚠️ &nbsp;Pour des raisons de sécurité, veuillez modifier votre mot de passe dès votre première connexion.
