@@ -210,6 +210,71 @@ class AuthoritySearchController extends Controller
     }
 
     /**
+     * GET /authority/hotels/{id}/check-ins
+     * Paginated check-in list for a specific hotel (ministry / police view).
+     */
+    public function hotelCheckIns(Request $request, string $id): JsonResponse
+    {
+        $hotel = Hotel::findOrFail($id);
+
+        $query = CheckIn::with(['guests.documents', 'room'])
+            ->where('hotel_id', $hotel->id);
+
+        if ($request->filled('search')) {
+            $s = $request->search;
+            $query->where(function ($q) use ($s) {
+                $q->where('reference', 'ilike', "%$s%")
+                    ->orWhereHas('guests', fn($gq) =>
+                        $gq->where('first_name', 'ilike', "%$s%")
+                            ->orWhere('last_name', 'ilike', "%$s%")
+                            ->orWhereHas('documents', fn($dq) =>
+                                $dq->where('document_number', 'ilike', "%$s%")
+                            )
+                    );
+            });
+        }
+
+        if ($request->filled('status') && $request->status !== 'all') {
+            $query->where('status', $request->status);
+        }
+
+        $checkIns = $query
+            ->orderBy('check_in_date', 'desc')
+            ->paginate($request->integer('per_page', 25));
+
+        return response()->json([
+            'data' => $checkIns->map(function (CheckIn $ci) {
+                $primary = $ci->guests->firstWhere('is_primary', true) ?? $ci->guests->first();
+                return [
+                    'id'                      => $ci->id,
+                    'reference'               => $ci->reference,
+                    'status'                  => $ci->status,
+                    'check_in_date'           => $ci->check_in_date,
+                    'expected_check_out_date' => $ci->expected_check_out_date,
+                    'actual_check_out_date'   => $ci->actual_check_out_date,
+                    'adults_count'            => $ci->adults_count,
+                    'children_count'          => $ci->children_count,
+                    'room_number'             => $ci->room?->number,
+                    'primary_guest'           => $primary ? [
+                        'id'               => $primary->id,
+                        'first_name'       => $primary->first_name,
+                        'last_name'        => $primary->last_name,
+                        'nationality_code' => $primary->nationality_code,
+                        'date_of_birth'    => $primary->date_of_birth,
+                    ] : null,
+                    'guests_count' => $ci->guests->count(),
+                ];
+            }),
+            'meta' => [
+                'total'        => $checkIns->total(),
+                'current_page' => $checkIns->currentPage(),
+                'per_page'     => $checkIns->perPage(),
+                'last_page'    => $checkIns->lastPage(),
+            ],
+        ]);
+    }
+
+    /**
      * GET /authority/hotels/{id}
      */
     public function showHotel(string $id): JsonResponse

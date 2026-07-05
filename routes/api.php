@@ -192,8 +192,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('activity',         [AuthorityDashboardController::class, 'activity']);
             Route::get('search',           [AuthoritySearchController::class, 'search']);
             Route::get('guests/{id}',      [AuthoritySearchController::class, 'show']);
-            Route::get('hotels',           [AuthoritySearchController::class, 'hotels']);
-            Route::get('hotels/{id}',      [AuthoritySearchController::class, 'showHotel']);
+            Route::get('hotels',                    [AuthoritySearchController::class, 'hotels']);
+            Route::get('hotels/{id}',               [AuthoritySearchController::class, 'showHotel']);
+            Route::get('hotels/{id}/check-ins',     [AuthoritySearchController::class, 'hotelCheckIns']);
             Route::get('watchlist',                    [WatchlistController::class, 'index']);
             Route::post('watchlist',                   [WatchlistController::class, 'store']);
             Route::patch('watchlist/{id}',             [WatchlistController::class, 'update']);
