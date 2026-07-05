@@ -50,6 +50,7 @@ class WatchlistController extends Controller
                 'total'        => $entries->total(),
                 'current_page' => $entries->currentPage(),
                 'per_page'     => $entries->perPage(),
+                'last_page'    => $entries->lastPage(),
             ],
         ]);
     }
@@ -261,7 +262,7 @@ class WatchlistController extends Controller
             'document_type'    => $e->document_type,
             'first_name'       => $e->first_name,
             'last_name'        => $e->last_name,
-            'date_of_birth'    => $e->date_of_birth,
+            'date_of_birth'    => $e->date_of_birth?->toDateString(),
             'nationality_code' => $e->nationality_code,
             'severity'         => $e->severity,
             'reason_code'      => $e->reason_code,
