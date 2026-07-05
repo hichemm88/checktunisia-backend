@@ -344,6 +344,26 @@ class OrganizationController extends Controller
         return response()->json(['data' => $room]);
     }
 
+    /** Delete a property (hotel) belonging to the user's org. Blocked if it's the last one. */
+    public function deleteProperty(Request $request, string $propertyId): JsonResponse
+    {
+        $property = $this->resolveProperty($request, $propertyId);
+        if ($property instanceof JsonResponse) return $property;
+
+        $org = $request->user()->organization;
+        if ($org) {
+            $remaining = Hotel::where('organization_id', $org->id)->count();
+            if ($remaining <= 1) {
+                return response()->json([
+                    'message' => 'Impossible de supprimer votre dernier bien.',
+                ], 422);
+            }
+        }
+
+        $property->delete();
+        return response()->json(null, 204);
+    }
+
     /** Delete a room within a specific property. */
     public function deletePropertyRoom(Request $request, string $propertyId, string $roomId): JsonResponse
     {

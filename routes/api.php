@@ -173,6 +173,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('organization/properties',                          [OrganizationController::class, 'properties']);
             Route::post('organization/properties',                         [OrganizationController::class, 'addProperty']);
             Route::patch('organization/properties/{id}',                   [OrganizationController::class, 'updateProperty']);
+            Route::delete('organization/properties/{id}',                  [OrganizationController::class, 'deleteProperty']);
             Route::get('organization/properties/{id}/rooms',               [OrganizationController::class, 'propertyRooms']);
             Route::post('organization/properties/{id}/rooms',              [OrganizationController::class, 'addPropertyRoom']);
             Route::patch('organization/properties/{id}/rooms/{roomId}',    [OrganizationController::class, 'updatePropertyRoom']);
