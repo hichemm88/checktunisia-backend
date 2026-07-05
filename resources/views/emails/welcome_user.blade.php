@@ -50,7 +50,7 @@
       </div>
 
       <div class="cta">
-        <a href="{{ config('app.frontend_url', 'https://qayed.tn') }}/login">
+        <a href="{{ $loginUrl }}">
           Se connecter →
         </a>
       </div>

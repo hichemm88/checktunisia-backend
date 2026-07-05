@@ -19,6 +19,7 @@ class WelcomeUserMail extends Mailable
         public readonly string $temporaryPassword,
         public readonly string $hotelName,
         public readonly string $role,
+        public readonly string $loginUrl,
     ) {}
 
     public function envelope(): Envelope

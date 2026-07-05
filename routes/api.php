@@ -133,6 +133,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
                 Route::post('users',         [HotelUserController::class, 'store']);
                 Route::patch('users/{id}',   [HotelUserController::class, 'update']);
                 Route::delete('users/{id}',  [HotelUserController::class, 'destroy']);
+                Route::post('users/{id}/resend-invite', [HotelUserController::class, 'resendInvite']);
 
                 // Room CRUD (write)
                 Route::post('rooms',         [RoomController::class, 'store']);
