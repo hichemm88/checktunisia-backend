@@ -24,7 +24,7 @@ class WatchlistEntry extends Model
         'first_name', 'last_name', 'date_of_birth', 'nationality_code',
         'severity', 'reason', 'reason_code',
         'status', 'expires_at',
-        'source', 'import_batch_id',
+        'source', 'import_batch_id', 'external_id',
     ];
 
     protected function casts(): array
