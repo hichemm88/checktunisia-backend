@@ -96,9 +96,6 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             // Rooms (read for all staff)
             Route::get('rooms', [RoomController::class, 'index']);
 
-            // Draft deletion — no subscription gate
-            Route::delete('check-ins/{id}', [CheckInController::class, 'destroy']);
-
             // Watchlist hits
             Route::get('watchlist-hits',                         [WatchlistHitController::class, 'index']);
             Route::post('watchlist-hits/{id}/acknowledge',       [WatchlistHitController::class, 'acknowledge']);
@@ -144,6 +141,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
                 // Staff activity feed
                 Route::get('activity', [ActivityLogController::class, 'index']);
+
+                // Check-in deletion — admin only, any status (soft delete)
+                Route::delete('check-ins/{id}', [CheckInController::class, 'destroy']);
 
                 // Room CRUD (write)
                 Route::post('rooms',         [RoomController::class, 'store']);

@@ -157,15 +157,18 @@ class CheckInController extends Controller
         return response()->json(['data' => ['id' => $result->id, 'status' => $result->status]]);
     }
 
+    /** Admin-only: delete any check-in regardless of status (soft delete — recoverable, kept for audit/compliance). */
     public function destroy(string $id): JsonResponse
     {
         $checkIn = $this->findForTenant($id);
 
-        if ($checkIn->status !== 'draft') {
-            return response()->json([
-                'errors' => [['code' => 'FORBIDDEN', 'message' => 'Seuls les brouillons peuvent être supprimés.']],
-            ], 403);
-        }
+        \App\Services\Audit\AuditLogger::log(
+            'check_in.deleted',
+            $checkIn,
+            $checkIn->toArray(),
+            [],
+            hotelId: $checkIn->hotel_id,
+        );
 
         $checkIn->guests()->delete();
         $checkIn->delete();
