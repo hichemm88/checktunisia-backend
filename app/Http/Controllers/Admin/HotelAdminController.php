@@ -50,6 +50,7 @@ class HotelAdminController extends Controller
     {
         $validated = $request->validate([
             'name'                => ['required', 'string', 'max:255'],
+            'organization_id'     => ['required', 'uuid', 'exists:organizations,id'],
             'type'                => ['required', 'in:hotel,guesthouse,rental,hostel,resort'],
             'room_count'          => ['required', 'integer', 'min:1'],
             'registration_number' => ['nullable', 'string', 'max:100', 'unique:hotels'],
@@ -68,6 +69,7 @@ class HotelAdminController extends Controller
         $hotel = DB::transaction(function () use ($validated, $request) {
             $hotel = Hotel::create([
                 'name'                => $validated['name'],
+                'organization_id'     => $validated['organization_id'],
                 'type'                => $validated['type'],
                 'room_count'          => $validated['room_count'],
                 'registration_number' => $validated['registration_number'] ?? null,

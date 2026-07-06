@@ -261,17 +261,8 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::delete('users/{id}',            [PlatformUserAdminController::class, 'destroy']);
             Route::post('users/{id}/resend-invite',[PlatformUserAdminController::class, 'resendInvite']);
 
-            // Subscriptions
-            Route::get('hotels/{hotel_id}/subscriptions',        [SubscriptionAdminController::class, 'index']);
-            Route::post('hotels/{hotel_id}/subscriptions',       [SubscriptionAdminController::class, 'store']);
-            Route::patch('hotels/{hotel_id}/subscriptions/{id}', [SubscriptionAdminController::class, 'update']);
-
-            // Invoices
-            Route::get('hotels/{hotel_id}/invoices',        [SubscriptionAdminController::class, 'invoices']);
-            Route::post('hotels/{hotel_id}/invoices',       [SubscriptionAdminController::class, 'createInvoice']);
-            Route::patch('hotels/{hotel_id}/invoices/{id}', [SubscriptionAdminController::class, 'updateInvoice']);
-
-            // Subscriptions & invoices — hébergeur-scoped (primary path, org-level)
+            // Subscriptions & invoices — hébergeur-scoped (subscriptions/invoices are org-level;
+            // no hotel-scoped equivalent exists anymore — every hotel now requires an organization).
             Route::get('hosts/{host_id}/subscriptions',        [SubscriptionAdminController::class, 'indexForHost']);
             Route::post('hosts/{host_id}/subscriptions',       [SubscriptionAdminController::class, 'storeForHost']);
             Route::patch('hosts/{host_id}/subscriptions/{id}', [SubscriptionAdminController::class, 'updateForHost']);

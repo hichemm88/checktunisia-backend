@@ -15,7 +15,7 @@ class AuditLogController extends Controller {
         if ($request->filled('from'))      $query->where('created_at','>=',$request->from);
         if ($request->filled('to'))        $query->where('created_at','<=',$request->to);
         $logs = $query->orderByDesc('created_at')->paginate($request->integer('per_page',50));
-        return response()->json(['data'=>$logs->items(),'meta'=>['total'=>$logs->total(),'current_page'=>$logs->currentPage()]]);
+        return response()->json(['data'=>$logs->items(),'meta'=>['total'=>$logs->total(),'current_page'=>$logs->currentPage(),'per_page'=>$logs->perPage()]]);
     }
     public function show(int $id): JsonResponse {
         return response()->json(['data' => AuditLog::with(['actor','hotel'])->findOrFail($id)]);
@@ -26,6 +26,6 @@ class AuditLogController extends Controller {
         if ($request->filled('from'))    $query->where('created_at','>=',$request->from);
         if ($request->filled('to'))      $query->where('created_at','<=',$request->to);
         $logs = $query->orderByDesc('created_at')->paginate($request->integer('per_page',50));
-        return response()->json(['data'=>$logs->items(),'meta'=>['total'=>$logs->total()]]);
+        return response()->json(['data'=>$logs->items(),'meta'=>['total'=>$logs->total(),'current_page'=>$logs->currentPage(),'per_page'=>$logs->perPage()]]);
     }
 }

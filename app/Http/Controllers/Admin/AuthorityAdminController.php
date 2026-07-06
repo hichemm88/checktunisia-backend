@@ -11,9 +11,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 
 class AuthorityAdminController extends Controller {
-    public function index(): JsonResponse {
-        $users = User::role('authority_user')->with(['authorityProfile.organization'])->get();
-        return response()->json(['data' => $users->map(fn($u) => ['id'=>$u->id,'first_name'=>$u->first_name,'last_name'=>$u->last_name,'email'=>$u->email,'status'=>$u->status,'organization'=>$u->authorityProfile?->organization?->name,'badge_number'=>$u->authorityProfile?->badge_number,'last_login_at'=>$u->last_login_at])]);
+    public function index(Request $request): JsonResponse {
+        $users = User::role('authority_user')->with(['authorityProfile.organization'])
+            ->paginate($request->integer('per_page', 50));
+        return response()->json([
+            'data' => collect($users->items())->map(fn($u) => ['id'=>$u->id,'first_name'=>$u->first_name,'last_name'=>$u->last_name,'email'=>$u->email,'status'=>$u->status,'organization'=>$u->authorityProfile?->organization?->name,'badge_number'=>$u->authorityProfile?->badge_number,'last_login_at'=>$u->last_login_at]),
+            'meta' => ['total' => $users->total(), 'current_page' => $users->currentPage(), 'per_page' => $users->perPage()],
+        ]);
     }
     public function store(Request $request): JsonResponse {
         $v = $request->validate(['first_name'=>['required','string','max:100'],'last_name'=>['required','string','max:100'],'email'=>['required','email','unique:users,email'],'password'=>['required','string','min:8'],'organization_id'=>['required','exists:authority_organizations,id'],'badge_number'=>['nullable','string','max:50'],'rank'=>['nullable','string','max:100'],'expires_at'=>['nullable','date']]);
@@ -46,7 +50,11 @@ class AuthorityAdminController extends Controller {
         $query = AuthorityOrganization::withCount('userProfiles');
         if ($request->filled('search')) $query->where('name', 'ilike', "%{$request->search}%");
         if (!$request->boolean('include_inactive')) $query->where('is_active', true);
-        return response()->json(['data' => $query->orderBy('name')->get()]);
+        $orgs = $query->orderBy('name')->paginate($request->integer('per_page', 50));
+        return response()->json([
+            'data' => $orgs->items(),
+            'meta' => ['total' => $orgs->total(), 'current_page' => $orgs->currentPage(), 'per_page' => $orgs->perPage()],
+        ]);
     }
     public function createOrganization(Request $request): JsonResponse {
         $v = $request->validate(['name'=>['required','string','max:255'],'type'=>['required','in:police,immigration,customs,judiciary,tax,ministry,other'],'code'=>['nullable','string','unique:authority_organizations,code'],'governorate'=>['nullable','string','max:100'],'description'=>['nullable','string']]);

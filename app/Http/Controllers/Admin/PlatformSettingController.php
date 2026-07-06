@@ -42,10 +42,13 @@ class PlatformSettingController extends Controller
 
     // ── Subscription plans ───────────────────────────────────────────────────
 
-    public function listPlans(): JsonResponse
+    public function listPlans(Request $request): JsonResponse
     {
-        $plans = SubscriptionPlan::orderBy('sort_order')->get();
-        return response()->json(['data' => $plans]);
+        $plans = SubscriptionPlan::orderBy('sort_order')->paginate($request->integer('per_page', 50));
+        return response()->json([
+            'data' => $plans->items(),
+            'meta' => ['total' => $plans->total(), 'current_page' => $plans->currentPage(), 'per_page' => $plans->perPage()],
+        ]);
     }
 
     public function updatePlan(Request $request, int $id): JsonResponse

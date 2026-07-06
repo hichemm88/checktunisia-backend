@@ -1,7 +1,6 @@
 <?php
 namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
-use App\Models\Hotel;
 use App\Models\Invoice;
 use App\Models\Organization;
 use App\Models\Subscription;
@@ -14,113 +13,16 @@ use Illuminate\Support\Facades\DB;
 
 class SubscriptionAdminController extends Controller {
 
-    /**
-     * List subscriptions for a hotel.
-     * If the hotel belongs to an org, also include the org-level subscriptions
-     * so platform admins can see and manage them from any property page.
-     */
-    public function index(string $hotelId): JsonResponse {
-        $hotel = Hotel::findOrFail($hotelId);
+    // ─── Hébergeur-scoped (subscriptions/invoices are org-level) ─────────────────
 
-        $query = Subscription::with('plan')->orderByDesc('created_at');
-
-        if ($hotel->organization_id) {
-            // Return all subscriptions tied to this org (covers all properties)
-            $query->where('organization_id', $hotel->organization_id);
-        } else {
-            $query->where('hotel_id', $hotel->id);
-        }
-
-        return response()->json(['data' => $query->get()]);
-    }
-
-    public function store(Request $request, string $hotelId): JsonResponse {
-        $hotel = Hotel::findOrFail($hotelId);
-        $v = $request->validate([
-            'plan_id'       => ['required', 'exists:subscription_plans,id'],
-            'billing_cycle' => ['in:monthly,yearly'],
-            'started_at'    => ['required', 'date'],
-            'expires_at'    => ['required', 'date', 'after:started_at'],
-            'auto_renew'    => ['boolean'],
-            'custom_price'  => ['nullable', 'numeric', 'min:0'],
-        ]);
-
-        $sub = DB::transaction(function () use ($v, $hotel, $request) {
-            $sub = Subscription::create(array_merge($v, [
-                'hotel_id'        => $hotel->id,
-                'organization_id' => $hotel->organization_id, // link to org if exists
-                'status'          => 'active',
-                'created_by'      => $request->user()->id,
-            ]));
-            SubscriptionEvent::create([
-                'subscription_id' => $sub->id,
-                'event_type'      => 'activated',
-                'new_status'      => 'active',
-                'performed_by'    => $request->user()->id,
-                'created_at'      => now(),
-            ]);
-            $this->clearSubscriptionCache($hotel);
-            AuditLogger::log('subscription.activated', $sub);
-            return $sub;
-        });
-
-        return response()->json(['data' => $sub->load('plan')], 201);
-    }
-
-    public function update(Request $request, string $hotelId, string $id): JsonResponse {
-        $hotel = Hotel::findOrFail($hotelId);
-
-        // Find the subscription by ID, scoped to hotel or its org
-        $sub = $hotel->organization_id
-            ? Subscription::where('organization_id', $hotel->organization_id)->findOrFail($id)
-            : Subscription::where('hotel_id', $hotelId)->findOrFail($id);
-
-        $v = $request->validate([
-            'status'           => ['sometimes', 'in:active,suspended,cancelled,expired'],
-            'expires_at'       => ['sometimes', 'date'],
-            'plan_id'          => ['sometimes', 'exists:subscription_plans,id'],
-            'suspended_reason' => ['nullable', 'string'],
-            'custom_price'     => ['nullable', 'numeric', 'min:0'],
-        ]);
-
-        // Auto-set suspended_at when suspending, clear it when reactivating
-        if (isset($v['status'])) {
-            if ($v['status'] === 'suspended' && !$sub->suspended_at) {
-                $v['suspended_at'] = now();
-            } elseif ($v['status'] === 'active') {
-                $v['suspended_at']     = null;
-                $v['suspended_reason'] = null;
-            }
-        }
-
-        $old = $sub->only(['status', 'plan_id']);
-        $sub->update($v);
-
-        SubscriptionEvent::create([
-            'subscription_id' => $sub->id,
-            'event_type'      => 'updated',
-            'previous_status' => $old['status'],
-            'new_status'      => $sub->status,
-            'performed_by'    => $request->user()->id,
-            'created_at'      => now(),
-        ]);
-
-        $this->clearSubscriptionCache($hotel);
-
-        return response()->json(['data' => $sub->fresh()->load('plan')]);
-    }
-
-    public function invoices(string $hotelId): JsonResponse {
-        $hotel = Hotel::findOrFail($hotelId);
-        return response()->json(['data' => $hotel->invoices()->orderByDesc('created_at')->get()]);
-    }
-
-    // ─── Hébergeur-scoped (primary path — subscriptions/invoices are org-level) ──
-
-    public function indexForHost(string $hostId): JsonResponse {
+    public function indexForHost(Request $request, string $hostId): JsonResponse {
         Organization::findOrFail($hostId);
-        $subs = Subscription::with('plan')->where('organization_id', $hostId)->orderByDesc('created_at')->get();
-        return response()->json(['data' => $subs]);
+        $subs = Subscription::with('plan')->where('organization_id', $hostId)
+            ->orderByDesc('created_at')->paginate($request->integer('per_page', 50));
+        return response()->json([
+            'data' => $subs->items(),
+            'meta' => ['total' => $subs->total(), 'current_page' => $subs->currentPage(), 'per_page' => $subs->perPage()],
+        ]);
     }
 
     public function storeForHost(Request $request, string $hostId): JsonResponse {
@@ -192,11 +94,14 @@ class SubscriptionAdminController extends Controller {
         return response()->json(['data' => $sub->fresh()->load('plan')]);
     }
 
-    public function invoicesForHost(string $hostId): JsonResponse {
+    public function invoicesForHost(Request $request, string $hostId): JsonResponse {
         Organization::findOrFail($hostId);
         $invoices = Invoice::whereHas('subscription', fn($q) => $q->where('organization_id', $hostId))
-            ->orderByDesc('created_at')->get();
-        return response()->json(['data' => $invoices]);
+            ->orderByDesc('created_at')->paginate($request->integer('per_page', 50));
+        return response()->json([
+            'data' => $invoices->items(),
+            'meta' => ['total' => $invoices->total(), 'current_page' => $invoices->currentPage(), 'per_page' => $invoices->perPage()],
+        ]);
     }
 
     public function createInvoiceForHost(Request $request, string $hostId): JsonResponse {
@@ -294,52 +199,7 @@ class SubscriptionAdminController extends Controller {
         ])->download("facture-{$invoice->invoice_number}.pdf");
     }
 
-    public function createInvoice(Request $request, string $hotelId): JsonResponse {
-        $hotel = Hotel::findOrFail($hotelId);
-        $v = $request->validate([
-            'subscription_id' => ['required', 'uuid'],
-            'amount'          => ['required', 'numeric', 'min:0'],
-            'tax_amount'      => ['numeric', 'min:0'],
-            'due_at'          => ['nullable', 'date'],
-            'notes'           => ['nullable', 'string'],
-        ]);
-        $v['total_amount']    = ($v['amount'] ?? 0) + ($v['tax_amount'] ?? 0);
-        $v['hotel_id']        = $hotel->id;
-        $v['invoice_number']  = 'INV-' . date('Y') . '-' . str_pad(Invoice::whereYear('created_at', now()->year)->count() + 1, 4, '0', STR_PAD_LEFT);
-        $v['created_by']      = $request->user()->id;
-        $invoice = Invoice::create($v);
-        return response()->json(['data' => $invoice], 201);
-    }
-
-    public function updateInvoice(Request $request, string $hotelId, string $id): JsonResponse {
-        $invoice = Invoice::where('hotel_id', $hotelId)->findOrFail($id);
-        $wasPaid = $invoice->status === 'paid';
-        $v = $request->validate([
-            'status'            => ['sometimes', 'in:draft,sent,paid,overdue,void'],
-            'paid_at'           => ['nullable', 'date'],
-            'payment_method'    => ['nullable', 'string'],
-            'payment_reference' => ['nullable', 'string'],
-        ]);
-        $invoice->update($v);
-        AuditLogger::log('invoice.updated', $invoice);
-
-        if (!$wasPaid && $invoice->fresh()->status === 'paid') {
-            $this->notifyPaymentReceived($invoice);
-        }
-
-        return response()->json(['data' => $invoice->fresh()]);
-    }
-
-    /** Clear both hotel-level and org-level subscription caches. */
-    private function clearSubscriptionCache(Hotel $hotel): void
-    {
-        Cache::forget("hotel_subscription_active:{$hotel->id}");
-        if ($hotel->organization_id) {
-            Cache::forget("org_subscription_active:{$hotel->organization_id}");
-        }
-    }
-
-    /** Shared by both hotel-scoped and hébergeur-scoped invoice updates. */
+    /** Shared by invoice update paths that transition an invoice to "paid". */
     private function notifyPaymentReceived(Invoice $invoice): void
     {
         $invoice->loadMissing(['hotel', 'subscription.organization', 'subscription.plan']);
