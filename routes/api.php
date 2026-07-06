@@ -206,6 +206,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('alerts',           [AuthorityDashboardController::class, 'alerts']);
             Route::get('activity',         [AuthorityDashboardController::class, 'activity']);
             Route::get('search',           [AuthoritySearchController::class, 'search']);
+            Route::get('recent-check-ins', [AuthoritySearchController::class, 'recentCheckIns']);
             Route::get('guests/{id}',      [AuthoritySearchController::class, 'show']);
             Route::get('hotels',                    [AuthoritySearchController::class, 'hotels']);
             Route::get('hotels/{id}',               [AuthoritySearchController::class, 'showHotel']);

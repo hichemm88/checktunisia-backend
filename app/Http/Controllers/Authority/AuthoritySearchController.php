@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Authority;
 
 use App\Http\Controllers\Controller;
 use App\Models\CheckIn;
+use App\Models\CheckInGuest;
 use App\Models\Guest;
 use App\Models\Hotel;
 use App\Services\Audit\AuditLogger;
@@ -123,6 +124,64 @@ class AuthoritySearchController extends Controller
                 'current_page'  => $results->currentPage(),
                 'per_page'      => $results->perPage(),
                 'search_logged' => true,
+            ],
+        ]);
+    }
+
+    /**
+     * GET /authority/recent-check-ins
+     * Most recent arrivals, one row per guest (a multi-guest check-in produces
+     * one card per traveler, not one card for the whole stay). Not logged —
+     * this is a passive browse, same as hotels()/index-style listings.
+     */
+    public function recentCheckIns(Request $request): JsonResponse
+    {
+        $profile     = $this->authorityProfile($request);
+        $isMinistry  = ($profile['org_type'] ?? null) === 'ministry';
+        $governorate = $profile['governorate'] ?? null;
+
+        $query = CheckInGuest::with([
+            'guest.primaryDocument',
+            'checkIn.hotel.address',
+            'checkIn.room',
+            'checkIn.creator',
+        ])->whereHas('checkIn', function ($ci) use ($isMinistry, $governorate) {
+            $ci->whereIn('status', ['active', 'completed']);
+            if (!$isMinistry && $governorate) {
+                $ci->whereHas('hotel.address', fn($a) => $a->where('governorate', $governorate));
+            }
+        });
+
+        $rows = $query->orderByDesc('added_at')->paginate($request->integer('per_page', 20));
+
+        return response()->json([
+            'data' => $rows->map(function (CheckInGuest $row) {
+                $g  = $row->guest;
+                $ci = $row->checkIn;
+                $doc = $g?->primaryDocument;
+                return [
+                    'check_in_id'      => $ci?->id,
+                    'reference'        => $ci?->reference,
+                    'check_in_date'    => $ci?->check_in_date,
+                    'guest_id'         => $g?->id,
+                    'first_name'       => $g?->first_name,
+                    'last_name'        => $g?->last_name,
+                    'date_of_birth'    => $g?->date_of_birth,
+                    'nationality_code' => $g?->nationality_code,
+                    'document_number'  => $doc?->document_number,
+                    'hotel'            => $ci?->hotel ? [
+                        'name'        => $ci->hotel->name,
+                        'city'        => $ci->hotel->address?->city,
+                        'governorate' => $ci->hotel->address?->governorate,
+                    ] : null,
+                    'room_number'      => $ci?->room?->number,
+                    'created_by'       => $ci?->creator ? "{$ci->creator->first_name} {$ci->creator->last_name}" : null,
+                ];
+            }),
+            'meta' => [
+                'total'        => $rows->total(),
+                'current_page' => $rows->currentPage(),
+                'per_page'     => $rows->perPage(),
             ],
         ]);
     }
