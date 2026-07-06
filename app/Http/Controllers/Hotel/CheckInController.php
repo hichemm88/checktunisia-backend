@@ -73,11 +73,39 @@ class CheckInController extends Controller
             'notes'                   => ['nullable', 'string', 'max:1000'],
         ]);
 
+        if ($validated['room_id'] ?? null) {
+            if ($error = $this->roomConflictError($validated['room_id'])) {
+                return $error;
+            }
+        }
+
         /** @var Hotel $hotel */
         $hotel   = app('tenant');
         $checkIn = $this->service->create($hotel, $request->user(), $validated);
 
         return response()->json(['data' => $this->detail($checkIn)], 201);
+    }
+
+    /**
+     * A room can only have one draft/active check-in at a time — the receptionist
+     * must check out the current guest before starting a new stay on the same room.
+     * Returns the 422 response if the room is occupied, null otherwise.
+     */
+    private function roomConflictError(string $roomId, ?string $excludeCheckInId = null): ?JsonResponse
+    {
+        $occupied = CheckIn::where('room_id', $roomId)
+            ->whereIn('status', ['draft', 'active'])
+            ->when($excludeCheckInId, fn($q) => $q->where('id', '!=', $excludeCheckInId))
+            ->exists();
+
+        if (!$occupied) {
+            return null;
+        }
+
+        return response()->json([
+            'data'   => null,
+            'errors' => [['code' => 'ROOM_OCCUPIED', 'message' => 'Cette chambre a déjà un check-in en cours. Effectuez le check-out avant d\'en commencer un nouveau.', 'field' => 'room_id']],
+        ], 422);
     }
 
     public function show(string $id): JsonResponse
@@ -104,6 +132,12 @@ class CheckInController extends Controller
             'adults_count'            => ['sometimes', 'integer', 'min:1'],
             'children_count'          => ['sometimes', 'integer', 'min:0'],
         ]);
+
+        if (($validated['room_id'] ?? null) && $validated['room_id'] !== $checkIn->room_id) {
+            if ($error = $this->roomConflictError($validated['room_id'], $checkIn->id)) {
+                return $error;
+            }
+        }
 
         $old = $checkIn->toArray();
         $checkIn->update($validated);
