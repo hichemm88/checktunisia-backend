@@ -64,10 +64,16 @@ class ResolveTenant
             ], 404);
         }
 
-        // Bind to service container for use in controllers + other middleware
+        // Bind to service container for use in controllers + other middleware.
+        // 'organization' must use bind() rather than instance(): Container::make() checks
+        // isset($this->instances[...]) to find instance() bindings, and isset() is false for
+        // a stored null — so instance('organization', null) makes app('organization') fall
+        // through to autoloading a class named "organization", which throws
+        // "Target class [organization] does not exist." bind() has no such pitfall since the
+        // closure itself (not its null return value) is what's checked.
         $request->merge(['__tenant' => $hotel]);
         app()->instance('tenant', $hotel);
-        app()->instance('organization', $org);
+        app()->bind('organization', fn () => $org);
 
         return $next($request);
     }
