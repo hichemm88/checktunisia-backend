@@ -145,6 +145,15 @@ class HotelAdminController extends Controller
         return response()->json(['data' => ['status' => 'active']]);
     }
 
+    public function destroy(string $id): JsonResponse
+    {
+        $hotel = Hotel::findOrFail($id);
+        AuditLogger::log('hotel.deleted', $hotel, $hotel->toArray(), []);
+        $hotel->delete(); // soft delete
+
+        return response()->json(null, 204);
+    }
+
     public function getUsers(string $hotelId): JsonResponse
     {
         $hotel = Hotel::findOrFail($hotelId);
@@ -191,6 +200,31 @@ class HotelAdminController extends Controller
 
     public function dashboard(): JsonResponse
     {
+        $expiringSoon = \App\Models\Subscription::with(['organization', 'hotel', 'plan'])
+            ->where('status', 'active')
+            ->whereBetween('expires_at', [now(), now()->addDays(30)])
+            ->orderBy('expires_at')
+            ->limit(10)
+            ->get()
+            ->map(fn($s) => [
+                'id' => $s->id, 'name' => $s->organization?->name ?? $s->hotel?->name ?? '—',
+                'plan' => $s->plan?->name, 'expires_at' => $s->expires_at,
+            ]);
+
+        $failedPayments = \App\Models\Payment::with('hotel')
+            ->where('status', 'failed')
+            ->where('created_at', '>=', now()->subDays(30))
+            ->orderByDesc('created_at')
+            ->limit(10)
+            ->get()
+            ->map(fn($p) => ['id' => $p->id, 'hotel_name' => $p->hotel?->name, 'amount' => $p->amount, 'created_at' => $p->created_at]);
+
+        $recentlySuspended = Hotel::where('status', 'suspended')
+            ->where('updated_at', '>=', now()->subDays(7))
+            ->orderByDesc('updated_at')
+            ->limit(10)
+            ->get(['id', 'name', 'updated_at']);
+
         return response()->json([
             'data' => [
                 'hotels' => [
@@ -203,7 +237,42 @@ class HotelAdminController extends Controller
                     'today'      => \App\Models\CheckIn::whereDate('created_at', today())->count(),
                     'this_month' => \App\Models\CheckIn::whereMonth('created_at', now()->month)->whereYear('created_at', now()->year)->count(),
                 ],
+                'alerts' => [
+                    'expiring_subscriptions' => $expiringSoon,
+                    'failed_payments'        => $failedPayments,
+                    'recently_suspended'     => $recentlySuspended,
+                ],
             ],
         ]);
+    }
+
+    /** Global search across hébergeurs, établissements et utilisateurs — for the admin topbar. */
+    public function search(Request $request): JsonResponse
+    {
+        $q = trim((string) $request->query('q', ''));
+        if (mb_strlen($q) < 2) {
+            return response()->json(['data' => ['organizations' => [], 'hotels' => [], 'users' => []]]);
+        }
+
+        $organizations = \App\Models\Organization::where('name', 'ilike', "%{$q}%")
+            ->limit(5)->get(['id', 'name'])
+            ->map(fn($o) => ['id' => $o->id, 'label' => $o->name, 'type' => 'organization']);
+
+        $hotels = Hotel::where('name', 'ilike', "%{$q}%")
+            ->limit(5)->get(['id', 'name'])
+            ->map(fn($h) => ['id' => $h->id, 'label' => $h->name, 'type' => 'hotel']);
+
+        $users = \App\Models\User::where(fn($query) => $query
+                ->where('first_name', 'ilike', "%{$q}%")
+                ->orWhere('last_name', 'ilike', "%{$q}%")
+                ->orWhere('email', 'ilike', "%{$q}%"))
+            ->limit(5)->get(['id', 'first_name', 'last_name', 'email'])
+            ->map(fn($u) => ['id' => $u->id, 'label' => trim("{$u->first_name} {$u->last_name}")." ({$u->email})", 'type' => 'user']);
+
+        return response()->json(['data' => [
+            'organizations' => $organizations,
+            'hotels'        => $hotels,
+            'users'         => $users,
+        ]]);
     }
 }

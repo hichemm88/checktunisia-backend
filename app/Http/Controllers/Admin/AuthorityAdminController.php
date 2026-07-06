@@ -34,12 +34,42 @@ class AuthorityAdminController extends Controller {
         AuditLogger::log('authority_user.updated', $user);
         return response()->json(['data'=>['id'=>$user->id,'status'=>$user->status]]);
     }
-    public function organizations(): JsonResponse {
-        return response()->json(['data' => AuthorityOrganization::where('is_active',true)->get()]);
+    public function destroy(string $id): JsonResponse {
+        $user = User::role('authority_user')->findOrFail($id);
+        $user->update(['status'=>'inactive']);
+        $user->delete();
+        AuditLogger::log('authority_user.deleted', $user);
+        return response()->json(null, 204);
+    }
+
+    public function organizations(Request $request): JsonResponse {
+        $query = AuthorityOrganization::withCount('userProfiles');
+        if ($request->filled('search')) $query->where('name', 'ilike', "%{$request->search}%");
+        if (!$request->boolean('include_inactive')) $query->where('is_active', true);
+        return response()->json(['data' => $query->orderBy('name')->get()]);
     }
     public function createOrganization(Request $request): JsonResponse {
-        $v = $request->validate(['name'=>['required','string','max:255'],'type'=>['required','in:police,immigration,customs,judiciary,tax,other'],'code'=>['nullable','string','unique:authority_organizations,code'],'description'=>['nullable','string']]);
-        $org = AuthorityOrganization::create($v);
+        $v = $request->validate(['name'=>['required','string','max:255'],'type'=>['required','in:police,immigration,customs,judiciary,tax,ministry,other'],'code'=>['nullable','string','unique:authority_organizations,code'],'governorate'=>['nullable','string','max:100'],'description'=>['nullable','string']]);
+        $org = AuthorityOrganization::create(array_merge($v, ['is_active' => true]));
+        AuditLogger::log('authority_organization.created', $org);
         return response()->json(['data'=>$org], 201);
+    }
+    public function updateOrganization(Request $request, string $id): JsonResponse {
+        $org = AuthorityOrganization::findOrFail($id);
+        $v = $request->validate(['name'=>['sometimes','string','max:255'],'type'=>['sometimes','in:police,immigration,customs,judiciary,tax,ministry,other'],'governorate'=>['sometimes','nullable','string','max:100'],'description'=>['sometimes','nullable','string'],'is_active'=>['sometimes','boolean']]);
+        $org->update($v);
+        AuditLogger::log('authority_organization.updated', $org);
+        return response()->json(['data'=>$org->fresh()]);
+    }
+    public function destroyOrganization(string $id): JsonResponse {
+        $org = AuthorityOrganization::withCount('userProfiles')->findOrFail($id);
+        if ($org->user_profiles_count > 0) {
+            return response()->json([
+                'errors' => [['code' => 'HAS_USERS', 'message' => "Cet organisme a encore {$org->user_profiles_count} utilisateur(s) rattaché(s) — réaffectez-les avant de supprimer."]],
+            ], 422);
+        }
+        AuditLogger::log('authority_organization.deleted', $org);
+        $org->delete();
+        return response()->json(null, 204);
     }
 }

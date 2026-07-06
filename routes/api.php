@@ -6,6 +6,9 @@ use App\Http\Controllers\Admin\HotelAdminController;
 use App\Http\Controllers\Admin\SubscriptionAdminController;
 use App\Http\Controllers\Admin\AuditLogController;
 use App\Http\Controllers\Admin\AuthorityAdminController;
+use App\Http\Controllers\Admin\OrganizationAdminController;
+use App\Http\Controllers\Admin\PlatformUserAdminController;
+use App\Http\Controllers\Admin\EmailTemplateAdminController;
 use App\Http\Controllers\Hotel\CheckInController;
 use App\Http\Controllers\Hotel\GuestController;
 use App\Http\Controllers\Hotel\ScanController;
@@ -227,18 +230,36 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
         ->group(function () {
 
             Route::get('dashboard', [HotelAdminController::class, 'dashboard']);
+            Route::get('search',    [HotelAdminController::class, 'search']);
 
-            // Hotels
+            // Hébergeurs (Organization — société/particulier)
+            Route::get('hosts',              [OrganizationAdminController::class, 'index']);
+            Route::post('hosts',             [OrganizationAdminController::class, 'store']);
+            Route::get('hosts/{id}',         [OrganizationAdminController::class, 'show']);
+            Route::patch('hosts/{id}',       [OrganizationAdminController::class, 'update']);
+            Route::delete('hosts/{id}',      [OrganizationAdminController::class, 'destroy']);
+            Route::post('hosts/{id}/suspend',  [OrganizationAdminController::class, 'suspend']);
+            Route::post('hosts/{id}/activate', [OrganizationAdminController::class, 'activate']);
+
+            // Hotels (établissements)
             Route::get('hotels',            [HotelAdminController::class, 'index']);
             Route::post('hotels',           [HotelAdminController::class, 'store']);
             Route::get('hotels/{id}',       [HotelAdminController::class, 'show']);
             Route::patch('hotels/{id}',     [HotelAdminController::class, 'update']);
+            Route::delete('hotels/{id}',    [HotelAdminController::class, 'destroy']);
             Route::post('hotels/{id}/suspend',  [HotelAdminController::class, 'suspend']);
             Route::post('hotels/{id}/activate', [HotelAdminController::class, 'activate']);
 
-            // Hotel users
+            // Hotel users (scoped, used by the hotel detail panel)
             Route::get('hotels/{hotel_id}/users',  [HotelAdminController::class, 'getUsers']);
             Route::post('hotels/{hotel_id}/users', [HotelAdminController::class, 'createUser']);
+
+            // Utilisateurs — vue globale (tous hébergeurs/établissements confondus)
+            Route::get('users',                    [PlatformUserAdminController::class, 'index']);
+            Route::post('users',                   [PlatformUserAdminController::class, 'store']);
+            Route::patch('users/{id}',             [PlatformUserAdminController::class, 'update']);
+            Route::delete('users/{id}',            [PlatformUserAdminController::class, 'destroy']);
+            Route::post('users/{id}/resend-invite',[PlatformUserAdminController::class, 'resendInvite']);
 
             // Subscriptions
             Route::get('hotels/{hotel_id}/subscriptions',        [SubscriptionAdminController::class, 'index']);
@@ -254,10 +275,13 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('authority-users',       [AuthorityAdminController::class, 'index']);
             Route::post('authority-users',      [AuthorityAdminController::class, 'store']);
             Route::patch('authority-users/{id}',[AuthorityAdminController::class, 'update']);
+            Route::delete('authority-users/{id}',[AuthorityAdminController::class, 'destroy']);
 
-            // Organizations
-            Route::get('organizations',   [AuthorityAdminController::class, 'organizations']);
-            Route::post('organizations',  [AuthorityAdminController::class, 'createOrganization']);
+            // Authority organizations (police / immigration / ministère...)
+            Route::get('authority-organizations',       [AuthorityAdminController::class, 'organizations']);
+            Route::post('authority-organizations',      [AuthorityAdminController::class, 'createOrganization']);
+            Route::patch('authority-organizations/{id}',[AuthorityAdminController::class, 'updateOrganization']);
+            Route::delete('authority-organizations/{id}',[AuthorityAdminController::class, 'destroyOrganization']);
 
             // Audit logs
             Route::get('audit-logs',             [AuditLogController::class, 'index']);
@@ -268,8 +292,19 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('platform-settings',      [PlatformSettingController::class, 'show']);
             Route::patch('platform-settings',    [PlatformSettingController::class, 'update']);
 
+            // Payments (read-only ledger)
+            Route::get('payments',               [PlatformSettingController::class, 'payments']);
+
             // Subscription plans management
             Route::get('plans',                  [PlatformSettingController::class, 'listPlans']);
+            Route::post('plans',                 [PlatformSettingController::class, 'storePlan']);
             Route::patch('plans/{id}',           [PlatformSettingController::class, 'updatePlan']);
+            Route::delete('plans/{id}',          [PlatformSettingController::class, 'destroyPlan']);
+
+            // Email templates
+            Route::get('emails',                 [EmailTemplateAdminController::class, 'index']);
+            Route::patch('emails/{key}',         [EmailTemplateAdminController::class, 'update']);
+            Route::get('emails/{key}/preview',   [EmailTemplateAdminController::class, 'preview']);
+            Route::post('emails/send-reminders', [EmailTemplateAdminController::class, 'sendReminders']);
         });
 });

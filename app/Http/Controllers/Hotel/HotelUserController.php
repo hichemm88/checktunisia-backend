@@ -1,7 +1,6 @@
 <?php
 namespace App\Http\Controllers\Hotel;
 use App\Http\Controllers\Controller;
-use App\Mail\WelcomeUserMail;
 use App\Models\Hotel;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
@@ -10,7 +9,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -163,22 +161,13 @@ class HotelUserController extends Controller {
     }
 
     private function sendWelcomeEmail(User $user, string $tempPassword, string $hotelName, string $role): bool {
-        try {
-            $frontendUrl = rtrim(env('FRONTEND_URL', 'https://checktunisia.vercel.app'), '/');
-            Mail::to($user->email)->send(new WelcomeUserMail(
-                firstName:         $user->first_name,
-                lastName:          $user->last_name,
-                email:             $user->email,
-                temporaryPassword: $tempPassword,
-                hotelName:         $hotelName,
-                role:              $role,
-                loginUrl:          $frontendUrl.'/login',
-            ));
-            return true;
-        } catch (\Throwable $e) {
-            // Log but don't fail — user is created/updated, email is best-effort
-            \Log::warning('Welcome email failed for user '.$user->id.': '.$e->getMessage());
-            return false;
-        }
+        return \App\Services\Email\SystemMailer::send('welcome', $user->email, [
+            'first_name' => $user->first_name,
+            'last_name'  => $user->last_name,
+            'hotel_name' => $hotelName,
+            'role_label' => $role === 'hotel_admin' ? 'Administrateur' : 'Réceptionniste',
+            'credentials_box' => \App\Services\Email\SystemMailer::credentialsBox($user->email, $tempPassword),
+            'cta_button'      => \App\Services\Email\SystemMailer::ctaButton(\App\Services\Email\SystemMailer::loginUrl()),
+        ]);
     }
 }

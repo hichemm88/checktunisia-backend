@@ -132,6 +132,7 @@ class SubscriptionAdminController extends Controller {
 
     public function updateInvoice(Request $request, string $hotelId, string $id): JsonResponse {
         $invoice = Invoice::where('hotel_id', $hotelId)->findOrFail($id);
+        $wasPaid = $invoice->status === 'paid';
         $v = $request->validate([
             'status'            => ['sometimes', 'in:draft,sent,paid,overdue,void'],
             'paid_at'           => ['nullable', 'date'],
@@ -140,6 +141,22 @@ class SubscriptionAdminController extends Controller {
         ]);
         $invoice->update($v);
         AuditLogger::log('invoice.updated', $invoice);
+
+        if (!$wasPaid && $invoice->fresh()->status === 'paid') {
+            $hotel = Hotel::find($hotelId);
+            $sub   = $invoice->subscription;
+            $to    = $hotel?->organization?->contact_email ?? $hotel?->contacts()->where('type', 'email')->where('is_primary', true)->first()?->value;
+            \App\Services\Email\SystemMailer::send('payment_received', $to, [
+                'name'       => $hotel?->organization?->name ?? $hotel?->name ?? 'Client Qayed',
+                'plan_name'  => $sub?->plan?->name ?? '—',
+                'expires_at' => $sub?->expires_at?->format('d/m/Y') ?? '—',
+                'credentials_box' => \App\Services\Email\SystemMailer::amountBox(
+                    number_format((float) $invoice->total_amount, 3).' '.$invoice->currency,
+                    $invoice->invoice_number,
+                ),
+            ]);
+        }
+
         return response()->json(['data' => $invoice->fresh()]);
     }
 
