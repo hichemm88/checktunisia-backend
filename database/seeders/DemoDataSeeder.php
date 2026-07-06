@@ -16,6 +16,16 @@ use Illuminate\Support\Facades\Hash;
 class DemoDataSeeder extends Seeder {
     public function run(): void {
 
+        // Skip entirely once the demo hotel exists in any state (including soft-deleted).
+        // This seeder runs on every boot (see Dockerfile CMD); withTrashed() here matters
+        // because a plain updateOrCreate() ignores soft-deleted rows and would otherwise try
+        // to re-insert the same unique slug on every restart after someone deletes the demo
+        // hotel from the admin panel — which is exactly what happened in production.
+        if (Hotel::withTrashed()->where('slug', 'hotel-sousse-azur')->exists()) {
+            $this->command->info('Demo data already present (or deliberately removed) — skipping.');
+            return;
+        }
+
         // Demo hotel
         $hotel = Hotel::updateOrCreate(['slug'=>'hotel-sousse-azur'],['name'=>'Hôtel Sousse Azur','type'=>'hotel','room_count'=>45,'registration_number'=>'TN-HOT-2023-0041','stars'=>4,'status'=>'active']);
         HotelAddress::updateOrCreate(['hotel_id'=>$hotel->id,'is_primary'=>true],['line1'=>'Avenue Bourguiba 12','city'=>'Sousse','governorate'=>'Gouvernorat de Sousse','postal_code'=>'4000','country_code'=>'TN']);
