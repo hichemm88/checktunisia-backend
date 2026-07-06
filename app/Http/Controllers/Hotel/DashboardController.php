@@ -74,6 +74,10 @@ class DashboardController extends Controller
             ->join('check_ins', 'check_in_guests.check_in_id', '=', 'check_ins.id')
             ->where('check_ins.hotel_id', $hotel->id)
             ->where('check_ins.status', 'active')
+            // Plain query-builder joins bypass Eloquent's SoftDeletingScope, so a deleted
+            // check-in (or guest) would otherwise keep surfacing here forever.
+            ->whereNull('check_ins.deleted_at')
+            ->whereNull('guests.deleted_at')
             ->whereNotNull('travel_documents.expiry_date')
             ->whereDate('travel_documents.expiry_date', '>=', $today)
             ->whereDate('travel_documents.expiry_date', '<=', $today->copy()->addDays(30))
