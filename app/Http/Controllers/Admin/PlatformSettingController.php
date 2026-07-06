@@ -36,7 +36,8 @@ class PlatformSettingController extends Controller
         $s = PlatformSetting::get();
         $s->update($v);
 
-        return response()->json(['data' => $s->fresh()->toArray()]);
+        // Same reasoning as show(): never round-trip flouci_app_token/flouci_app_secret.
+        return response()->json(['data' => $s->fresh()->toPublicArray()]);
     }
 
     // ── Subscription plans ───────────────────────────────────────────────────
