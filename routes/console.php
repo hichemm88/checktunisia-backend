@@ -8,3 +8,6 @@ Schedule::command('subscriptions:notify-expiring')->dailyAt('08:00');
 // Sync watchlist with OpenSanctions (Interpol Red Notices + UN Sanctions) — runs daily at 02:00 AM
 // OpenSanctions refreshes their data daily; running at 02:00 ensures we pick up overnight updates.
 Schedule::command('watchlist:sync-opensanctions')->dailyAt('02:00');
+
+// Auto-expire subscriptions past their expiry date, blocking check-ins until renewed
+Schedule::command('subscriptions:expire-overdue')->dailyAt('03:00');

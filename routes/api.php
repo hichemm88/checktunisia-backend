@@ -271,6 +271,16 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::post('hotels/{hotel_id}/invoices',       [SubscriptionAdminController::class, 'createInvoice']);
             Route::patch('hotels/{hotel_id}/invoices/{id}', [SubscriptionAdminController::class, 'updateInvoice']);
 
+            // Subscriptions & invoices — hébergeur-scoped (primary path, org-level)
+            Route::get('hosts/{host_id}/subscriptions',        [SubscriptionAdminController::class, 'indexForHost']);
+            Route::post('hosts/{host_id}/subscriptions',       [SubscriptionAdminController::class, 'storeForHost']);
+            Route::patch('hosts/{host_id}/subscriptions/{id}', [SubscriptionAdminController::class, 'updateForHost']);
+            Route::get('hosts/{host_id}/invoices',             [SubscriptionAdminController::class, 'invoicesForHost']);
+            Route::post('hosts/{host_id}/invoices',            [SubscriptionAdminController::class, 'createInvoiceForHost']);
+            Route::patch('hosts/{host_id}/invoices/{id}',      [SubscriptionAdminController::class, 'updateInvoiceForHost']);
+            Route::get('hosts/{host_id}/invoices/{id}/pdf',    [SubscriptionAdminController::class, 'downloadInvoicePdf']);
+            Route::get('invoices',                             [SubscriptionAdminController::class, 'allInvoices']);
+
             // Authority users
             Route::get('authority-users',       [AuthorityAdminController::class, 'index']);
             Route::post('authority-users',      [AuthorityAdminController::class, 'store']);

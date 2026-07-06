@@ -17,7 +17,7 @@ class Subscription extends Model
     protected $keyType = 'string';
 
     protected $fillable = [
-        'hotel_id', 'organization_id', 'plan_id', 'status', 'billing_cycle',
+        'hotel_id', 'organization_id', 'plan_id', 'custom_price', 'status', 'billing_cycle',
         'started_at', 'expires_at', 'cancelled_at', 'suspended_at',
         'suspended_reason', 'auto_renew', 'metadata', 'created_by',
     ];
