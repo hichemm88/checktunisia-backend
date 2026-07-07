@@ -145,12 +145,17 @@ class AuthoritySearchController extends Controller
             'checkIn.hotel.address',
             'checkIn.room',
             'checkIn.creator',
-        ])->whereHas('checkIn', function ($ci) use ($isMinistry, $governorate) {
-            $ci->whereIn('status', ['active', 'completed']);
-            if (!$isMinistry && $governorate) {
-                $ci->whereHas('hotel.address', fn($a) => $a->where('governorate', $governorate));
-            }
-        });
+        ])
+            // A guest can be soft-deleted independently of the stay it was part of
+            // (merge/correction/GDPR erasure); skip those rows rather than surface
+            // a check-in with no traveler identity attached to it.
+            ->whereHas('guest')
+            ->whereHas('checkIn', function ($ci) use ($isMinistry, $governorate) {
+                $ci->whereIn('status', ['active', 'completed']);
+                if (!$isMinistry && $governorate) {
+                    $ci->whereHas('hotel.address', fn($a) => $a->where('governorate', $governorate));
+                }
+            });
 
         $rows = $query->orderByDesc('added_at')->paginate($request->integer('per_page', 20));
 
