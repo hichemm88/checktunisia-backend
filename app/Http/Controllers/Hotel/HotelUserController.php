@@ -117,6 +117,11 @@ class HotelUserController extends Controller {
         if (isset($v['hotel_ids'])) {
             $user->hotels()->sync(array_fill_keys($v['hotel_ids'], ['granted_at' => now()]));
         }
+        // A suspended/deactivated account must lose access immediately, not
+        // whenever its existing tokens happen to expire (up to 8h later).
+        if (isset($v['status']) && $v['status'] !== 'active') {
+            $user->tokens()->delete();
+        }
         AuditLogger::log('user.updated', $user, newValues: $user->only(['email', 'first_name', 'last_name']), hotelId: $hotel->id);
         return response()->json(['data' => [
             'id'         => $user->id,
@@ -132,6 +137,7 @@ class HotelUserController extends Controller {
         $user = $this->manageableUsersQuery($this->manageableHotelIds())->findOrFail($id);
         $hotel = $user->hotels->first() ?? app('tenant');
         $user->update(['status'=>'inactive']);
+        $user->tokens()->delete();
         $old = $user->only(['email', 'first_name', 'last_name']);
         $user->delete();
         AuditLogger::log('user.deleted', $user, $old, hotelId: $hotel->id);

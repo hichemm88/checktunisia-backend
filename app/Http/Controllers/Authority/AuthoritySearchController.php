@@ -27,6 +27,26 @@ class AuthoritySearchController extends Controller
     }
 
     /**
+     * 404s a hotel-scoped lookup for a police officer whose governorate
+     * doesn't match the hotel's — without this, a single-record endpoint
+     * (unlike the list endpoints, which already auto-filter) is reachable
+     * for any hotel nationwide by anyone with an authority_user account.
+     */
+    private function assertHotelInScope(Request $request, Hotel $hotel): void
+    {
+        $profile = $this->authorityProfile($request);
+        if (($profile['org_type'] ?? null) !== 'police' || !$profile['governorate']) {
+            return;
+        }
+
+        $hotel->loadMissing('address');
+        $governorate = $hotel->address?->governorate ?? '';
+        if (!str_contains(mb_strtolower($governorate), mb_strtolower($profile['governorate']))) {
+            throw new \Illuminate\Database\Eloquent\ModelNotFoundException();
+        }
+    }
+
+    /**
      * GET /authority/search
      * Cross-tenant guest search — every call is logged.
      * Police users are auto-scoped to their governorate.
@@ -195,11 +215,24 @@ class AuthoritySearchController extends Controller
      * GET /authority/guests/{id}
      * Full guest profile — every view is logged.
      */
-    public function show(string $id): JsonResponse
+    public function show(Request $request, string $id): JsonResponse
     {
-        $guest = Guest::with(['documents', 'checkIns' => function ($q) {
+        $profile = $this->authorityProfile($request);
+
+        $query = Guest::with(['documents', 'checkIns' => function ($q) {
             $q->with('hotel.address', 'room')->orderByDesc('check_in_date');
-        }])->findOrFail($id);
+        }]);
+
+        // Police may only view guests with at least one stay in their own
+        // governorate — without this, any authority account could pull the
+        // full passport/CIN profile of any guest nationwide by guessing IDs.
+        if (($profile['org_type'] ?? null) === 'police' && $profile['governorate']) {
+            $query->whereHas('checkIns.hotel.address', fn($a) =>
+                $a->where('governorate', 'ilike', "%{$profile['governorate']}%")
+            );
+        }
+
+        $guest = $query->findOrFail($id);
 
         AuditLogger::logAuthorityView($guest->id);
 
@@ -280,6 +313,7 @@ class AuthoritySearchController extends Controller
     public function hotelCheckIns(Request $request, string $id): JsonResponse
     {
         $hotel = Hotel::findOrFail($id);
+        $this->assertHotelInScope($request, $hotel);
 
         $query = CheckIn::with(['guests.documents', 'room'])
             ->where('hotel_id', $hotel->id);
@@ -349,13 +383,14 @@ class AuthoritySearchController extends Controller
      * GET /authority/hotels/{id}
      * Full hotel detail: address, owner/org, staff, subscription.
      */
-    public function showHotel(string $id): JsonResponse
+    public function showHotel(Request $request, string $id): JsonResponse
     {
         $hotel = Hotel::with([
             'address',
             'organization',
             'users.roles',
         ])->findOrFail($id);
+        $this->assertHotelInScope($request, $hotel);
 
         AuditLogger::log('authority.hotel_viewed', $hotel);
 

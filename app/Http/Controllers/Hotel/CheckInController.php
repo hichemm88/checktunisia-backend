@@ -8,6 +8,7 @@ use App\Models\Hotel;
 use App\Services\CheckIn\CheckInService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class CheckInController extends Controller
 {
@@ -62,8 +63,11 @@ class CheckInController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        /** @var Hotel $hotel */
+        $hotel = app('tenant');
+
         $validated = $request->validate([
-            'room_id'                 => ['nullable', 'uuid', 'exists:rooms,id'],
+            'room_id'                 => ['nullable', 'uuid', Rule::exists('rooms', 'id')->where('hotel_id', $hotel->id)],
             'check_in_date'           => ['required', 'date'],
             'expected_check_out_date' => ['required', 'date', 'after:check_in_date'],
             'booking_reference'       => ['nullable', 'string', 'max:100'],
@@ -79,8 +83,6 @@ class CheckInController extends Controller
             }
         }
 
-        /** @var Hotel $hotel */
-        $hotel   = app('tenant');
         $checkIn = $this->service->create($hotel, $request->user(), $validated);
 
         return response()->json(['data' => $this->detail($checkIn)], 201);
@@ -126,7 +128,7 @@ class CheckInController extends Controller
         }
 
         $validated = $request->validate([
-            'room_id'                 => ['nullable', 'uuid', 'exists:rooms,id'],
+            'room_id'                 => ['nullable', 'uuid', Rule::exists('rooms', 'id')->where('hotel_id', $checkIn->hotel_id)],
             'expected_check_out_date' => ['sometimes', 'date'],
             'notes'                   => ['nullable', 'string', 'max:1000'],
             'adults_count'            => ['sometimes', 'integer', 'min:1'],

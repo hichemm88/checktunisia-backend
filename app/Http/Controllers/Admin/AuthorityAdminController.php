@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rules\Password;
 
 class AuthorityAdminController extends Controller {
     public function index(Request $request): JsonResponse {
@@ -20,7 +21,7 @@ class AuthorityAdminController extends Controller {
         ]);
     }
     public function store(Request $request): JsonResponse {
-        $v = $request->validate(['first_name'=>['required','string','max:100'],'last_name'=>['required','string','max:100'],'email'=>['required','email','unique:users,email'],'password'=>['required','string','min:8'],'organization_id'=>['required','exists:authority_organizations,id'],'badge_number'=>['nullable','string','max:50'],'rank'=>['nullable','string','max:100'],'expires_at'=>['nullable','date']]);
+        $v = $request->validate(['first_name'=>['required','string','max:100'],'last_name'=>['required','string','max:100'],'email'=>['required','email','unique:users,email'],'password'=>['required', Password::min(12)->mixedCase()->numbers()->symbols()],'organization_id'=>['required','exists:authority_organizations,id'],'badge_number'=>['nullable','string','max:50'],'rank'=>['nullable','string','max:100'],'expires_at'=>['nullable','date']]);
         $user = DB::transaction(function() use($v, $request) {
             $u = User::create(['first_name'=>$v['first_name'],'last_name'=>$v['last_name'],'email'=>$v['email'],'password'=>Hash::make($v['password']),'status'=>'active','email_verified_at'=>now()]);
             $u->assignRole('authority_user');
@@ -33,7 +34,13 @@ class AuthorityAdminController extends Controller {
     public function update(Request $request, string $id): JsonResponse {
         $user = User::role('authority_user')->findOrFail($id);
         $v = $request->validate(['status'=>['sometimes','in:active,suspended,inactive'],'expires_at'=>['nullable','date']]);
-        if (isset($v['status'])) $user->update(['status'=>$v['status']]);
+        if (isset($v['status'])) {
+            $user->update(['status'=>$v['status']]);
+            // A suspended/deactivated authority account (police/ministry — the
+            // most sensitive credential in the system) must lose access
+            // immediately rather than keep a valid session for up to 8h.
+            if ($v['status'] !== 'active') $user->tokens()->delete();
+        }
         if (isset($v['expires_at'])) $user->authorityProfile?->update(['expires_at'=>$v['expires_at']]);
         AuditLogger::log('authority_user.updated', $user);
         return response()->json(['data'=>['id'=>$user->id,'status'=>$user->status]]);
@@ -41,6 +48,7 @@ class AuthorityAdminController extends Controller {
     public function destroy(string $id): JsonResponse {
         $user = User::role('authority_user')->findOrFail($id);
         $user->update(['status'=>'inactive']);
+        $user->tokens()->delete();
         $user->delete();
         AuditLogger::log('authority_user.deleted', $user);
         return response()->json(null, 204);

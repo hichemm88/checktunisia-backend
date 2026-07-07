@@ -114,6 +114,12 @@ class PlatformUserAdminController extends Controller
         if ($fields) $user->update($fields);
         if (isset($v['role'])) $user->syncRoles([$v['role']]);
 
+        // A suspended/deactivated account must lose access immediately, not
+        // whenever its existing tokens happen to expire (up to 8h later).
+        if (isset($v['status']) && $v['status'] !== 'active') {
+            $user->tokens()->delete();
+        }
+
         AuditLogger::log('user.updated', $user);
 
         return response()->json(['data' => [
@@ -126,6 +132,7 @@ class PlatformUserAdminController extends Controller
     {
         $user = User::role(['hotel_admin', 'receptionist'])->findOrFail($id);
         $user->update(['status' => 'inactive']);
+        $user->tokens()->delete();
         $user->delete();
         AuditLogger::log('user.deleted', $user);
 

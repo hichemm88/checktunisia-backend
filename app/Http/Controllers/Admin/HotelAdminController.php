@@ -12,6 +12,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rules\Password;
 
 class HotelAdminController extends Controller
 {
@@ -196,7 +197,7 @@ class HotelAdminController extends Controller
             'last_name'  => ['required', 'string', 'max:100'],
             'email'      => ['required', 'email', 'unique:users,email'],
             'role'       => ['required', 'in:hotel_admin,receptionist'],
-            'password'   => ['required', 'string', 'min:8'],
+            'password'   => ['required', Password::min(12)->mixedCase()->numbers()->symbols()],
         ]);
 
         $user = DB::transaction(function () use ($validated, $hotel) {

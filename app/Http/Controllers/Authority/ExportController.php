@@ -16,7 +16,22 @@ class ExportController extends Controller
      */
     public function guestPdf(Request $request, string $id): Response
     {
-        $guest = Guest::with(['documents', 'checkIns.hotel.address'])->findOrFail($id);
+        $profile = $request->user()->authorityProfile()->with('organization')->first();
+        $orgType     = $profile?->organization?->type;
+        $governorate = $profile?->organization?->governorate;
+
+        $query = Guest::with(['documents', 'checkIns.hotel.address']);
+
+        // Same scoping as AuthoritySearchController::show() — without it, any
+        // authority account could export the full passport/CIN profile of any
+        // guest nationwide as a PDF by guessing IDs.
+        if ($orgType === 'police' && $governorate) {
+            $query->whereHas('checkIns.hotel.address', fn($a) =>
+                $a->where('governorate', 'ilike', "%{$governorate}%")
+            );
+        }
+
+        $guest = $query->findOrFail($id);
 
         $docsHtml = '';
         foreach ($guest->documents as $doc) {

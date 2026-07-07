@@ -68,11 +68,13 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     Route::post('auth/refresh', [AuthController::class, 'refresh']);
     Route::get('auth/me',       [AuthController::class, 'me']);
 
-    // 2FA — verify accepts partial token; setup/disable require full token
-    Route::post('auth/2fa/verify',          [TwoFactorController::class, 'verify']);
+    // 2FA — verify accepts partial token; setup/disable require full token.
+    // Throttled: a TOTP code is only 6 digits (1M possibilities) — without a
+    // rate limit it's crackable well within its ~30s validity window.
+    Route::post('auth/2fa/verify', [TwoFactorController::class, 'verify'])->middleware('throttle:5,1');
     Route::middleware('require.2fa')->group(function () {
         Route::get('auth/2fa/setup',            [TwoFactorController::class, 'setup']);
-        Route::post('auth/2fa/setup/confirm',   [TwoFactorController::class, 'confirmSetup']);
+        Route::post('auth/2fa/setup/confirm',   [TwoFactorController::class, 'confirmSetup'])->middleware('throttle:5,1');
         Route::delete('auth/2fa/setup',         [TwoFactorController::class, 'disable']);
         Route::patch('profile',                 [AuthController::class, 'updateProfile']);
         Route::post('profile/password',         [AuthController::class, 'changePassword']);
@@ -200,7 +202,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     |----------------------------------------------------------------------
     */
     Route::prefix('authority')
-        ->middleware(['role:authority_user', 'authority.credential', 'throttle:60,1'])
+        ->middleware(['role:authority_user', 'require.2fa', 'authority.credential', 'throttle:60,1'])
         ->group(function () {
             Route::get('dashboard',        [AuthorityDashboardController::class, 'dashboard']);
             Route::get('alerts',           [AuthorityDashboardController::class, 'alerts']);
