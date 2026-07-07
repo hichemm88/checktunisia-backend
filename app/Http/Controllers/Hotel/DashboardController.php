@@ -30,9 +30,17 @@ class DashboardController extends Controller
             ->where('status', 'active')
             ->count();
 
-        $currentlyPresent = CheckIn::where('hotel_id', $hotel->id)
+        $activeCheckIns = CheckIn::where('hotel_id', $hotel->id)
             ->where('status', 'active')
             ->count();
+
+        // Headcount (adults + children) across active stays — a single check-in
+        // can house a whole family, so counting check-in rows undercounts the
+        // real number of people currently on-site.
+        $currentlyPresent = (int) CheckIn::where('hotel_id', $hotel->id)
+            ->where('status', 'active')
+            ->selectRaw('COALESCE(SUM(adults_count + children_count), 0) as total')
+            ->value('total');
 
         $departuresToday = CheckIn::where('hotel_id', $hotel->id)
             ->whereDate('expected_check_out_date', $today)
@@ -46,8 +54,10 @@ class DashboardController extends Controller
             ->count();
 
         // ── Occupancy rate ────────────────────────────────────────────────────
+        // Rooms occupied ÷ total rooms — headcount is irrelevant here since a
+        // room can hold several guests but only counts as one occupied unit.
         $occupancyRate = $hotel->room_count > 0
-            ? round(($currentlyPresent / $hotel->room_count) * 100)
+            ? round(($activeCheckIns / $hotel->room_count) * 100)
             : 0;
 
         // ── Weekly trend (last 7 days) ────────────────────────────────────────
