@@ -150,8 +150,27 @@ class HotelAdminController extends Controller
     public function destroy(string $id): JsonResponse
     {
         $hotel = Hotel::findOrFail($id);
-        AuditLogger::log('hotel.deleted', $hotel, $hotel->toArray(), []);
-        $hotel->delete(); // soft delete
+
+        DB::transaction(function () use ($hotel) {
+            AuditLogger::log('hotel.deleted', $hotel, $hotel->toArray(), []);
+
+            // Soft-deleting the hotel alone leaves its check-ins live and its
+            // staff active — several authority-side queries only look at
+            // check-in/user state and never re-check whether the hotel itself
+            // still exists, so a deleted hotel's data kept leaking through.
+            $hotel->checkIns()->delete();
+
+            $userIds = $hotel->users()->pluck('users.id');
+            $hotel->users()->detach();
+            User::whereIn('id', $userIds)
+                ->whereDoesntHave('hotels')
+                ->each(function (User $u) {
+                    $u->update(['status' => 'inactive']);
+                    $u->delete();
+                });
+
+            $hotel->delete(); // soft delete
+        });
 
         return response()->json(null, 204);
     }

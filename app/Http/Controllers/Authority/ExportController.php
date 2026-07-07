@@ -125,6 +125,7 @@ HTML;
 
         $query = CheckIn::with(['hotel.address', 'guests.documents'])
             ->whereIn('status', ['active', 'completed'])
+            ->whereHas('hotel')
             ->orderByDesc('check_in_date');
 
         if ($isPolice && $profile->organization?->governorate) {

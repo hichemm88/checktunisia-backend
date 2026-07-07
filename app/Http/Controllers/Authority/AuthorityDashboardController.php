@@ -162,16 +162,19 @@ class AuthorityDashboardController extends Controller
     {
         $today = now()->toDateString();
 
-        $activeGuests   = CheckIn::where('status', 'active')->count();
-        $checkInsToday  = CheckIn::whereDate('check_in_date', $today)->count();
-        $checkOutsToday = CheckIn::whereDate('actual_check_out_date', $today)->count();
+        $activeGuests   = CheckIn::where('status', 'active')->whereHas('hotel')->count();
+        $checkInsToday  = CheckIn::whereDate('check_in_date', $today)->whereHas('hotel')->count();
+        $checkOutsToday = CheckIn::whereDate('actual_check_out_date', $today)->whereHas('hotel')->count();
         $activeHotels   = Hotel::where('status', 'active')->count();
 
-        // Guests present by governorate
+        // Guests present by governorate. Raw query-builder joins bypass Eloquent's
+        // SoftDeletingScope, so a deleted hotel must be excluded explicitly here —
+        // it would otherwise keep contributing to these counts forever.
         $byGovernorat = DB::table('check_ins')
             ->join('hotels', 'check_ins.hotel_id', '=', 'hotels.id')
             ->join('hotel_addresses', 'hotels.id', '=', 'hotel_addresses.hotel_id')
             ->where('check_ins.status', 'active')
+            ->whereNull('hotels.deleted_at')
             ->select(
                 'hotel_addresses.governorate',
                 DB::raw('COUNT(DISTINCT check_ins.id) as active_guests'),
@@ -185,7 +188,9 @@ class AuthorityDashboardController extends Controller
         $topNationalities = DB::table('guests')
             ->join('check_in_guests', 'guests.id', '=', 'check_in_guests.guest_id')
             ->join('check_ins', 'check_in_guests.check_in_id', '=', 'check_ins.id')
+            ->join('hotels', 'check_ins.hotel_id', '=', 'hotels.id')
             ->where('check_ins.status', 'active')
+            ->whereNull('hotels.deleted_at')
             ->select('guests.nationality_code', DB::raw('COUNT(*) as count'))
             ->groupBy('guests.nationality_code')
             ->orderByDesc('count')
@@ -211,7 +216,7 @@ class AuthorityDashboardController extends Controller
         $expiringCount = TravelDocument::whereNotNull('expiry_date')
             ->whereDate('expiry_date', '>=', $today)
             ->whereDate('expiry_date', '<=', now()->addDays(30)->toDateString())
-            ->whereHas('guest.checkIns', fn($q) => $q->where('status', 'active'))
+            ->whereHas('guest.checkIns', fn($q) => $q->where('status', 'active')->whereHas('hotel'))
             ->count();
 
         return [
@@ -235,11 +240,14 @@ class AuthorityDashboardController extends Controller
         $today = now()->toDateString();
 
         $scope = function ($query) use ($governorate) {
-            if ($governorate) {
-                $query->whereHas('hotel.address', fn($a) =>
-                    $a->where('governorate', $governorate)
-                );
-            }
+            // whereHas('hotel') alone (no closure) already excludes check-ins
+            // whose hotel has been soft-deleted — the governorate filter, when
+            // present, is layered on top of that same relation.
+            $query->whereHas('hotel', function ($h) use ($governorate) {
+                if ($governorate) {
+                    $h->whereHas('address', fn($a) => $a->where('governorate', $governorate));
+                }
+            });
         };
 
         $activeGuests   = CheckIn::where('status', 'active')->tap($scope)->count();
@@ -257,20 +265,23 @@ class AuthorityDashboardController extends Controller
             ->whereDate('expiry_date', '>=', $today)
             ->whereDate('expiry_date', '<=', now()->addDays(30)->toDateString())
             ->whereHas('guest.checkIns', function ($q) use ($governorate) {
-                $q->where('status', 'active');
-                if ($governorate) {
-                    $q->whereHas('hotel.address', fn($a) => $a->where('governorate', $governorate));
-                }
+                $q->where('status', 'active')->whereHas('hotel', function ($h) use ($governorate) {
+                    if ($governorate) {
+                        $h->whereHas('address', fn($a) => $a->where('governorate', $governorate));
+                    }
+                });
             })
             ->count();
 
-        // Nationalities present in zone
+        // Nationalities present in zone. Raw joins bypass the hotel's
+        // SoftDeletingScope, so a deleted hotel must be excluded explicitly.
         $nationalities = DB::table('guests')
             ->join('check_in_guests', 'guests.id', '=', 'check_in_guests.guest_id')
             ->join('check_ins', 'check_in_guests.check_in_id', '=', 'check_ins.id')
             ->join('hotels', 'check_ins.hotel_id', '=', 'hotels.id')
             ->join('hotel_addresses', 'hotels.id', '=', 'hotel_addresses.hotel_id')
             ->where('check_ins.status', 'active')
+            ->whereNull('hotels.deleted_at')
             ->when($governorate, fn($q) => $q->where('hotel_addresses.governorate', $governorate))
             ->select('guests.nationality_code', DB::raw('COUNT(*) as count'))
             ->groupBy('guests.nationality_code')
