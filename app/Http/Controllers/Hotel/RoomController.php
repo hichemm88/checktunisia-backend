@@ -93,8 +93,9 @@ class RoomController extends Controller
     {
         $hotel = app('tenant');
         $room  = Room::where('hotel_id', $hotel->id)->findOrFail($id);
+        $old   = $room->toArray();
         $room->delete();
-        AuditLogger::log('room.deleted', $room, hotelId: $hotel->id);
+        AuditLogger::log('room.deleted', $room, $old, [], hotelId: $hotel->id);
 
         return response()->json(null, 204);
     }

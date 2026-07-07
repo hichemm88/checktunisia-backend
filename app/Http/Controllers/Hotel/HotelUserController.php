@@ -117,7 +117,7 @@ class HotelUserController extends Controller {
         if (isset($v['hotel_ids'])) {
             $user->hotels()->sync(array_fill_keys($v['hotel_ids'], ['granted_at' => now()]));
         }
-        AuditLogger::log('user.updated', $user, hotelId: $hotel->id);
+        AuditLogger::log('user.updated', $user, newValues: $user->only(['email', 'first_name', 'last_name']), hotelId: $hotel->id);
         return response()->json(['data' => [
             'id'         => $user->id,
             'first_name' => $user->first_name,
@@ -132,8 +132,9 @@ class HotelUserController extends Controller {
         $user = $this->manageableUsersQuery($this->manageableHotelIds())->findOrFail($id);
         $hotel = $user->hotels->first() ?? app('tenant');
         $user->update(['status'=>'inactive']);
+        $old = $user->only(['email', 'first_name', 'last_name']);
         $user->delete();
-        AuditLogger::log('user.deleted', $user, hotelId: $hotel->id);
+        AuditLogger::log('user.deleted', $user, $old, hotelId: $hotel->id);
         return response()->json(null, 204);
     }
 
@@ -150,7 +151,7 @@ class HotelUserController extends Controller {
 
         $tempPassword = Str::random(12);
         $user->update(['password' => Hash::make($tempPassword)]);
-        AuditLogger::log('user.invite_resent', $user, hotelId: $hotel->id);
+        AuditLogger::log('user.invite_resent', $user, newValues: $user->only(['email', 'first_name', 'last_name']), hotelId: $hotel->id);
 
         $sent = $this->sendWelcomeEmail($user, $tempPassword, $assignedNames, $user->primary_role);
 

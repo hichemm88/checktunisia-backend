@@ -76,7 +76,10 @@ class CheckInService
             AuditLogger::log(
                 action: 'guest.added',
                 subject: $guest,
-                newValues: ['check_in_id' => $checkIn->id, 'guest_id' => $guest->id],
+                newValues: [
+                    'check_in_id' => $checkIn->id, 'guest_id' => $guest->id,
+                    'first_name'  => $guest->first_name, 'last_name' => $guest->last_name,
+                ],
                 hotelId: $checkIn->hotel_id,
             );
 
@@ -131,7 +134,10 @@ class CheckInService
 
             $link->delete();
 
-            AuditLogger::log('guest.removed', $guest, ['check_in_id' => $checkIn->id], [], hotelId: $checkIn->hotel_id);
+            AuditLogger::log('guest.removed', $guest, [
+                'check_in_id' => $checkIn->id,
+                'first_name'  => $guest->first_name, 'last_name' => $guest->last_name,
+            ], [], hotelId: $checkIn->hotel_id);
         });
     }
 
@@ -155,7 +161,7 @@ class CheckInService
                 'completed_at' => now(),
             ]);
 
-            AuditLogger::log('check_in.completed', $checkIn, ['status' => 'draft'], ['status' => 'active'], hotelId: $checkIn->hotel_id);
+            AuditLogger::log('check_in.completed', $checkIn, ['status' => 'draft'], ['status' => 'active', 'reference' => $checkIn->reference], hotelId: $checkIn->hotel_id);
 
             // ── Watchlist check: flag hotel if any guest is on a watchlist ──
             app(WatchlistService::class)->checkCheckIn($checkIn->load('guests.documents'));
@@ -176,7 +182,7 @@ class CheckInService
                 'actual_check_out_date' => $checkOutDate,
             ]);
 
-            AuditLogger::log('check_in.checked_out', $checkIn, $old, $checkIn->fresh()->only(['status', 'actual_check_out_date']), hotelId: $checkIn->hotel_id);
+            AuditLogger::log('check_in.checked_out', $checkIn, $old, $checkIn->fresh()->only(['status', 'actual_check_out_date', 'reference']), hotelId: $checkIn->hotel_id);
 
             return $checkIn->fresh();
         });
@@ -193,7 +199,7 @@ class CheckInService
                 'metadata' => array_merge($checkIn->metadata ?? [], ['cancel_reason' => $reason]),
             ]);
 
-            AuditLogger::log('check_in.cancelled', $checkIn, hotelId: $checkIn->hotel_id);
+            AuditLogger::log('check_in.cancelled', $checkIn, newValues: ['reference' => $checkIn->reference, 'cancel_reason' => $reason], hotelId: $checkIn->hotel_id);
 
             return $checkIn->fresh();
         });

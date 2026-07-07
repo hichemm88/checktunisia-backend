@@ -38,11 +38,12 @@ class ActivityLogController extends Controller
 
         return response()->json([
             'data' => collect($logs->items())->map(fn(AuditLog $l) => [
-                'id'           => $l->id,
-                'action'       => $l->action,
-                'subject_type' => $l->subject_type ? class_basename($l->subject_type) : null,
-                'subject_id'   => $l->subject_id,
-                'actor'        => $l->actor ? [
+                'id'            => $l->id,
+                'action'        => $l->action,
+                'subject_type'  => $l->subject_type ? class_basename($l->subject_type) : null,
+                'subject_id'    => $l->subject_id,
+                'subject_label' => $this->subjectLabel($l),
+                'actor'         => $l->actor ? [
                     'id'   => $l->actor->id,
                     'name' => trim($l->actor->first_name.' '.$l->actor->last_name),
                     'role' => $l->actor_role,
@@ -55,5 +56,26 @@ class ActivityLogController extends Controller
                 'last_page'    => $logs->lastPage(),
             ],
         ]);
+    }
+
+    /**
+     * Best-effort human-readable pointer to what the action was about — e.g. a
+     * check-in reference, a guest's name, a room number — pulled from the
+     * old/new value snapshots already captured at log time (never a fresh DB
+     * lookup, so this stays accurate even after the subject is deleted).
+     */
+    private function subjectLabel(AuditLog $l): ?string
+    {
+        $new = $l->new_values ?? [];
+        $old = $l->old_values ?? [];
+        $pick = fn(string $key) => $new[$key] ?? $old[$key] ?? null;
+
+        return match (class_basename($l->subject_type ?? '')) {
+            'CheckIn' => $pick('reference'),
+            'Guest'   => trim(($pick('first_name') ?? '').' '.($pick('last_name') ?? '')) ?: null,
+            'Room'    => $pick('number') !== null ? "N° {$pick('number')}" : null,
+            'User'    => $pick('email') ?? trim(($pick('first_name') ?? '').' '.($pick('last_name') ?? '')) ?: null,
+            default   => null,
+        };
     }
 }
