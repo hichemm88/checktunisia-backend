@@ -26,8 +26,8 @@ HTML,
             'body_html' => <<<'HTML'
 <p>Bonjour <strong>{{name}}</strong>,</p>
 <p>Votre compte hébergeur sur <strong>Qayed</strong> a été suspendu.</p>
-<p><strong>Motif :</strong> {{reason}}</p>
-<p>Pour toute question ou pour régulariser la situation, contactez <a href="mailto:support@qayed.tn">support@qayed.tn</a>.</p>
+<div class="danger">🛑&nbsp; <strong>Motif :</strong> {{reason}}</div>
+<p style="margin-top:20px;">Pour toute question ou pour régulariser la situation, contactez <a href="mailto:support@qayed.tn" style="color:#5346A8;">support@qayed.tn</a>.</p>
 HTML,
         ],
         'payment_received' => [

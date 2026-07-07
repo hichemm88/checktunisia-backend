@@ -89,7 +89,7 @@ class SystemMailer
     public static function ctaButton(string $url, string $label = 'Se connecter'): string
     {
         return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 8px;"><tr><td align="center">'
-            .'<a href="'.htmlspecialchars($url, ENT_QUOTES, 'UTF-8').'" style="display:inline-block;background-color:#1B3A5F;color:#ffffff !important;text-decoration:none;padding:12px 28px;border-radius:8px;font-size:14px;font-weight:600;letter-spacing:0.2px;font-family:\'Segoe UI\', Arial, sans-serif;">'
+            .'<a href="'.htmlspecialchars($url, ENT_QUOTES, 'UTF-8').'" style="display:inline-block;background-color:#5346A8;color:#ffffff !important;text-decoration:none;padding:12px 28px;border-radius:10px;font-size:14px;font-weight:600;letter-spacing:0.2px;font-family:\'IBM Plex Sans\',-apple-system,\'Segoe UI\',Arial,sans-serif;">'
             .htmlspecialchars($label, ENT_QUOTES, 'UTF-8').' &rarr;</a></td></tr></table>';
     }
 
@@ -106,18 +106,33 @@ class SystemMailer
     private static function twoRowBox(string $label1, string $value1, string $label2, string $value2): string
     {
         $cell = fn(string $label, string $value, bool $border) =>
-            '<td style="padding:14px 24px;'.($border ? 'border-bottom:1px solid #E2E8F0;' : '').'font-size:12px;font-weight:600;color:#6B7280;text-transform:uppercase;letter-spacing:0.05em;">'.htmlspecialchars($label, ENT_QUOTES, 'UTF-8').'</td>'
-            .'<td align="right" style="padding:14px 24px;'.($border ? 'border-bottom:1px solid #E2E8F0;' : '').'font-size:14px;font-weight:600;color:#1F2937;font-family:monospace;">'.htmlspecialchars($value, ENT_QUOTES, 'UTF-8').'</td>';
+            '<td style="padding:14px 24px;'.($border ? 'border-bottom:1px solid #DDD9CF;' : '').'font-size:12px;font-weight:600;color:#8A94A0;text-transform:uppercase;letter-spacing:0.05em;font-family:\'IBM Plex Sans\',-apple-system,\'Segoe UI\',Arial,sans-serif;">'.htmlspecialchars($label, ENT_QUOTES, 'UTF-8').'</td>'
+            .'<td align="right" style="padding:14px 24px;'.($border ? 'border-bottom:1px solid #DDD9CF;' : '').'font-size:14px;font-weight:600;color:#10222E;font-family:\'IBM Plex Mono\',monospace;">'.htmlspecialchars($value, ENT_QUOTES, 'UTF-8').'</td>';
 
-        return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;margin:24px 0;">'
+        return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F6F5F1;border:1px solid #DDD9CF;border-radius:14px;margin:24px 0;">'
             .'<tr>'.$cell($label1, $value1, true).'</tr>'
             .'<tr>'.$cell($label2, $value2, false).'</tr>'
             .'</table>';
     }
 
+    /** Sceau قيد + wordmark, rendered as an email-safe table (the −6° tilt degrades gracefully where `transform` isn't supported). */
+    private static function sceau(): string
+    {
+        return <<<HTML
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;">
+  <tr>
+    <td style="width:40px;height:40px;border:2.5px solid #8B7FE0;border-radius:9px;transform:rotate(-6deg);-webkit-transform:rotate(-6deg);-ms-transform:rotate(-6deg);text-align:center;vertical-align:middle;font-family:'IBM Plex Sans Arabic',Arial,sans-serif;font-weight:700;font-size:15px;color:#8B7FE0;line-height:40px;">قيد</td>
+    <td style="width:10px;line-height:1px;font-size:1px;">&nbsp;</td>
+    <td style="font-family:Archivo,'IBM Plex Sans',Arial,sans-serif;font-weight:900;font-size:20px;letter-spacing:-0.02em;color:#ffffff;vertical-align:middle;">QAYED</td>
+  </tr>
+</table>
+HTML;
+    }
+
     private static function wrapShell(string $bodyHtml): string
     {
-        $year = date('Y');
+        $year  = date('Y');
+        $sceau = self::sceau();
         return <<<HTML
 <!DOCTYPE html>
 <html lang="fr">
@@ -127,23 +142,25 @@ class SystemMailer
   <meta name="color-scheme" content="light" />
   <meta name="supported-color-schemes" content="light" />
   <title>Qayed</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@900&family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Sans+Arabic:wght@700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
   <style>
-    body { margin: 0; padding: 0; background: #F3F4F6; font-family: 'Segoe UI', Arial, sans-serif; color: #1F2937; }
-    .wrapper { max-width: 560px; margin: 40px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
-    .header { background: #1B3A5F; padding: 32px 40px; text-align: center; }
-    .header h1 { margin: 0; font-size: 22px; color: #ffffff; letter-spacing: -0.3px; }
-    .header p  { margin: 6px 0 0; font-size: 13px; color: #9CB3CC; }
+    body { margin: 0; padding: 0; background: #F6F5F1; font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; color: #10222E; }
+    .wrapper { max-width: 560px; margin: 40px auto; background: #ffffff; border-radius: 18px; overflow: hidden; border: 1px solid #DDD9CF; }
+    .header { background: #10222E; background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 15px, rgba(246,245,241,0.07) 15px, rgba(246,245,241,0.07) 16px); padding: 32px 40px; text-align: center; }
+    .header p  { margin: 14px 0 0; font-size: 13px; color: #8B7FE0; }
     .body { padding: 32px 40px; }
     .body p { font-size: 15px; line-height: 1.6; margin: 0 0 16px; }
-    .warning { background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: #92400E; margin-top: 24px; }
-    .footer { padding: 20px 40px; text-align: center; font-size: 12px; color: #9CA3AF; border-top: 1px solid #F3F4F6; }
+    .warning { background: #FBF0D7; border-left: 3px solid #E3A008; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: #8A6206; margin-top: 24px; }
+    .danger { background: #F6F5F1; border-left: 3px solid #DC2626; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: #991B1B; margin-top: 8px; }
+    .footer { padding: 20px 40px; text-align: center; font-size: 12px; color: #8A94A0; border-top: 1px solid #DDD9CF; }
   </style>
 </head>
 <body>
   <div class="wrapper">
     <div class="header">
-      <h1>Qayed</h1>
-      <p>Plateforme de gestion hôtelière</p>
+      {$sceau}
+      <p>Plateforme d'enregistrement des voyageurs</p>
     </div>
     <div class="body">
       {$bodyHtml}
