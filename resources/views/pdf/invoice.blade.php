@@ -4,9 +4,11 @@
 <meta charset="utf-8" />
 <style>
     body { font-family: 'Helvetica', sans-serif; color: #1f2937; font-size: 12px; }
-    .header { background: #1B3A5F; color: #fff; padding: 24px 32px; }
+    .header { background: #10222E; color: #fff; padding: 24px 32px; }
     .header h1 { margin: 0; font-size: 20px; letter-spacing: 0.5px; }
-    .header p { margin: 4px 0 0; font-size: 11px; color: #C8943A; }
+    .header p { margin: 4px 0 0; font-size: 11px; color: #8B7FE0; }
+    .issuer { padding: 14px 32px 0; font-size: 11px; color: #6b7280; }
+    .issuer strong { color: #111827; }
     .content { padding: 24px 32px; }
     .row { display: table; width: 100%; margin-bottom: 20px; }
     .col { display: table-cell; width: 50%; vertical-align: top; }
@@ -18,7 +20,7 @@
     table.items td { padding: 10px 4px; border-bottom: 1px solid #f3f4f6; font-size: 12px; }
     .totals { width: 260px; margin-left: auto; margin-top: 16px; }
     .totals td { padding: 4px 0; font-size: 12px; }
-    .totals .grand td { border-top: 2px solid #1B3A5F; font-weight: bold; font-size: 14px; padding-top: 8px; }
+    .totals .grand td { border-top: 2px solid #10222E; font-weight: bold; font-size: 14px; padding-top: 8px; }
     .status { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 11px; font-weight: bold; }
     .status.paid { background: #dcfce7; color: #166534; }
     .status.overdue { background: #fee2e2; color: #991b1b; }
@@ -31,6 +33,19 @@
     <div class="header">
         <h1>QAYED</h1>
         <p>Enregistrement numérique des hôtes</p>
+    </div>
+
+    <div class="issuer">
+        <strong>{{ $issuer->company_name ?? 'Qayed' }}</strong>
+        @if($issuer->company_mf)
+            &nbsp;·&nbsp;MF : {{ $issuer->company_mf }}
+        @endif
+        @if($issuer->company_rc)
+            &nbsp;·&nbsp;RC : {{ $issuer->company_rc }}
+        @endif
+        @if($issuer->company_address)
+            <br>{{ $issuer->company_address }}
+        @endif
     </div>
 
     <div class="content">
@@ -76,15 +91,15 @@
                             <br><span style="color:#9ca3af;">Cycle {{ $invoice->subscription->billing_cycle === 'yearly' ? 'annuel' : 'mensuel' }}</span>
                         @endif
                     </td>
-                    <td style="text-align:right;">{{ number_format((float) $invoice->amount, 3) }} {{ $invoice->currency }}</td>
+                    <td style="text-align:right;">{{ \App\Support\Money::tnd($invoice->amount, $invoice->currency) }}</td>
                 </tr>
             </tbody>
         </table>
 
         <table class="totals">
-            <tr><td>Sous-total</td><td style="text-align:right;">{{ number_format((float) $invoice->amount, 3) }} {{ $invoice->currency }}</td></tr>
-            <tr><td>TVA</td><td style="text-align:right;">{{ number_format((float) $invoice->tax_amount, 3) }} {{ $invoice->currency }}</td></tr>
-            <tr class="grand"><td>Total</td><td style="text-align:right;">{{ number_format((float) $invoice->total_amount, 3) }} {{ $invoice->currency }}</td></tr>
+            <tr><td>Sous-total</td><td style="text-align:right;">{{ \App\Support\Money::tnd($invoice->amount, $invoice->currency) }}</td></tr>
+            <tr><td>TVA</td><td style="text-align:right;">{{ \App\Support\Money::tnd($invoice->tax_amount, $invoice->currency) }}</td></tr>
+            <tr class="grand"><td>Total</td><td style="text-align:right;">{{ \App\Support\Money::tnd($invoice->total_amount, $invoice->currency) }}</td></tr>
         </table>
 
         @if($invoice->status === 'paid' && $invoice->paid_at)

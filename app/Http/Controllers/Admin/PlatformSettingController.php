@@ -22,6 +22,10 @@ class PlatformSettingController extends Controller
     public function update(Request $request): JsonResponse
     {
         $v = $request->validate([
+            'company_name'         => ['sometimes', 'nullable', 'string', 'max:150'],
+            'company_mf'           => ['sometimes', 'nullable', 'string', 'max:50'],
+            'company_rc'           => ['sometimes', 'nullable', 'string', 'max:50'],
+            'company_address'      => ['sometimes', 'nullable', 'string'],
             'flouci_enabled'       => ['sometimes', 'boolean'],
             'flouci_app_token'     => ['sometimes', 'nullable', 'string', 'max:255'],
             'flouci_app_secret'    => ['sometimes', 'nullable', 'string', 'max:255'],

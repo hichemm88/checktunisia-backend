@@ -6,6 +6,10 @@ use Illuminate\Database\Eloquent\Model;
 class PlatformSetting extends Model
 {
     protected $fillable = [
+        'company_name',
+        'company_mf',
+        'company_rc',
+        'company_address',
         'flouci_enabled',
         'flouci_app_token',
         'flouci_app_secret',
@@ -29,10 +33,11 @@ class PlatformSetting extends Model
     public static function get(): self
     {
         return static::firstOrCreate(['id' => 1], [
+            'company_name'        => 'Kasbahost Sarl',
             'flouci_enabled'      => false,
             'virement_enabled'    => true,
             'virement_bank_name'  => 'Banque de Tunisie',
-            'virement_beneficiary'=> 'CHECKTUNISIA',
+            'virement_beneficiary'=> 'Kasbahost Sarl',
         ]);
     }
 
@@ -40,6 +45,10 @@ class PlatformSetting extends Model
     public function toPublicArray(): array
     {
         return [
+            'company_name'         => $this->company_name,
+            'company_mf'           => $this->company_mf,
+            'company_rc'           => $this->company_rc,
+            'company_address'      => $this->company_address,
             'flouci_enabled'       => $this->flouci_enabled,
             'virement_enabled'     => $this->virement_enabled,
             'virement_rib'         => $this->virement_rib,

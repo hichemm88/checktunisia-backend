@@ -193,9 +193,10 @@ class SubscriptionAdminController extends Controller {
         $org = $invoice->subscription?->organization;
 
         return \Barryvdh\DomPDF\Facade\Pdf::loadView('pdf.invoice', [
-            'invoice' => $invoice,
-            'org'     => $org,
-            'plan'    => $invoice->subscription?->plan,
+            'invoice'  => $invoice,
+            'org'      => $org,
+            'plan'     => $invoice->subscription?->plan,
+            'issuer'   => \App\Models\PlatformSetting::get(),
         ])->download("facture-{$invoice->invoice_number}.pdf");
     }
 
@@ -215,7 +216,7 @@ class SubscriptionAdminController extends Controller {
             'plan_name'  => $sub?->plan?->name ?? '—',
             'expires_at' => $sub?->expires_at?->format('d/m/Y') ?? '—',
             'credentials_box' => \App\Services\Email\SystemMailer::amountBox(
-                number_format((float) $invoice->total_amount, 3).' '.$invoice->currency,
+                \App\Support\Money::tnd($invoice->total_amount, $invoice->currency),
                 $invoice->invoice_number,
             ),
         ]);
