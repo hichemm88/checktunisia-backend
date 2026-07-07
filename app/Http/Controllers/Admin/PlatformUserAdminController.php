@@ -67,14 +67,15 @@ class PlatformUserAdminController extends Controller
         ]);
 
         $hotel = Hotel::findOrFail($v['hotel_id']);
-        $tempPassword = Str::random(12);
 
-        $user = DB::transaction(function () use ($v, $hotel, $tempPassword) {
+        $user = DB::transaction(function () use ($v, $hotel) {
             $u = User::create([
                 'first_name'        => $v['first_name'],
                 'last_name'         => $v['last_name'],
                 'email'             => $v['email'],
-                'password'          => Hash::make($tempPassword),
+                // Unusable random password — the account has no real credential
+                // until the invitee sets one via the emailed set-password link.
+                'password'          => Hash::make(Str::random(40)),
                 'status'            => 'active',
                 'email_verified_at' => now(),
             ]);
@@ -89,8 +90,7 @@ class PlatformUserAdminController extends Controller
             'last_name'  => $user->last_name,
             'hotel_name' => $hotel->name,
             'role_label' => $v['role'] === 'hotel_admin' ? 'Administrateur' : 'Réceptionniste',
-            'credentials_box' => SystemMailer::credentialsBox($user->email, $tempPassword),
-            'cta_button'      => SystemMailer::ctaButton(SystemMailer::loginUrl()),
+            'cta_button' => SystemMailer::ctaButton(SystemMailer::issueSetPasswordLink($user), 'Définir mon mot de passe'),
         ]);
 
         return response()->json(['data' => ['id' => $user->id, 'email' => $user->email, 'role' => $user->primary_role]], 201);
@@ -143,8 +143,9 @@ class PlatformUserAdminController extends Controller
     {
         $user = User::role(['hotel_admin', 'receptionist'])->with('hotels')->findOrFail($id);
         $hotel = $user->hotels->first();
-        $tempPassword = Str::random(12);
-        $user->update(['password' => Hash::make($tempPassword)]);
+        // Invalidate whatever credential existed before (never set, or a stale
+        // temp password from an earlier invite) so only the new link works.
+        $user->update(['password' => Hash::make(Str::random(40))]);
         AuditLogger::log('user.invite_resent', $user);
 
         $sent = SystemMailer::send('welcome', $user->email, [
@@ -152,8 +153,7 @@ class PlatformUserAdminController extends Controller
             'last_name'  => $user->last_name,
             'hotel_name' => $user->hotels->pluck('name')->implode(', ') ?: ($hotel->name ?? '—'),
             'role_label' => $user->primary_role === 'hotel_admin' ? 'Administrateur' : 'Réceptionniste',
-            'credentials_box' => SystemMailer::credentialsBox($user->email, $tempPassword),
-            'cta_button'      => SystemMailer::ctaButton(SystemMailer::loginUrl()),
+            'cta_button' => SystemMailer::ctaButton(SystemMailer::issueSetPasswordLink($user), 'Définir mon mot de passe'),
         ]);
 
         return response()->json(['data' => ['id' => $user->id, 'email_sent' => $sent]]);

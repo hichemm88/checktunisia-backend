@@ -51,15 +51,14 @@ class SystemMailer
             'welcome' => [
                 'first_name' => 'Nour', 'last_name' => 'Kaouach', 'hotel_name' => 'Dar Omi',
                 'role_label' => 'Réceptionniste',
-                'credentials_box' => self::credentialsBox('nour@example.tn', 'xK9mPq2vRtLz'),
-                'cta_button' => self::ctaButton(self::loginUrl()),
+                'cta_button' => self::ctaButton(self::frontendUrl('/set-password?email=nour%40example.tn&token=exemple'), 'Définir mon mot de passe'),
             ],
             'account_suspended' => ['name' => 'Kasbahost SARL', 'reason' => "Facture impayée depuis 30 jours"],
             'payment_received' => [
-                'name' => 'Kasbahost SARL', 'plan_name' => 'Medium', 'expires_at' => '31/12/2026',
-                'credentials_box' => self::amountBox('250.000 TND', 'INV-2026-0042'),
+                'name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'expires_at' => '31/12/2026',
+                'credentials_box' => self::amountBox(\App\Support\Money::tnd(119), 'INV-2026-0042'),
             ],
-            'subscription_reminder' => ['name' => 'Kasbahost SARL', 'plan_name' => 'Medium', 'expires_at' => '15/07/2026', 'days_remaining' => '7'],
+            'subscription_reminder' => ['name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'expires_at' => '15/07/2026', 'days_remaining' => '7'],
             default => [],
         };
 
@@ -81,9 +80,28 @@ class SystemMailer
         return preg_replace('/\{\{\w+\}\}/', '', $text);
     }
 
+    public static function frontendUrl(string $path = ''): string
+    {
+        return rtrim(env('FRONTEND_URL', 'https://checktunisia.vercel.app'), '/').$path;
+    }
+
     public static function loginUrl(): string
     {
-        return rtrim(env('FRONTEND_URL', 'https://checktunisia.vercel.app'), '/').'/login';
+        return self::frontendUrl('/login');
+    }
+
+    /**
+     * Issues a Laravel password-reset token for a newly-invited (or
+     * re-invited) user and returns the link to embed in the welcome email —
+     * used instead of emailing a temporary password in plaintext. Reuses
+     * the same token/table AuthController::resetPassword() already
+     * validates, so "set my first password" and "reset a forgotten one"
+     * are the same operation on the backend.
+     */
+    public static function issueSetPasswordLink(\App\Models\User $user): string
+    {
+        $token = \Illuminate\Support\Facades\Password::createToken($user);
+        return self::frontendUrl('/set-password?email='.urlencode($user->email).'&token='.$token);
     }
 
     public static function ctaButton(string $url, string $label = 'Se connecter'): string
@@ -91,11 +109,6 @@ class SystemMailer
         return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 8px;"><tr><td align="center">'
             .'<a href="'.htmlspecialchars($url, ENT_QUOTES, 'UTF-8').'" style="display:inline-block;background-color:#5346A8;color:#ffffff !important;text-decoration:none;padding:12px 28px;border-radius:10px;font-size:14px;font-weight:600;letter-spacing:0.2px;font-family:\'IBM Plex Sans\',-apple-system,\'Segoe UI\',Arial,sans-serif;">'
             .htmlspecialchars($label, ENT_QUOTES, 'UTF-8').' &rarr;</a></td></tr></table>';
-    }
-
-    public static function credentialsBox(string $email, string $tempPassword): string
-    {
-        return self::twoRowBox('Email', $email, 'Mot de passe temporaire', $tempPassword);
     }
 
     public static function amountBox(string $amount, string $invoiceNumber): string

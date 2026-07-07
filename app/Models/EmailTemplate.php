@@ -11,14 +11,13 @@ class EmailTemplate extends Model
     /** Sensible built-in content so every template works before an admin ever customizes it. */
     public const DEFAULTS = [
         'welcome' => [
-            'subject' => "Bienvenue sur Qayed — vos identifiants de connexion",
+            'subject' => "Bienvenue sur Qayed — activez votre compte",
             'body_html' => <<<'HTML'
 <p>Bonjour <strong>{{first_name}} {{last_name}}</strong>,</p>
 <p>Un compte a été créé pour vous sur <strong>Qayed</strong> en tant que <strong>{{role_label}}</strong> de l'établissement <strong>{{hotel_name}}</strong>.</p>
-<p>Voici vos identifiants de connexion :</p>
-{{credentials_box}}
+<p>Pour activer votre compte, définissez votre mot de passe en cliquant sur le bouton ci-dessous :</p>
 {{cta_button}}
-<div class="warning">⚠️&nbsp; Pour des raisons de sécurité, veuillez modifier votre mot de passe dès votre première connexion.</div>
+<div class="warning">⚠️&nbsp; Ce lien est valable 48 heures et à usage unique.</div>
 HTML,
         ],
         'account_suspended' => [

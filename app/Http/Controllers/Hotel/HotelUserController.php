@@ -67,14 +67,15 @@ class HotelUserController extends Controller {
         ]);
 
         $targetHotelIds = !empty($v['hotel_ids']) ? $v['hotel_ids'] : [$hotel->id];
-        $tempPassword = Str::random(12);
 
-        $user = DB::transaction(function() use ($v, $targetHotelIds, $tempPassword) {
+        $user = DB::transaction(function() use ($v, $targetHotelIds) {
             $u = User::create([
                 'first_name'        => $v['first_name'],
                 'last_name'         => $v['last_name'],
                 'email'             => $v['email'],
-                'password'          => Hash::make($tempPassword),
+                // Unusable random password — the account has no real credential
+                // until the invitee sets one via the emailed set-password link.
+                'password'          => Hash::make(Str::random(40)),
                 'status'            => 'active',
                 'email_verified_at' => now(),
             ]);
@@ -85,7 +86,7 @@ class HotelUserController extends Controller {
         });
 
         $assignedNames = Hotel::whereIn('id', $targetHotelIds)->pluck('name')->implode(', ');
-        $this->sendWelcomeEmail($user, $tempPassword, $assignedNames, $v['role']);
+        $this->sendWelcomeEmail($user, $assignedNames, $v['role']);
 
         return response()->json(['data' => [
             'id'    => $user->id,
@@ -155,11 +156,12 @@ class HotelUserController extends Controller {
         $hotel = $user->hotels->first() ?? app('tenant');
         $assignedNames = $user->hotels->pluck('name')->implode(', ') ?: $hotel->name;
 
-        $tempPassword = Str::random(12);
-        $user->update(['password' => Hash::make($tempPassword)]);
+        // Invalidate whatever credential existed before (never set, or a stale
+        // temp password from an earlier invite) so only the new link works.
+        $user->update(['password' => Hash::make(Str::random(40))]);
         AuditLogger::log('user.invite_resent', $user, newValues: $user->only(['email', 'first_name', 'last_name']), hotelId: $hotel->id);
 
-        $sent = $this->sendWelcomeEmail($user, $tempPassword, $assignedNames, $user->primary_role);
+        $sent = $this->sendWelcomeEmail($user, $assignedNames, $user->primary_role);
 
         return response()->json(['data' => [
             'id'         => $user->id,
@@ -167,14 +169,16 @@ class HotelUserController extends Controller {
         ]]);
     }
 
-    private function sendWelcomeEmail(User $user, string $tempPassword, string $hotelName, string $role): bool {
+    private function sendWelcomeEmail(User $user, string $hotelName, string $role): bool {
         return \App\Services\Email\SystemMailer::send('welcome', $user->email, [
             'first_name' => $user->first_name,
             'last_name'  => $user->last_name,
             'hotel_name' => $hotelName,
             'role_label' => $role === 'hotel_admin' ? 'Administrateur' : 'Réceptionniste',
-            'credentials_box' => \App\Services\Email\SystemMailer::credentialsBox($user->email, $tempPassword),
-            'cta_button'      => \App\Services\Email\SystemMailer::ctaButton(\App\Services\Email\SystemMailer::loginUrl()),
+            'cta_button' => \App\Services\Email\SystemMailer::ctaButton(
+                \App\Services\Email\SystemMailer::issueSetPasswordLink($user),
+                'Définir mon mot de passe',
+            ),
         ]);
     }
 }
