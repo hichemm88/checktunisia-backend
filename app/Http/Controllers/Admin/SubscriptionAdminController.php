@@ -162,6 +162,24 @@ class SubscriptionAdminController extends Controller {
         return response()->json(['data' => $invoice->fresh()]);
     }
 
+    /** Deletes an invoice (payments cascade at the DB level). Paid invoices are protected — void them instead. */
+    public function destroyInvoiceForHost(Request $request, string $hostId, string $id): JsonResponse {
+        $invoice = Invoice::whereHas('subscription', fn($q) => $q->where('organization_id', $hostId))->findOrFail($id);
+
+        if ($invoice->status === 'paid') {
+            return response()->json(['message' => 'Impossible de supprimer une facture payée — annulez-la (statut « void ») à la place.'], 422);
+        }
+
+        AuditLogger::log('invoice.deleted', $invoice, oldValues: [
+            'invoice_number' => $invoice->invoice_number,
+            'total_amount'   => (string) $invoice->total_amount,
+            'status'         => $invoice->status,
+        ]);
+        $invoice->delete();
+
+        return response()->json(null, 204);
+    }
+
     /** Admin confirms a hébergeur-declared bank transfer — marks the payment + invoice paid and sends the same confirmation as any other payment method. */
     public function validateVirement(Request $request, string $paymentId): JsonResponse
     {
