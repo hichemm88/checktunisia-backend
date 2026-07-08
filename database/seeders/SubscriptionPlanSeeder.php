@@ -13,6 +13,11 @@ class SubscriptionPlanSeeder extends Seeder {
     public static function marketingDefaults(): array {
         $cta = ['fr' => 'Essayer 7 jours gratuit', 'en' => 'Try 7 days free', 'ar' => 'جرّب 7 أيام مجانًا'];
         $perProperty = ['fr' => 'par établissement / mois', 'en' => 'per property / month', 'ar' => 'لكل مؤسسة / شهريًا'];
+        $perPropertyYearly = [
+            'fr' => 'par établissement / an · 12 mois au prix de 11',
+            'en' => 'per property / year · 12 months for the price of 11',
+            'ar' => 'لكل مؤسسة / سنويًا · 12 شهرًا بسعر 11',
+        ];
 
         return [
             'essentiel' => [
@@ -23,7 +28,8 @@ class SubscriptionPlanSeeder extends Seeder {
                     'en' => 'To get started — small properties with a moderate flow of arrivals.',
                     'ar' => 'للانطلاق — مؤسسات إقامة صغيرة بعدد وافدين معتدل.',
                 ],
-                'price_note'   => $perProperty,
+                'price_note'        => $perProperty,
+                'price_note_yearly' => $perPropertyYearly,
                 'badge'        => null,
                 'featured'     => false,
                 'cta_label'    => $cta,
@@ -46,7 +52,8 @@ class SubscriptionPlanSeeder extends Seeder {
                     'en' => 'For hotels and guest houses with a steady flow of arrivals.',
                     'ar' => 'للفنادق ودور الضيافة ذات تدفق منتظم من الوافدين.',
                 ],
-                'price_note'   => $perProperty,
+                'price_note'        => $perProperty,
+                'price_note_yearly' => $perPropertyYearly,
                 'badge'        => ['fr' => 'Le plus choisi', 'en' => 'Most popular', 'ar' => 'الأكثر اختيارًا'],
                 'featured'     => true,
                 'cta_label'    => $cta,
@@ -74,6 +81,11 @@ class SubscriptionPlanSeeder extends Seeder {
                     'en' => 'per company / month · all properties included',
                     'ar' => 'لكل شركة / شهريًا · جميع المؤسسات مشمولة',
                 ],
+                'price_note_yearly' => [
+                    'fr' => 'par société / an · tous établissements · 12 mois au prix de 11',
+                    'en' => 'per company / year · all properties · 12 months for the price of 11',
+                    'ar' => 'لكل شركة / سنويًا · جميع المؤسسات · 12 شهرًا بسعر 11',
+                ],
                 'badge'        => null,
                 'featured'     => false,
                 'cta_label'    => $cta,
@@ -93,9 +105,10 @@ class SubscriptionPlanSeeder extends Seeder {
     public function run(): void {
         $marketing = self::marketingDefaults();
         $plans = [
-            ['name'=>'Essentiel','slug'=>'essentiel','scope'=>'hotel','min_rooms'=>1,'max_rooms'=>5,'price_monthly'=>59.000,'price_yearly'=>590.000,'currency'=>'TND','features'=>['max_users'=>2,'ocr_scans_per_month'=>100],'sort_order'=>1],
-            ['name'=>'Pro','slug'=>'pro','scope'=>'hotel','min_rooms'=>6,'max_rooms'=>20,'price_monthly'=>119.000,'price_yearly'=>1190.000,'currency'=>'TND','features'=>['max_users'=>5,'ocr_scans_per_month'=>-1],'sort_order'=>2],
-            ['name'=>'Multi-sites','slug'=>'multi-sites','scope'=>'organization','min_rooms'=>1,'max_rooms'=>null,'price_monthly'=>199.000,'price_yearly'=>1990.000,'currency'=>'TND','features'=>['max_users'=>-1,'ocr_scans_per_month'=>-1],'sort_order'=>3],
+            // price_yearly null = règle "1 mois offert" (11 × mensuel) via effective_price_yearly
+            ['name'=>'Essentiel','slug'=>'essentiel','scope'=>'hotel','min_rooms'=>1,'max_rooms'=>5,'price_monthly'=>59.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>2,'ocr_scans_per_month'=>100],'sort_order'=>1],
+            ['name'=>'Pro','slug'=>'pro','scope'=>'hotel','min_rooms'=>6,'max_rooms'=>20,'price_monthly'=>119.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>5,'ocr_scans_per_month'=>-1],'sort_order'=>2],
+            ['name'=>'Multi-sites','slug'=>'multi-sites','scope'=>'organization','min_rooms'=>1,'max_rooms'=>null,'price_monthly'=>199.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>-1,'ocr_scans_per_month'=>-1],'sort_order'=>3],
         ];
         foreach ($plans as $plan) {
             $plan['marketing'] = $marketing[$plan['slug']] ?? null;
