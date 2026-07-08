@@ -30,9 +30,7 @@ class PaymentController extends Controller
             'invoice_id' => ['required', 'uuid'],
         ]);
 
-        $hotel = $request->user()->hotel();
-
-        $invoice = Invoice::where('hotel_id', $hotel->id)
+        $invoice = $this->scopedInvoices($request)
             ->where('id', $request->invoice_id)
             ->whereIn('status', ['sent', 'overdue'])
             ->firstOrFail();
@@ -76,7 +74,7 @@ class PaymentController extends Controller
 
         $payment = Payment::create([
             'invoice_id'           => $invoice->id,
-            'hotel_id'             => $hotel->id,
+            'hotel_id'             => $invoice->hotel_id,
             'provider'             => 'flouci',
             'provider_payment_id'  => $result['payment_id'],
             'provider_tracking_id' => $trackingId,
@@ -106,8 +104,8 @@ class PaymentController extends Controller
      */
     public function verify(Request $request, string $id): JsonResponse
     {
-        $hotel   = $request->user()->hotel();
-        $payment = Payment::where('hotel_id', $hotel->id)->where('id', $id)->firstOrFail();
+        $invoiceIds = $this->scopedInvoices($request)->pluck('id');
+        $payment    = Payment::where('id', $id)->whereIn('invoice_id', $invoiceIds)->firstOrFail();
 
         // Already resolved — return cached status
         if (in_array($payment->status, ['completed', 'failed', 'expired'])) {
@@ -165,8 +163,6 @@ class PaymentController extends Controller
     /**
      * Hébergeur declares a bank transfer for a pending invoice — creates a
      * Payment(provider=virement, status=pending) awaiting admin validation.
-     * Scoped by organization rather than hotel_id: admin-created invoices are
-     * org-level (hotel_id null), unlike the Flouci flow above.
      */
     public function declareVirement(Request $request): JsonResponse
     {
@@ -176,12 +172,8 @@ class PaymentController extends Controller
             'date'       => ['required', 'date', 'before_or_equal:today'],
         ]);
 
-        $user = $request->user();
-        $org  = $user->organization;
-
-        $invoice = $org
-            ? Invoice::whereHas('subscription', fn($q) => $q->where('organization_id', $org->id))->findOrFail($v['invoice_id'])
-            : Invoice::where('hotel_id', $user->hotel()?->id)->findOrFail($v['invoice_id']);
+        $user    = $request->user();
+        $invoice = $this->scopedInvoices($request)->findOrFail($v['invoice_id']);
 
         if ($invoice->isPaid()) {
             return response()->json([
@@ -210,5 +202,23 @@ class PaymentController extends Controller
         AuditLogger::log('payment.virement_declared', $invoice, newValues: ['reference' => $v['reference']], actor: $user);
 
         return response()->json(['data' => ['id' => $payment->id, 'status' => $payment->status]], 201);
+    }
+
+    /**
+     * Invoices belonging to the caller's own organization (or hotel, legacy) —
+     * never another tenant's. Admin-created invoices are org-level
+     * (hotel_id null), so this must not scope by hotel_id directly.
+     */
+    private function scopedInvoices(Request $request)
+    {
+        $user = $request->user();
+        $org  = $user->organization;
+
+        if ($org) {
+            return Invoice::whereHas('subscription', fn($q) => $q->where('organization_id', $org->id));
+        }
+
+        $hotel = $user->hotel();
+        return Invoice::where('hotel_id', $hotel?->id ?? '00000000-0000-0000-0000-000000000000');
     }
 }

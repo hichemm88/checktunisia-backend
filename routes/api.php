@@ -125,10 +125,6 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
                 Route::post('check-ins/{check_in_id}/scans',                [ScanController::class, 'store']);
             });
 
-            // Payments (Flouci) — hotel-scoped (uses hotel for invoice lookup)
-            Route::post('payments/initiate',   [PaymentController::class, 'initiate']);
-            Route::get('payments/{id}/verify', [PaymentController::class, 'verify']);
-
             // Hotel profile (read) — both roles need this to print fiches de police
             Route::get('profile', [HotelProfileController::class, 'show']);
 
@@ -174,7 +170,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('subscription', [SubscriptionController::class, 'current']);
         });
 
-    // Invoice history + bank-transfer declaration — hotel_admin only, matching
+    // Invoice history + payment (Flouci/virement) — hotel_admin only, matching
     // the billing-tab access level elsewhere. Org-scoped, not tenant-scoped:
     // admin-created invoices are org-level and must be reachable before any
     // property exists.
@@ -183,6 +179,8 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
         ->group(function () {
             Route::get('invoices',                  [SubscriptionController::class, 'invoices']);
             Route::get('invoices/{id}/pdf',          [SubscriptionController::class, 'downloadInvoicePdf']);
+            Route::post('payments/initiate',         [PaymentController::class, 'initiate']);
+            Route::get('payments/{id}/verify',       [PaymentController::class, 'verify']);
             Route::post('payments/declare-virement', [PaymentController::class, 'declareVirement']);
         });
 
