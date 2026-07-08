@@ -23,12 +23,24 @@
         <env name="APP_ENV"           value="testing"/>
         <env name="APP_KEY"           value="base64:testingtestingtestingtestingtestingtesting="/>
         <env name="APP_DEBUG"         value="true"/>
-        <env name="DB_CONNECTION"     value="pgsql"/>
-        <env name="DB_HOST"           value="127.0.0.1"/>
-        <env name="DB_PORT"           value="5432"/>
-        <env name="DB_DATABASE"       value="qayed_test"/>
-        <env name="DB_USERNAME"       value="qayed"/>
-        <env name="DB_PASSWORD"       value="secret"/>
+        <!-- <server> + force : dans le conteneur Docker, APP_ENV/DB_* existent comme
+             vraies variables d'environnement, donc présentes dans $_SERVER — que
+             Laravel lit en priorité. <env force> ne met à jour que $_ENV/getenv,
+             et les tests (RefreshDatabase) s'exécutaient alors sur la base de DEV
+             et la vidaient à chaque run. -->
+        <server name="APP_ENV"        value="testing"    force="true"/>
+        <server name="DB_CONNECTION"  value="pgsql"      force="true"/>
+        <server name="DB_HOST"        value="postgres"   force="true"/>
+        <server name="DB_PORT"        value="5432"       force="true"/>
+        <server name="DB_DATABASE"    value="qayed_test" force="true"/>
+        <server name="DB_USERNAME"    value="qayed"      force="true"/>
+        <server name="DB_PASSWORD"    value="secret"     force="true"/>
+        <env name="DB_CONNECTION"     value="pgsql"      force="true"/>
+        <env name="DB_HOST"           value="postgres"   force="true"/>
+        <env name="DB_PORT"           value="5432"       force="true"/>
+        <env name="DB_DATABASE"       value="qayed_test" force="true"/>
+        <env name="DB_USERNAME"       value="qayed"      force="true"/>
+        <env name="DB_PASSWORD"       value="secret"     force="true"/>
         <env name="CACHE_STORE"       value="array"/>
         <env name="SESSION_DRIVER"    value="array"/>
         <env name="QUEUE_CONNECTION"  value="sync"/>
