@@ -128,6 +128,17 @@ class SubscriptionAdminController extends Controller {
         $v['created_by']     = $request->user()->id;
         $invoice = Invoice::create($v);
 
+        $org = $sub->organization;
+        if ($org?->contact_email) {
+            \App\Services\Email\SystemMailer::send('invoice_available', $org->contact_email, [
+                'name'           => $org->name,
+                'plan_name'      => $sub->plan?->name ?? '—',
+                'invoice_number' => $invoice->invoice_number,
+                'credentials_box' => \App\Services\Email\SystemMailer::amountBox(\App\Support\Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number),
+                'cta_button'      => \App\Services\Email\SystemMailer::ctaButton(\App\Services\Email\SystemMailer::frontendUrl('/hotel/settings'), 'Voir la facture'),
+            ]);
+        }
+
         return response()->json(['data' => $invoice], 201);
     }
 
@@ -149,6 +160,39 @@ class SubscriptionAdminController extends Controller {
         }
 
         return response()->json(['data' => $invoice->fresh()]);
+    }
+
+    /** Admin confirms a hébergeur-declared bank transfer — marks the payment + invoice paid and sends the same confirmation as any other payment method. */
+    public function validateVirement(Request $request, string $paymentId): JsonResponse
+    {
+        $payment = \App\Models\Payment::where('provider', 'virement')->where('status', 'pending')->findOrFail($paymentId);
+        $invoice = $payment->invoice;
+
+        $payment->update(['completed_at' => now(), 'status' => 'completed']);
+        $invoice->update([
+            'status'            => 'paid',
+            'paid_at'           => now(),
+            'payment_method'    => 'virement',
+            'payment_reference' => $payment->declared_reference,
+        ]);
+
+        AuditLogger::log('payment.virement_validated', $payment, newValues: ['invoice_id' => $invoice->id]);
+        $this->notifyPaymentReceived($invoice->fresh());
+
+        return response()->json(['data' => ['id' => $payment->id, 'status' => 'completed']]);
+    }
+
+    /** Admin rejects a hébergeur-declared bank transfer (wrong amount, unmatched reference, etc.). */
+    public function rejectVirement(Request $request, string $paymentId): JsonResponse
+    {
+        $v = $request->validate(['reason' => ['required', 'string', 'max:500']]);
+
+        $payment = \App\Models\Payment::where('provider', 'virement')->where('status', 'pending')->findOrFail($paymentId);
+        $payment->update(['status' => 'failed', 'provider_response' => ['rejection_reason' => $v['reason']]]);
+
+        AuditLogger::log('payment.virement_rejected', $payment, newValues: ['reason' => $v['reason']]);
+
+        return response()->json(['data' => ['id' => $payment->id, 'status' => 'failed']]);
     }
 
     /** Platform-wide invoice list for the Facturation tab, filterable by hébergeur/statut/période. */

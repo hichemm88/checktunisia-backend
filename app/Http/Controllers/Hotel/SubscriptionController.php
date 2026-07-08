@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Hotel;
 
 use App\Http\Controllers\Controller;
+use App\Models\Invoice;
 use App\Models\Subscription;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -50,5 +51,57 @@ class SubscriptionController extends Controller
                 'days_remaining' => $sub->days_remaining,
             ],
         ]);
+    }
+
+    /** Invoice history for the authenticated user's own organisation (or hotel, legacy). */
+    public function invoices(Request $request): JsonResponse
+    {
+        $invoices = $this->scopedInvoices($request)
+            ->orderByDesc('created_at')
+            ->paginate($request->integer('per_page', 20));
+
+        return response()->json([
+            'data' => $invoices->map(fn(Invoice $inv) => [
+                'id'             => $inv->id,
+                'invoice_number' => $inv->invoice_number,
+                'amount'         => $inv->amount,
+                'tax_amount'     => $inv->tax_amount,
+                'total_amount'   => $inv->total_amount,
+                'currency'       => $inv->currency,
+                'status'         => $inv->status,
+                'due_at'         => $inv->due_at,
+                'paid_at'        => $inv->paid_at,
+                'created_at'     => $inv->created_at,
+            ]),
+            'meta' => ['total' => $invoices->total(), 'current_page' => $invoices->currentPage(), 'per_page' => $invoices->perPage()],
+        ]);
+    }
+
+    public function downloadInvoicePdf(Request $request, string $id)
+    {
+        $invoice = $this->scopedInvoices($request)
+            ->with(['subscription.organization', 'subscription.plan'])
+            ->findOrFail($id);
+
+        return \Barryvdh\DomPDF\Facade\Pdf::loadView('pdf.invoice', [
+            'invoice' => $invoice,
+            'org'     => $invoice->subscription?->organization,
+            'plan'    => $invoice->subscription?->plan,
+            'issuer'  => \App\Models\PlatformSetting::get(),
+        ])->download("facture-{$invoice->invoice_number}.pdf");
+    }
+
+    /** Invoices belonging to the caller's own organization (or hotel, legacy) — never another tenant's. */
+    private function scopedInvoices(Request $request)
+    {
+        $user = $request->user();
+        $org  = $user->organization;
+
+        if ($org) {
+            return Invoice::whereHas('subscription', fn($q) => $q->where('organization_id', $org->id));
+        }
+
+        $hotel = $user->hotel();
+        return Invoice::where('hotel_id', $hotel?->id ?? '00000000-0000-0000-0000-000000000000');
     }
 }

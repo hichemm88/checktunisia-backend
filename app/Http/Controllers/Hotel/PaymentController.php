@@ -161,4 +161,54 @@ class PaymentController extends Controller
             ],
         ]);
     }
+
+    /**
+     * Hébergeur declares a bank transfer for a pending invoice — creates a
+     * Payment(provider=virement, status=pending) awaiting admin validation.
+     * Scoped by organization rather than hotel_id: admin-created invoices are
+     * org-level (hotel_id null), unlike the Flouci flow above.
+     */
+    public function declareVirement(Request $request): JsonResponse
+    {
+        $v = $request->validate([
+            'invoice_id' => ['required', 'uuid'],
+            'reference'  => ['required', 'string', 'max:100'],
+            'date'       => ['required', 'date', 'before_or_equal:today'],
+        ]);
+
+        $user = $request->user();
+        $org  = $user->organization;
+
+        $invoice = $org
+            ? Invoice::whereHas('subscription', fn($q) => $q->where('organization_id', $org->id))->findOrFail($v['invoice_id'])
+            : Invoice::where('hotel_id', $user->hotel()?->id)->findOrFail($v['invoice_id']);
+
+        if ($invoice->isPaid()) {
+            return response()->json([
+                'errors' => [['code' => 'ALREADY_PAID', 'message' => 'Cette facture est déjà réglée.', 'field' => null]],
+            ], 422);
+        }
+
+        $existing = Payment::where('invoice_id', $invoice->id)->where('status', 'pending')->first();
+        if ($existing) {
+            return response()->json([
+                'errors' => [['code' => 'ALREADY_DECLARED', 'message' => 'Un virement est déjà déclaré pour cette facture, en attente de validation.', 'field' => null]],
+            ], 422);
+        }
+
+        $payment = Payment::create([
+            'invoice_id'         => $invoice->id,
+            'hotel_id'           => $invoice->hotel_id,
+            'provider'           => 'virement',
+            'declared_reference' => $v['reference'],
+            'declared_at'        => $v['date'],
+            'status'             => 'pending',
+            'amount'             => $invoice->total_amount,
+            'currency'           => $invoice->currency,
+        ]);
+
+        AuditLogger::log('payment.virement_declared', $invoice, newValues: ['reference' => $v['reference']], actor: $user);
+
+        return response()->json(['data' => ['id' => $payment->id, 'status' => $payment->status]], 201);
+    }
 }

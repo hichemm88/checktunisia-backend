@@ -174,6 +174,18 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('subscription', [SubscriptionController::class, 'current']);
         });
 
+    // Invoice history + bank-transfer declaration — hotel_admin only, matching
+    // the billing-tab access level elsewhere. Org-scoped, not tenant-scoped:
+    // admin-created invoices are org-level and must be reachable before any
+    // property exists.
+    Route::prefix('hotel')
+        ->middleware(['role:hotel_admin'])
+        ->group(function () {
+            Route::get('invoices',                  [SubscriptionController::class, 'invoices']);
+            Route::get('invoices/{id}/pdf',          [SubscriptionController::class, 'downloadInvoicePdf']);
+            Route::post('payments/declare-virement', [PaymentController::class, 'declareVirement']);
+        });
+
     // Onboarding + org management — hotel_admin only, no tenant needed
     Route::prefix('hotel')
         ->middleware(['role:hotel_admin'])
@@ -274,6 +286,11 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::patch('hosts/{host_id}/invoices/{id}',      [SubscriptionAdminController::class, 'updateInvoiceForHost']);
             Route::get('hosts/{host_id}/invoices/{id}/pdf',    [SubscriptionAdminController::class, 'downloadInvoicePdf']);
             Route::get('invoices',                             [SubscriptionAdminController::class, 'allInvoices']);
+
+            // Manual bank-transfer (virement) validation — hébergeur declares via
+            // POST /hotel/payments/declare-virement, admin confirms or rejects here.
+            Route::post('payments/{payment_id}/validate-virement', [SubscriptionAdminController::class, 'validateVirement']);
+            Route::post('payments/{payment_id}/reject-virement',   [SubscriptionAdminController::class, 'rejectVirement']);
 
             // Authority users
             Route::get('authority-users',       [AuthorityAdminController::class, 'index']);

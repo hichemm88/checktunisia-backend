@@ -6,6 +6,7 @@ use App\Models\Hotel;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Notifications\SubscriptionExpiringNotification;
+use App\Services\Audit\AuditLogger;
 use App\Services\Email\SystemMailer;
 use Illuminate\Console\Command;
 
@@ -36,6 +37,7 @@ class NotifyExpiringSubscriptions extends Command
                     $admin->notify(new SubscriptionExpiringNotification($hotel, $sub, $days));
                 }
 
+                AuditLogger::log('subscription.reminder_sent', $sub, newValues: ['days_remaining' => $days], hotelId: $hotel->id);
                 $this->line("Notified hotel {$hotel->name} — {$days}d remaining.");
             }
         }
@@ -65,6 +67,7 @@ class NotifyExpiringSubscriptions extends Command
                     'cta_button' => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), 'Voir les abonnements'),
                 ]);
 
+                AuditLogger::log('subscription.trial_reminder_sent', $sub, newValues: ['days_remaining' => $days]);
                 $this->line("Notified trial org {$org->name} — {$days}d remaining.");
             }
         }

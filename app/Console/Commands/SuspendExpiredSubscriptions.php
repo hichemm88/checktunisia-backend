@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\Subscription;
 use App\Models\SubscriptionEvent;
+use App\Services\Audit\AuditLogger;
 use App\Services\Email\SystemMailer;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
@@ -23,7 +24,16 @@ class SuspendExpiredSubscriptions extends Command
         foreach ($subscriptions as $sub) {
             $wasTrial = $sub->isTrial();
             $newStatus = $wasTrial ? 'trial_expired' : 'expired';
+            $previousStatus = $sub->status;
             $sub->update(['status' => $newStatus]);
+
+            AuditLogger::log(
+                $wasTrial ? 'subscription.trial_expired' : 'subscription.expired',
+                $sub,
+                oldValues: ['status' => $previousStatus],
+                newValues: ['status' => $newStatus],
+                hotelId: $sub->hotel_id,
+            );
 
             SubscriptionEvent::create([
                 'subscription_id' => $sub->id,

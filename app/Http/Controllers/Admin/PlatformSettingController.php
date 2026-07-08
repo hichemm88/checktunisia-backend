@@ -113,7 +113,7 @@ class PlatformSettingController extends Controller
 
     public function payments(Request $request): JsonResponse
     {
-        $query = \App\Models\Payment::with(['hotel', 'invoice'])->orderByDesc('created_at');
+        $query = \App\Models\Payment::with(['hotel', 'invoice.subscription.organization'])->orderByDesc('created_at');
 
         if ($request->filled('status'))   $query->where('status', $request->status);
         if ($request->filled('provider')) $query->where('provider', $request->provider);
@@ -128,8 +128,10 @@ class PlatformSettingController extends Controller
                 'status'             => $p->status,
                 'amount'             => $p->amount,
                 'currency'           => $p->currency,
-                'hotel_name'         => $p->hotel?->name,
+                'hotel_name'         => $p->hotel?->name ?? $p->invoice?->subscription?->organization?->name,
                 'invoice_number'     => $p->invoice?->invoice_number,
+                'declared_reference' => $p->declared_reference,
+                'declared_at'        => $p->declared_at,
                 'completed_at'       => $p->completed_at,
                 'created_at'         => $p->created_at,
             ]),

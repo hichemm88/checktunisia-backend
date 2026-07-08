@@ -20,6 +20,8 @@ class Payment extends Model
         'provider',
         'provider_payment_id',
         'provider_tracking_id',
+        'declared_reference',
+        'declared_at',
         'status',
         'amount',
         'currency',
@@ -35,6 +37,7 @@ class Payment extends Model
             'amount'            => 'decimal:3',
             'expires_at'        => 'datetime',
             'completed_at'      => 'datetime',
+            'declared_at'       => 'datetime',
             'provider_response' => 'array',
         ];
     }
