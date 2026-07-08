@@ -282,6 +282,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('hosts/{host_id}/invoices',             [SubscriptionAdminController::class, 'invoicesForHost']);
             Route::post('hosts/{host_id}/invoices',            [SubscriptionAdminController::class, 'createInvoiceForHost']);
             Route::patch('hosts/{host_id}/invoices/{id}',      [SubscriptionAdminController::class, 'updateInvoiceForHost']);
+            Route::delete('hosts/{host_id}/invoices/{id}',     [SubscriptionAdminController::class, 'destroyInvoiceForHost']);
             Route::get('hosts/{host_id}/invoices/{id}/pdf',    [SubscriptionAdminController::class, 'downloadInvoicePdf']);
             Route::get('invoices',                             [SubscriptionAdminController::class, 'allInvoices']);
 
