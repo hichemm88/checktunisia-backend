@@ -24,6 +24,7 @@ use App\Http\Controllers\Authority\ExportController;
 use App\Http\Controllers\Public\PublicRegistrationController;
 use App\Http\Controllers\Public\PublicPlatformController;
 use App\Http\Controllers\Admin\PlatformSettingController;
+use App\Http\Controllers\Admin\PlanAdminController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Authority\AuthoritySearchController;
 use App\Http\Controllers\Authority\AuthorityDashboardController;
@@ -315,11 +316,11 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             // Payments (read-only ledger)
             Route::get('payments',               [PlatformSettingController::class, 'payments']);
 
-            // Subscription plans management
-            Route::get('plans',                  [PlatformSettingController::class, 'listPlans']);
-            Route::post('plans',                 [PlatformSettingController::class, 'storePlan']);
-            Route::patch('plans/{id}',           [PlatformSettingController::class, 'updatePlan']);
-            Route::delete('plans/{id}',          [PlatformSettingController::class, 'destroyPlan']);
+            // Subscription plans management (pricing + trilingual marketing content)
+            Route::get('plans',                  [PlanAdminController::class, 'index']);
+            Route::post('plans',                 [PlanAdminController::class, 'store']);
+            Route::patch('plans/{id}',           [PlanAdminController::class, 'update']);
+            Route::delete('plans/{id}',          [PlanAdminController::class, 'destroy']);
 
             // Email templates
             Route::get('emails',                 [EmailTemplateAdminController::class, 'index']);

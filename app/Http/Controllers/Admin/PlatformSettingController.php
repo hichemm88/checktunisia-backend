@@ -3,7 +3,6 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\PlatformSetting;
-use App\Models\SubscriptionPlan;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -42,71 +41,6 @@ class PlatformSettingController extends Controller
 
         // Same reasoning as show(): never round-trip flouci_app_token/flouci_app_secret.
         return response()->json(['data' => $s->fresh()->toPublicArray()]);
-    }
-
-    // ── Subscription plans ───────────────────────────────────────────────────
-
-    public function listPlans(Request $request): JsonResponse
-    {
-        $plans = SubscriptionPlan::orderBy('sort_order')->paginate($request->integer('per_page', 50));
-        return response()->json([
-            'data' => $plans->items(),
-            'meta' => ['total' => $plans->total(), 'current_page' => $plans->currentPage(), 'per_page' => $plans->perPage()],
-        ]);
-    }
-
-    public function updatePlan(Request $request, int $id): JsonResponse
-    {
-        $plan = SubscriptionPlan::findOrFail($id);
-
-        $v = $request->validate([
-            'name'          => ['sometimes', 'string', 'max:100'],
-            'min_rooms'     => ['sometimes', 'integer', 'min:1'],
-            'max_rooms'     => ['sometimes', 'nullable', 'integer', 'min:1'],
-            'price_monthly' => ['sometimes', 'numeric', 'min:0'],
-            'price_yearly'  => ['sometimes', 'nullable', 'numeric', 'min:0'],
-            'features'      => ['sometimes', 'array'],
-            'is_active'     => ['sometimes', 'boolean'],
-            'sort_order'    => ['sometimes', 'integer'],
-        ]);
-
-        $plan->update($v);
-
-        return response()->json(['data' => $plan->fresh()]);
-    }
-
-    public function storePlan(Request $request): JsonResponse
-    {
-        $v = $request->validate([
-            'name'          => ['required', 'string', 'max:100'],
-            'slug'          => ['required', 'string', 'max:100', 'unique:subscription_plans,slug'],
-            'min_rooms'     => ['required', 'integer', 'min:1'],
-            'max_rooms'     => ['nullable', 'integer', 'min:1'],
-            'price_monthly' => ['required', 'numeric', 'min:0'],
-            'price_yearly'  => ['nullable', 'numeric', 'min:0'],
-            'currency'      => ['sometimes', 'string', 'max:10'],
-            'features'      => ['sometimes', 'array'],
-        ]);
-
-        $plan = SubscriptionPlan::create(array_merge($v, [
-            'currency'   => $v['currency'] ?? 'TND',
-            'is_active'  => true,
-            'sort_order' => SubscriptionPlan::max('sort_order') + 1,
-        ]));
-
-        return response()->json(['data' => $plan], 201);
-    }
-
-    public function destroyPlan(int $id): JsonResponse
-    {
-        $plan = SubscriptionPlan::withCount('subscriptions')->findOrFail($id);
-        if ($plan->subscriptions_count > 0) {
-            return response()->json([
-                'errors' => [['code' => 'IN_USE', 'message' => "Ce pack est utilisé par {$plan->subscriptions_count} abonnement(s) — désactivez-le plutôt que de le supprimer."]],
-            ], 422);
-        }
-        $plan->delete();
-        return response()->json(null, 204);
     }
 
     // ── Payments (read-only ledger) ──────────────────────────────────────────
