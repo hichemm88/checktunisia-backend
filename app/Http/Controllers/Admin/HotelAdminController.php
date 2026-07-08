@@ -295,7 +295,7 @@ class HotelAdminController extends Controller
     {
         $q = trim((string) $request->query('q', ''));
         if (mb_strlen($q) < 2) {
-            return response()->json(['data' => ['organizations' => [], 'hotels' => [], 'users' => []]]);
+            return response()->json(['data' => ['organizations' => [], 'hotels' => [], 'users' => [], 'check_ins' => []]]);
         }
 
         $organizations = \App\Models\Organization::where('name', 'ilike', "%{$q}%")
@@ -313,10 +313,21 @@ class HotelAdminController extends Controller
             ->limit(5)->get(['id', 'first_name', 'last_name', 'email'])
             ->map(fn($u) => ['id' => $u->id, 'label' => trim("{$u->first_name} {$u->last_name}")." ({$u->email})", 'type' => 'user']);
 
+        // Matches a check-in reference (e.g. QYD-20260706-0008) — since the admin
+        // panel has no check-in detail view of its own, resolve to that check-in's
+        // établissement so the result reuses the existing hotel-detail route.
+        $checkIns = \App\Models\CheckIn::where('reference', 'ilike', "%{$q}%")
+            ->with('hotel:id,name')
+            ->limit(5)->get(['id', 'reference', 'hotel_id'])
+            ->filter(fn($c) => $c->hotel !== null)
+            ->map(fn($c) => ['id' => $c->hotel_id, 'label' => "{$c->reference} — {$c->hotel->name}", 'type' => 'check_in'])
+            ->values();
+
         return response()->json(['data' => [
             'organizations' => $organizations,
             'hotels'        => $hotels,
             'users'         => $users,
+            'check_ins'     => $checkIns,
         ]]);
     }
 }

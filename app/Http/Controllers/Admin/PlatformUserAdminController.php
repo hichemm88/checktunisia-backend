@@ -36,6 +36,10 @@ class PlatformUserAdminController extends Controller
                 ->where('organization_id', $orgId)
                 ->orWhereHas('hotels', fn($h) => $h->where('organization_id', $orgId)));
         }
+        if ($request->filled('hotel_id')) {
+            $hotelId = $request->string('hotel_id');
+            $query->whereHas('hotels', fn($h) => $h->where('hotels.id', $hotelId));
+        }
 
         $users = $query->orderBy('created_at', 'desc')->paginate($request->integer('per_page', 20));
 

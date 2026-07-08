@@ -324,6 +324,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('emails',                 [EmailTemplateAdminController::class, 'index']);
             Route::patch('emails/{key}',         [EmailTemplateAdminController::class, 'update']);
             Route::get('emails/{key}/preview',   [EmailTemplateAdminController::class, 'preview']);
+            Route::post('emails/{key}/send-test', [EmailTemplateAdminController::class, 'sendTest']);
             Route::post('emails/send-reminders', [EmailTemplateAdminController::class, 'sendReminders']);
         });
 });

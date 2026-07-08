@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Mail\SystemMail;
 use App\Models\EmailTemplate;
 use App\Models\Subscription;
 use App\Services\Email\SystemMailer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Mail;
 
 class EmailTemplateAdminController extends Controller
 {
@@ -67,6 +69,19 @@ class EmailTemplateAdminController extends Controller
         }
 
         return response()->json(['data' => SystemMailer::preview($key)]);
+    }
+
+    /** Sends the rendered preview (sample data) to the requesting admin's own email. */
+    public function sendTest(Request $request, string $key): JsonResponse
+    {
+        if (!in_array($key, self::KEYS, true)) {
+            return response()->json(['errors' => [['code' => 'NOT_FOUND', 'message' => 'Modèle inconnu.']]], 404);
+        }
+
+        $preview = SystemMailer::preview($key);
+        Mail::to($request->user()->email)->send(new SystemMail('[TEST] '.$preview['subject'], $preview['html']));
+
+        return response()->json(['data' => ['sent_to' => $request->user()->email]]);
     }
 
     /** Manually trigger reminder emails for subscriptions expiring within 7 days (and trials within 2 days). */

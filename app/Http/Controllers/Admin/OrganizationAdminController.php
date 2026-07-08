@@ -67,8 +67,31 @@ class OrganizationAdminController extends Controller
             'email' => $u->email, 'role' => $u->primary_role, 'status' => $u->status,
         ]);
 
+        $hotelIds = $org->properties->pluck('id');
+
+        $lastCheckIn = \App\Models\CheckIn::whereIn('hotel_id', $hotelIds)
+            ->orderByDesc('created_at')->value('created_at');
+
+        $checkInsThisMonth = \App\Models\CheckIn::whereIn('hotel_id', $hotelIds)
+            ->whereMonth('created_at', now()->month)->whereYear('created_at', now()->year)
+            ->count();
+
+        $sub = $org->activeSubscription;
+        $mrr = null;
+        if ($sub && in_array($sub->status, ['active', 'trial'], true)) {
+            $effectivePrice = $sub->custom_price ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->price_yearly : $sub->plan?->price_monthly);
+            if ($effectivePrice !== null) {
+                $mrr = $sub->billing_cycle === 'yearly' ? round($effectivePrice / 12, 3) : round((float) $effectivePrice, 3);
+            }
+        }
+
         return response()->json(['data' => array_merge($org->toArray(), [
             'users' => $users,
+            'metrics' => [
+                'last_check_in_at'     => $lastCheckIn,
+                'check_ins_this_month' => $checkInsThisMonth,
+                'mrr'                  => $mrr,
+            ],
         ])]);
     }
 

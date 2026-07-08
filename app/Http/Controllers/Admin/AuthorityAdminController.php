@@ -16,7 +16,7 @@ class AuthorityAdminController extends Controller {
         $users = User::role('authority_user')->with(['authorityProfile.organization'])
             ->paginate($request->integer('per_page', 50));
         return response()->json([
-            'data' => collect($users->items())->map(fn($u) => ['id'=>$u->id,'first_name'=>$u->first_name,'last_name'=>$u->last_name,'email'=>$u->email,'status'=>$u->status,'organization'=>$u->authorityProfile?->organization?->name,'badge_number'=>$u->authorityProfile?->badge_number,'last_login_at'=>$u->last_login_at]),
+            'data' => collect($users->items())->map(fn($u) => ['id'=>$u->id,'first_name'=>$u->first_name,'last_name'=>$u->last_name,'email'=>$u->email,'status'=>$u->status,'organization'=>$u->authorityProfile?->organization?->name,'badge_number'=>$u->authorityProfile?->badge_number,'last_login_at'=>$u->last_login_at,'two_factor_confirmed_at'=>$u->two_factor_confirmed_at]),
             'meta' => ['total' => $users->total(), 'current_page' => $users->currentPage(), 'per_page' => $users->perPage()],
         ]);
     }
