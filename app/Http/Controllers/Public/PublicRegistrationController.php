@@ -23,7 +23,7 @@ class PublicRegistrationController extends Controller
      * Creates:
      *   1. Organization (société ou particulier)
      *   2. hotel_admin user linked to the org
-     *   3. 30-day trial subscription at org level
+     *   3. 7-day trial subscription at org level
      *
      * Properties are added post-login via the onboarding wizard.
      * No payment required at sign-up.
@@ -79,13 +79,13 @@ class PublicRegistrationController extends Controller
             $user->assignRole('hotel_admin');
 
             // ── 3. Trial subscription at org level (no property yet) ──────
-            $trialEnds = now()->addDays(30);
+            $trialEnds = now()->addDays(7);
             $sub = Subscription::create([
                 'organization_id' => $org->id,
                 // hotel_id is intentionally omitted (nullable since migration 2026_07_03_200001)
                 // it will be back-filled when the first property is created in onboarding
                 'plan_id'         => $plan->id,
-                'status'          => 'active',
+                'status'          => 'trial',
                 'billing_cycle'   => 'monthly',
                 'started_at'      => now(),
                 'expires_at'      => $trialEnds,
@@ -97,9 +97,9 @@ class PublicRegistrationController extends Controller
             SubscriptionEvent::create([
                 'subscription_id' => $sub->id,
                 'event_type'      => 'activated',
-                'new_status'      => 'active',
+                'new_status'      => 'trial',
                 'performed_by'    => $user->id,
-                'metadata'        => ['source' => 'self_registration', 'trial_days' => 30],
+                'metadata'        => ['source' => 'self_registration', 'trial_days' => 7],
                 'created_at'      => now(),
             ]);
 

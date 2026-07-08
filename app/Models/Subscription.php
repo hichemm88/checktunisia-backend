@@ -41,9 +41,11 @@ class Subscription extends Model
     public function events(): HasMany  { return $this->hasMany(SubscriptionEvent::class); }
     public function invoices(): HasMany { return $this->hasMany(Invoice::class); }
 
-    public function isActive(): bool    { return $this->status === 'active'; }
-    public function isExpired(): bool   { return $this->status === 'expired'; }
-    public function isSuspended(): bool { return $this->status === 'suspended'; }
+    public function isActive(): bool       { return $this->status === 'active'; }
+    public function isExpired(): bool      { return $this->status === 'expired'; }
+    public function isSuspended(): bool    { return $this->status === 'suspended'; }
+    public function isTrial(): bool        { return $this->status === 'trial'; }
+    public function isTrialExpired(): bool { return $this->status === 'trial_expired'; }
 
     public function getDaysRemainingAttribute(): int
     {

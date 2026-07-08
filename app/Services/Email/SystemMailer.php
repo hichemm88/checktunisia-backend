@@ -59,6 +59,15 @@ class SystemMailer
                 'credentials_box' => self::amountBox(\App\Support\Money::tnd(119), 'INV-2026-0042'),
             ],
             'subscription_reminder' => ['name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'expires_at' => '15/07/2026', 'days_remaining' => '7'],
+            'trial_ending' => [
+                'name' => 'Riad Al Warda', 'trial_message' => 'Votre essai gratuit se termine dans 2 jour(s), le 15/07/2026.',
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), 'Voir les abonnements'),
+            ],
+            'invoice_available' => [
+                'name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'invoice_number' => 'INV-2026-0042',
+                'credentials_box' => self::amountBox(\App\Support\Money::tnd(119), 'INV-2026-0042'),
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), 'Voir la facture'),
+            ],
             default => [],
         };
 

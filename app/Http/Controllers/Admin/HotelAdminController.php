@@ -247,6 +247,23 @@ class HotelAdminController extends Controller
             ->limit(10)
             ->get(['id', 'name', 'updated_at']);
 
+        $trialsExpiringSoon = \App\Models\Subscription::with('organization')
+            ->where('status', 'trial')
+            ->whereBetween('expires_at', [now(), now()->addDays(7)])
+            ->orderBy('expires_at')
+            ->limit(10)
+            ->get()
+            ->map(fn($s) => ['id' => $s->id, 'name' => $s->organization?->name ?? '—', 'expires_at' => $s->expires_at]);
+
+        // Conversion = orgs that once had a trial subscription and now hold any
+        // active (paid) one — checked at the org level rather than assuming the
+        // same subscription row flips status in place, since an admin manually
+        // upgrading a customer may instead create a fresh subscription row.
+        $orgsWithTrial = \App\Models\Organization::whereHas('subscriptions', fn($q) => $q->whereRaw("metadata->>'trial' = 'true'"))->pluck('id');
+        $convertedTrialOrgs = $orgsWithTrial->isNotEmpty()
+            ? \App\Models\Organization::whereIn('id', $orgsWithTrial)->whereHas('subscriptions', fn($q) => $q->where('status', 'active'))->count()
+            : 0;
+
         return response()->json([
             'data' => [
                 'hotels' => [
@@ -258,6 +275,11 @@ class HotelAdminController extends Controller
                 'check_ins' => [
                     'today'      => \App\Models\CheckIn::whereDate('created_at', today())->count(),
                     'this_month' => \App\Models\CheckIn::whereMonth('created_at', now()->month)->whereYear('created_at', now()->year)->count(),
+                ],
+                'trials' => [
+                    'in_progress'     => \App\Models\Subscription::where('status', 'trial')->count(),
+                    'expiring_soon'   => $trialsExpiringSoon,
+                    'conversion_rate' => $orgsWithTrial->isNotEmpty() ? round($convertedTrialOrgs / $orgsWithTrial->count() * 100) : null,
                 ],
                 'alerts' => [
                     'expiring_subscriptions' => $expiringSoon,

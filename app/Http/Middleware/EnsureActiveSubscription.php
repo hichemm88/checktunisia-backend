@@ -52,10 +52,16 @@ class EnsureActiveSubscription
         }
 
         if (!$isActive) {
-            $code    = $sub?->isSuspended() ? 'SUBSCRIPTION_SUSPENDED' : 'SUBSCRIPTION_INACTIVE';
-            $message = $sub?->isSuspended()
-                ? 'Abonnement suspendu. Contactez votre administrateur.'
-                : 'Aucun abonnement actif. Le check-in n\'est pas disponible.';
+            $code = match (true) {
+                $sub?->isSuspended()    => 'SUBSCRIPTION_SUSPENDED',
+                $sub?->isTrialExpired() => 'TRIAL_EXPIRED',
+                default                 => 'SUBSCRIPTION_INACTIVE',
+            };
+            $message = match ($code) {
+                'SUBSCRIPTION_SUSPENDED' => 'Abonnement suspendu. Contactez votre administrateur.',
+                'TRIAL_EXPIRED'          => 'Votre essai gratuit est terminé. Passez à un abonnement payant pour continuer.',
+                default                  => 'Aucun abonnement actif. Le check-in n\'est pas disponible.',
+            };
 
             return response()->json([
                 'data'   => null,

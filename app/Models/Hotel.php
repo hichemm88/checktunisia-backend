@@ -96,10 +96,11 @@ class Hotel extends Model
         return $this->hasMany(Subscription::class);
     }
 
+    /** The single active (or in-trial) subscription. */
     public function activeSubscription(): HasOne
     {
         return $this->hasOne(Subscription::class)
-            ->where('status', 'active')
+            ->whereIn('status', ['active', 'trial'])
             ->latest('started_at');
     }
 

@@ -47,6 +47,24 @@ HTML,
 {{cta_button}}
 HTML,
         ],
+        'trial_ending' => [
+            'subject' => "Votre essai Qayed touche à sa fin",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>{{trial_message}}</p>
+<p>Passez à un abonnement payant dès maintenant pour continuer à enregistrer vos voyageurs sans interruption.</p>
+{{cta_button}}
+HTML,
+        ],
+        'invoice_available' => [
+            'subject' => "Votre facture Qayed {{invoice_number}} est disponible",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>Une nouvelle facture est disponible pour votre abonnement <strong>{{plan_name}}</strong>.</p>
+{{credentials_box}}
+{{cta_button}}
+HTML,
+        ],
     ];
 
     public static function getOrDefault(string $key): array
