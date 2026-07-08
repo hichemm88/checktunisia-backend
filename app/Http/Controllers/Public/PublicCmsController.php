@@ -46,6 +46,51 @@ class PublicCmsController extends Controller
         ]])->header('Cache-Control', 'public, max-age=60');
     }
 
+    /**
+     * Sitemap dynamique (qayed.tn/sitemap.xml via rewrite Vercel) :
+     * routes publiques statiques + pages CMS publiées, avec alternates
+     * hreflang FR/EN/AR.
+     */
+    public function sitemap(): Response
+    {
+        $base = 'https://qayed.tn';
+        $langs = ['fr', 'en', 'ar'];
+
+        $urls = [];
+        $push = function (string $frPath, array $altPaths, string $lastmod = null) use (&$urls, $base, $langs) {
+            $alternates = '';
+            foreach ($langs as $l) {
+                $alternates .= "\n    <xhtml:link rel=\"alternate\" hreflang=\"{$l}\" href=\"{$base}{$altPaths[$l]}\"/>";
+            }
+            $alternates .= "\n    <xhtml:link rel=\"alternate\" hreflang=\"x-default\" href=\"{$base}{$frPath}\"/>";
+            $lastmodTag = $lastmod ? "\n    <lastmod>{$lastmod}</lastmod>" : '';
+            $urls[] = "  <url>\n    <loc>{$base}{$frPath}</loc>{$lastmodTag}{$alternates}\n  </url>";
+        };
+
+        $push('/', ['fr' => '/', 'en' => '/en', 'ar' => '/ar']);
+        foreach (Page::where('status', 'published')->where('slug', '!=', 'home')->get() as $page) {
+            $push(
+                "/fr/{$page->slug}",
+                ['fr' => "/fr/{$page->slug}", 'en' => "/en/{$page->slug}", 'ar' => "/ar/{$page->slug}"],
+                $page->updated_at->toAtomString(),
+            );
+        }
+        // Routes applicatives publiques (hors CMS)
+        foreach (['/register', '/login'] as $path) {
+            $urls[] = "  <url>\n    <loc>{$base}{$path}</loc>\n  </url>";
+        }
+
+        $xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            . "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\" xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">\n"
+            . implode("\n", $urls)
+            . "\n</urlset>\n";
+
+        return response($xml, 200, [
+            'Content-Type'  => 'application/xml; charset=UTF-8',
+            'Cache-Control' => 'public, max-age=3600',
+        ]);
+    }
+
     public function media(string $id): Response
     {
         $media = Media::findOrFail($id);

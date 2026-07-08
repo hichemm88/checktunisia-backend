@@ -18,7 +18,8 @@ class MenuItemRequest extends FormRequest {
             'label.en'     => ['nullable', 'string', 'max:80'],
             'label.ar'     => ['nullable', 'string', 'max:80'],
             'page_id'      => ['sometimes', 'nullable', 'uuid', 'exists:pages,id'],
-            'external_url' => ['sometimes', 'nullable', 'url', 'max:500'],
+            // URL complète, chemin interne (/…) ou ancre (#…, /#…)
+            'external_url' => ['sometimes', 'nullable', 'string', 'max:500', 'regex:~^(https?://|/|#)~'],
             'sort_order'   => ['sometimes', 'integer'],
             'is_active'    => ['sometimes', 'boolean'],
         ];

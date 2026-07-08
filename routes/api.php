@@ -65,6 +65,7 @@ Route::get('public/settings', [PublicPlatformController::class, 'settings']);
 Route::get('public/pages/{slug}', [PublicCmsController::class, 'page']);
 Route::get('public/menus',        [PublicCmsController::class, 'menus']);
 Route::get('public/media/{id}',   [PublicCmsController::class, 'media']);
+Route::get('public/sitemap.xml',  [PublicCmsController::class, 'sitemap']);
 
 /*
 |--------------------------------------------------------------------------
