@@ -23,6 +23,10 @@ use App\Http\Controllers\Hotel\OrganizationController;
 use App\Http\Controllers\Authority\ExportController;
 use App\Http\Controllers\Public\PublicRegistrationController;
 use App\Http\Controllers\Public\PublicPlatformController;
+use App\Http\Controllers\Public\PublicCmsController;
+use App\Http\Controllers\Admin\PageAdminController;
+use App\Http\Controllers\Admin\MenuItemAdminController;
+use App\Http\Controllers\Admin\MediaAdminController;
 use App\Http\Controllers\Admin\PlatformSettingController;
 use App\Http\Controllers\Admin\PlanAdminController;
 use App\Http\Controllers\Hotel\SubscriptionController;
@@ -56,6 +60,11 @@ Route::post('public/register', [PublicRegistrationController::class, 'register']
 // Public platform info (no auth)
 Route::get('public/plans',    [PublicPlatformController::class, 'plans']);
 Route::get('public/settings', [PublicPlatformController::class, 'settings']);
+
+// Public CMS (no auth) — pages publiées, menus, médias
+Route::get('public/pages/{slug}', [PublicCmsController::class, 'page']);
+Route::get('public/menus',        [PublicCmsController::class, 'menus']);
+Route::get('public/media/{id}',   [PublicCmsController::class, 'media']);
 
 /*
 |--------------------------------------------------------------------------
@@ -321,6 +330,20 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::post('plans',                 [PlanAdminController::class, 'store']);
             Route::patch('plans/{id}',           [PlanAdminController::class, 'update']);
             Route::delete('plans/{id}',          [PlanAdminController::class, 'destroy']);
+
+            // CMS : pages dynamiques (Puck), menus publics, médias
+            Route::get('pages',           [PageAdminController::class, 'index']);
+            Route::post('pages',          [PageAdminController::class, 'store']);
+            Route::get('pages/{id}',      [PageAdminController::class, 'show']);
+            Route::patch('pages/{id}',    [PageAdminController::class, 'update']);
+            Route::delete('pages/{id}',   [PageAdminController::class, 'destroy']);
+            Route::get('menu-items',          [MenuItemAdminController::class, 'index']);
+            Route::post('menu-items',         [MenuItemAdminController::class, 'store']);
+            Route::patch('menu-items/{id}',   [MenuItemAdminController::class, 'update']);
+            Route::delete('menu-items/{id}',  [MenuItemAdminController::class, 'destroy']);
+            Route::get('media',           [MediaAdminController::class, 'index']);
+            Route::post('media',          [MediaAdminController::class, 'store']);
+            Route::delete('media/{id}',   [MediaAdminController::class, 'destroy']);
 
             // Email templates
             Route::get('emails',                 [EmailTemplateAdminController::class, 'index']);

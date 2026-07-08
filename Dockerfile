@@ -1,16 +1,18 @@
 FROM php:8.3-cli-alpine
 
-# Install system dependencies
+# Install system dependencies (jpeg/webp/freetype: GD pour intervention/image — médias CMS)
 RUN apk add --no-cache \
     bash curl git unzip libpng-dev libzip-dev oniguruma-dev \
     postgresql-dev icu-dev libxml2-dev \
+    libjpeg-turbo-dev libwebp-dev freetype-dev \
     autoconf g++ make
 
 # Install PHP extensions
-RUN docker-php-ext-install \
+RUN docker-php-ext-configure gd --with-jpeg --with-webp --with-freetype \
+    && docker-php-ext-install \
     pdo pdo_pgsql pgsql \
     zip bcmath mbstring \
-    exif pcntl intl
+    exif pcntl intl gd
 
 # Install Redis extension
 RUN pecl install redis && docker-php-ext-enable redis
