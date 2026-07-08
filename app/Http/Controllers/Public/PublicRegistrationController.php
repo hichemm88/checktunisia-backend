@@ -46,7 +46,8 @@ class PublicRegistrationController extends Controller
                 ->mixedCase()->numbers()->symbols()],
 
             // Subscription plan
-            'plan_slug'   => ['required', 'string', 'exists:subscription_plans,slug'],
+            'plan_slug'     => ['required', 'string', 'exists:subscription_plans,slug'],
+            'billing_cycle' => ['sometimes', 'in:monthly,yearly'],
         ]);
 
         $plan = SubscriptionPlan::where('slug', $validated['plan_slug'])
@@ -86,7 +87,8 @@ class PublicRegistrationController extends Controller
                 // it will be back-filled when the first property is created in onboarding
                 'plan_id'         => $plan->id,
                 'status'          => 'trial',
-                'billing_cycle'   => 'monthly',
+                // The cycle chosen at sign-up (yearly = one month free) — used when the trial converts to paid.
+                'billing_cycle'   => $validated['billing_cycle'] ?? 'monthly',
                 'started_at'      => now(),
                 'expires_at'      => $trialEnds,
                 'auto_renew'      => false,

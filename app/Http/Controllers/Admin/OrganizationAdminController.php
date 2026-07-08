@@ -79,7 +79,7 @@ class OrganizationAdminController extends Controller
         $sub = $org->activeSubscription;
         $mrr = null;
         if ($sub && in_array($sub->status, ['active', 'trial'], true)) {
-            $effectivePrice = $sub->custom_price ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->price_yearly : $sub->plan?->price_monthly);
+            $effectivePrice = $sub->custom_price ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->effective_price_yearly : $sub->plan?->price_monthly);
             if ($effectivePrice !== null) {
                 $mrr = $sub->billing_cycle === 'yearly' ? round($effectivePrice / 12, 3) : round((float) $effectivePrice, 3);
             }
