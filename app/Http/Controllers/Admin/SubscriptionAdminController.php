@@ -118,7 +118,7 @@ class SubscriptionAdminController extends Controller {
 
         if (!isset($v['amount'])) {
             $v['amount'] = $sub->custom_price
-                ?? ($sub->billing_cycle === 'yearly' ? $sub->plan->price_yearly : $sub->plan->price_monthly)
+                ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->effective_price_yearly : $sub->plan?->price_monthly)
                 ?? 0;
         }
         $v['tax_amount']     = $v['tax_amount'] ?? 0;

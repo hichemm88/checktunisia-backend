@@ -276,7 +276,7 @@ class HotelAdminController extends Controller
         // MRR = sum of every active/trial subscription's price normalized to monthly.
         $activeSubs = \App\Models\Subscription::with('plan')->whereIn('status', ['active', 'trial'])->get();
         $mrr = $activeSubs->sum(function ($sub) {
-            $price = $sub->custom_price ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->price_yearly : $sub->plan?->price_monthly);
+            $price = $sub->custom_price ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->effective_price_yearly : $sub->plan?->price_monthly);
             if ($price === null) return 0;
             return $sub->billing_cycle === 'yearly' ? ((float) $price / 12) : (float) $price;
         });
