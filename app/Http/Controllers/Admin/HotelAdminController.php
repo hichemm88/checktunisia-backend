@@ -264,6 +264,34 @@ class HotelAdminController extends Controller
             ? \App\Models\Organization::whereIn('id', $orgsWithTrial)->whereHas('subscriptions', fn($q) => $q->where('status', 'active'))->count()
             : 0;
 
+        // 30-day check-in volume, one point per day (missing days filled with 0).
+        $rawDaily = \App\Models\CheckIn::where('created_at', '>=', now()->subDays(29)->startOfDay())
+            ->selectRaw('DATE(created_at) as day, COUNT(*) as count')
+            ->groupBy('day')->pluck('count', 'day');
+        $checkInsChart = collect(range(0, 29))->map(function (int $i) use ($rawDaily) {
+            $day = now()->subDays(29 - $i)->format('Y-m-d');
+            return ['date' => $day, 'count' => (int) ($rawDaily[$day] ?? 0)];
+        });
+
+        // MRR = sum of every active/trial subscription's price normalized to monthly.
+        $activeSubs = \App\Models\Subscription::with('plan')->whereIn('status', ['active', 'trial'])->get();
+        $mrr = $activeSubs->sum(function ($sub) {
+            $price = $sub->custom_price ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->price_yearly : $sub->plan?->price_monthly);
+            if ($price === null) return 0;
+            return $sub->billing_cycle === 'yearly' ? ((float) $price / 12) : (float) $price;
+        });
+
+        // Top 5 établissements by check-in volume this month.
+        $topHotels = Hotel::withCount(['checkIns' => fn($q) => $q->whereMonth('created_at', now()->month)->whereYear('created_at', now()->year)])
+            ->orderByDesc('check_ins_count')
+            ->limit(5)->get(['id', 'name'])
+            ->map(fn($h) => ['id' => $h->id, 'name' => $h->name, 'check_ins_count' => $h->check_ins_count]);
+
+        // Recent signups (self-service trials + admin-created hébergeurs alike).
+        $recentSignups = \App\Models\Organization::orderByDesc('created_at')
+            ->limit(8)->get(['id', 'name', 'created_at'])
+            ->map(fn($o) => ['id' => $o->id, 'name' => $o->name, 'created_at' => $o->created_at]);
+
         return response()->json([
             'data' => [
                 'hotels' => [
@@ -286,6 +314,10 @@ class HotelAdminController extends Controller
                     'failed_payments'        => $failedPayments,
                     'recently_suspended'     => $recentlySuspended,
                 ],
+                'mrr'              => round($mrr, 3),
+                'check_ins_chart'  => $checkInsChart,
+                'top_hotels'       => $topHotels,
+                'recent_signups'   => $recentSignups,
             ],
         ]);
     }
