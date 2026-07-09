@@ -23,6 +23,7 @@ class LegalPagesSeeder extends Seeder
     {
         $this->createPage('mentions-legales', $this->mentionsMeta(), $this->mentionsArticles());
         $this->createPage('cgv', $this->cgvMeta(), $this->cgvArticles());
+        $this->createPage('politique-confidentialite', $this->privacyMeta(), $this->privacyArticles());
     }
 
     private function createPage(string $slug, array $meta, array $articles): void
@@ -101,6 +102,103 @@ class LegalPagesSeeder extends Seeder
                     'fr' => "Tous les contenus du site (textes, vidéos, supports, marques, logos, design) sont protégés par le droit de la propriété intellectuelle.\n\nToute reproduction, représentation, modification, publication ou adaptation, totale ou partielle, est strictement interdite sans autorisation écrite préalable de UW AGENCY SUARL.",
                     'en' => "All content on this site (texts, videos, materials, trademarks, logos, design) is protected by intellectual property law.\n\nAny reproduction, representation, modification, publication or adaptation, in whole or in part, is strictly prohibited without the prior written authorisation of UW AGENCY SUARL.",
                     'ar' => "جميع محتويات الموقع (نصوص، فيديوهات، دعائم، علامات تجارية، شعارات، تصميم) محمية بقانون الملكية الفكرية.\n\nيُمنع منعًا باتًا أي نسخ أو عرض أو تعديل أو نشر أو اقتباس، كليًا أو جزئيًا، دون إذن كتابي مسبق من UW AGENCY SUARL.",
+                ],
+            ],
+        ];
+    }
+
+    // ── Politique de confidentialité ─────────────────────────────────────────
+
+    private function privacyMeta(): array
+    {
+        return [
+            'fr' => ['title' => 'Politique de confidentialité', 'description' => 'Politique de confidentialité de la plateforme Qayed : données collectées, finalités, destinataires, durées de conservation et droits des personnes.'],
+            'en' => ['title' => 'Privacy policy', 'description' => 'Privacy policy of the Qayed platform: data collected, purposes, recipients, retention periods and individual rights.'],
+            'ar' => ['title' => 'سياسة الخصوصية', 'description' => 'سياسة الخصوصية لمنصة قيد: البيانات المجمعة، الأغراض، المتلقون، مدد الحفظ وحقوق الأشخاص.'],
+        ];
+    }
+
+    private function privacyArticles(): array
+    {
+        return [
+            [
+                'title' => ['fr' => '1. Responsable du traitement', 'en' => '1. Data controller', 'ar' => '1. المسؤول عن المعالجة'],
+                'text'  => [
+                    'fr' => "Le responsable du traitement des données collectées via la plateforme Qayed (www.qayed.tn) est :\n\n" . self::IDENTITY['fr'],
+                    'en' => "The controller of the data collected via the Qayed platform (www.qayed.tn) is:\n\n" . self::IDENTITY['en'],
+                    'ar' => "المسؤول عن معالجة البيانات المجمعة عبر منصة قيد (www.qayed.tn) هو:\n\n" . self::IDENTITY['ar'],
+                ],
+            ],
+            [
+                'title' => ['fr' => '2. Données collectées', 'en' => '2. Data collected', 'ar' => '2. البيانات المجمعة'],
+                'text'  => [
+                    'fr' => "Dans le cadre de l'utilisation de la plateforme, les catégories de données suivantes peuvent être collectées :\n\n- Données de compte client : nom, prénom, adresse e-mail, téléphone, raison sociale et informations de l'établissement.\n- Données des voyageurs enregistrées par les hébergeurs lors du check-in : identité, nationalité, données du document de voyage (passeport ou CIN), dates de séjour. Ces données sont saisies par l'hébergeur dans le cadre de son obligation légale de fiche de police.\n- Données de facturation et de paiement : les paiements en ligne sont traités par nos partenaires de paiement ; Qayed ne stocke aucun numéro de carte bancaire.\n- Données techniques : journaux de connexion et d'activité, préférence de langue.",
+                    'en' => "When using the platform, the following categories of data may be collected:\n\n- Client account data: first and last name, e-mail address, phone number, company name and property information.\n- Guest data recorded by accommodations at check-in: identity, nationality, travel document data (passport or ID card), stay dates. This data is entered by the accommodation as part of its legal police-form obligation.\n- Billing and payment data: online payments are processed by our payment partners; Qayed does not store any card numbers.\n- Technical data: connection and activity logs, language preference.",
+                    'ar' => "في إطار استعمال المنصة، يمكن جمع فئات البيانات التالية:\n\n- بيانات حساب العميل: الاسم واللقب، البريد الإلكتروني، الهاتف، الاسم الاجتماعي ومعلومات المؤسسة.\n- بيانات النزلاء المسجلة من قبل مؤسسات الإقامة عند تسجيل الوصول: الهوية، الجنسية، بيانات وثيقة السفر (جواز أو بطاقة تعريف)، تواريخ الإقامة. تُدخل هذه البيانات من قبل المؤسسة في إطار واجبها القانوني المتعلق ببطاقة الشرطة.\n- بيانات الفوترة والدفع: تُعالج المدفوعات الإلكترونية من قبل شركائنا في الدفع؛ ولا تخزن قيد أي أرقام بطاقات بنكية.\n- بيانات تقنية: سجلات الاتصال والنشاط، تفضيل اللغة.",
+                ],
+            ],
+            [
+                'title' => ['fr' => '3. Finalités du traitement', 'en' => '3. Purposes of processing', 'ar' => '3. أغراض المعالجة'],
+                'text'  => [
+                    'fr' => "Les données sont traitées pour les finalités suivantes :\n\n- la fourniture du service (gestion des check-ins et des fiches de police digitales),\n- le respect des obligations réglementaires des hébergeurs, incluant la mise à disposition des fiches de police aux autorités tunisiennes habilitées,\n- la gestion des abonnements, de la facturation et des paiements,\n- le support client,\n- la sécurité de la plateforme (journalisation et traçabilité des actions),\n- l'amélioration du service.",
+                    'en' => "Data is processed for the following purposes:\n\n- providing the service (management of check-ins and digital police forms),\n- meeting accommodations' regulatory obligations, including making police forms available to the authorised Tunisian authorities,\n- managing subscriptions, invoicing and payments,\n- customer support,\n- platform security (logging and traceability of actions),\n- service improvement.",
+                    'ar' => "تُعالج البيانات للأغراض التالية:\n\n- تقديم الخدمة (إدارة تسجيلات الوصول وبطاقات الشرطة الرقمية)،\n- احترام الالتزامات القانونية لمؤسسات الإقامة، بما في ذلك إتاحة بطاقات الشرطة للسلطات التونسية المخوّلة،\n- إدارة الاشتراكات والفوترة والمدفوعات،\n- دعم الحرفاء،\n- أمان المنصة (تسجيل الأنشطة وتتبعها)،\n- تحسين الخدمة.",
+                ],
+            ],
+            [
+                'title' => ['fr' => '4. Cadre légal', 'en' => '4. Legal framework', 'ar' => '4. الإطار القانوني'],
+                'text'  => [
+                    'fr' => "Les données personnelles sont traitées conformément à la réglementation tunisienne applicable en matière de protection des données personnelles (loi organique n° 2004-63 du 27 juillet 2004).\n\nLe traitement des données des voyageurs repose sur l'obligation légale de fiche de police applicable aux hébergements touristiques en Tunisie.",
+                    'en' => "Personal data is processed in accordance with the applicable Tunisian regulations on personal data protection (Organic Law No. 2004-63 of 27 July 2004).\n\nThe processing of guest data is based on the legal police-form obligation applicable to tourist accommodations in Tunisia.",
+                    'ar' => "تُعالج المعطيات الشخصية وفقًا للتشريع التونسي الساري في مجال حماية المعطيات الشخصية (القانون الأساسي عدد 63 لسنة 2004 المؤرخ في 27 جويلية 2004).\n\nوتستند معالجة بيانات النزلاء إلى الواجب القانوني المتعلق ببطاقة الشرطة المنطبق على مؤسسات الإقامة السياحية في تونس.",
+                ],
+            ],
+            [
+                'title' => ['fr' => '5. Destinataires des données', 'en' => '5. Data recipients', 'ar' => '5. متلقو البيانات'],
+                'text'  => [
+                    'fr' => "Les données sont accessibles :\n\n- aux autorités tunisiennes habilitées, dans le cadre réglementaire de la fiche de police,\n- au personnel autorisé de l'hébergeur concerné,\n- à nos prestataires techniques strictement nécessaires au fonctionnement du service (hébergement : Vercel Inc. et Railway Corp. ; partenaires de paiement),\n- au personnel habilité de UW AGENCY SUARL.\n\nLes données ne sont ni vendues ni louées à des tiers.",
+                    'en' => "Data is accessible to:\n\n- the authorised Tunisian authorities, within the regulatory framework of the police form,\n- the authorised staff of the accommodation concerned,\n- our technical providers strictly necessary for the operation of the service (hosting: Vercel Inc. and Railway Corp.; payment partners),\n- the authorised staff of UW AGENCY SUARL.\n\nData is neither sold nor rented to third parties.",
+                    'ar' => "يمكن النفاذ إلى البيانات من قبل:\n\n- السلطات التونسية المخوّلة، في الإطار القانوني لبطاقة الشرطة،\n- الموظفين المرخّص لهم لدى مؤسسة الإقامة المعنية،\n- مزوّدينا التقنيين الضروريين حصرًا لتشغيل الخدمة (الاستضافة: Vercel Inc. وRailway Corp.؛ شركاء الدفع)،\n- الموظفين المخوّلين لدى UW AGENCY SUARL.\n\nلا تُباع البيانات ولا تُؤجَّر لأطراف ثالثة.",
+                ],
+            ],
+            [
+                'title' => ['fr' => '6. Durée de conservation', 'en' => '6. Retention period', 'ar' => '6. مدة الحفظ'],
+                'text'  => [
+                    'fr' => "Les données de compte sont conservées pendant la durée de la relation contractuelle, puis pendant les durées de prescription légales applicables.\n\nLes données des voyageurs sont conservées pendant les durées imposées par la réglementation applicable aux fiches de police, puis supprimées ou anonymisées.\n\nLes données de facturation sont conservées conformément aux obligations comptables et fiscales tunisiennes.",
+                    'en' => "Account data is kept for the duration of the contractual relationship, then for the applicable legal limitation periods.\n\nGuest data is kept for the periods required by the regulations applicable to police forms, then deleted or anonymised.\n\nBilling data is kept in accordance with Tunisian accounting and tax obligations.",
+                    'ar' => "تُحفظ بيانات الحساب طيلة مدة العلاقة التعاقدية، ثم طيلة آجال التقادم القانونية المنطبقة.\n\nوتُحفظ بيانات النزلاء طيلة المدد التي يفرضها التشريع المنطبق على بطاقات الشرطة، ثم تُحذف أو تُجهَّل.\n\nوتُحفظ بيانات الفوترة وفقًا للالتزامات المحاسبية والجبائية التونسية.",
+                ],
+            ],
+            [
+                'title' => ['fr' => '7. Sécurité', 'en' => '7. Security', 'ar' => '7. الأمان'],
+                'text'  => [
+                    'fr' => "UW AGENCY SUARL met en œuvre des mesures techniques et organisationnelles appropriées pour protéger les données, notamment :\n\n- chiffrement des échanges (HTTPS),\n- contrôle d'accès par rôles et authentification,\n- authentification à deux facteurs pour les accès des autorités,\n- journalisation et traçabilité des actions sensibles.",
+                    'en' => "UW AGENCY SUARL implements appropriate technical and organisational measures to protect data, in particular:\n\n- encryption of exchanges (HTTPS),\n- role-based access control and authentication,\n- two-factor authentication for authority access,\n- logging and traceability of sensitive actions.",
+                    'ar' => "تعتمد UW AGENCY SUARL تدابير تقنية وتنظيمية مناسبة لحماية البيانات، خاصة:\n\n- تشفير الاتصالات (HTTPS)،\n- التحكم في النفاذ حسب الأدوار والمصادقة،\n- المصادقة الثنائية لنفاذ السلطات،\n- تسجيل الأنشطة الحساسة وتتبعها.",
+                ],
+            ],
+            [
+                'title' => ['fr' => '8. Cookies et stockage local', 'en' => '8. Cookies and local storage', 'ar' => '8. ملفات تعريف الارتباط والتخزين المحلي'],
+                'text'  => [
+                    'fr' => "La plateforme utilise uniquement un stockage local strictement nécessaire à son fonctionnement : maintien de la session de l'utilisateur connecté et mémorisation de la préférence de langue.\n\nAucun cookie publicitaire ou de suivi tiers n'est utilisé.",
+                    'en' => "The platform only uses local storage strictly necessary for its operation: keeping the logged-in user's session and remembering the language preference.\n\nNo advertising or third-party tracking cookies are used.",
+                    'ar' => "تستعمل المنصة فقط تخزينًا محليًا ضروريًا حصرًا لتشغيلها: الحفاظ على جلسة المستخدم المتصل وتذكر تفضيل اللغة.\n\nولا تُستعمل أي ملفات تعريف ارتباط إشهارية أو للتتبع من أطراف ثالثة.",
+                ],
+            ],
+            [
+                'title' => ['fr' => '9. Vos droits', 'en' => '9. Your rights', 'ar' => '9. حقوقكم'],
+                'text'  => [
+                    'fr' => "Conformément à la loi organique n° 2004-63, toute personne dispose d'un droit d'accès, de rectification et de suppression de ses données personnelles.\n\nCes droits s'exercent par e-mail à l'adresse : hichemmathlouthi@gmail.com.\n\nToute personne peut également adresser une réclamation à l'Instance Nationale de Protection des Données Personnelles (INPDP).",
+                    'en' => "In accordance with Organic Law No. 2004-63, any person has the right to access, rectify and delete their personal data.\n\nThese rights may be exercised by e-mail at: hichemmathlouthi@gmail.com.\n\nAny person may also lodge a complaint with the Tunisian National Authority for the Protection of Personal Data (INPDP).",
+                    'ar' => "وفقًا للقانون الأساسي عدد 63 لسنة 2004، لكل شخص حق النفاذ إلى معطياته الشخصية وتصحيحها وحذفها.\n\nتُمارَس هذه الحقوق عبر البريد الإلكتروني: hichemmathlouthi@gmail.com.\n\nكما يمكن لكل شخص تقديم شكاية إلى الهيئة الوطنية لحماية المعطيات الشخصية (INPDP).",
+                ],
+            ],
+            [
+                'title' => ['fr' => '10. Modification de la présente politique', 'en' => '10. Changes to this policy', 'ar' => '10. تعديل هذه السياسة'],
+                'text'  => [
+                    'fr' => "La présente politique peut être mise à jour à tout moment, notamment en cas d'évolution du service ou de la réglementation. La version en vigueur est celle publiée sur le site.\n\nPour toute question relative à la présente politique : hichemmathlouthi@gmail.com.",
+                    'en' => "This policy may be updated at any time, in particular in the event of changes to the service or regulations. The version in force is the one published on the site.\n\nFor any question regarding this policy: hichemmathlouthi@gmail.com.",
+                    'ar' => "يمكن تحديث هذه السياسة في أي وقت، خاصة عند تطور الخدمة أو التشريع. والنسخة السارية هي المنشورة على الموقع.\n\nلكل سؤال متعلق بهذه السياسة: hichemmathlouthi@gmail.com.",
                 ],
             ],
         ];
