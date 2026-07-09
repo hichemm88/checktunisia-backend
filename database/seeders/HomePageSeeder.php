@@ -154,7 +154,7 @@ class HomePageSeeder extends Seeder
                 'anchor' => 'contact',
                 'title' => $T['cta_title'][$l], 'text' => $T['cta_sub'][$l],
                 'buttonLabel' => $T['cta_btn'][$l], 'buttonHref' => 'mailto:contact@qayed.tn',
-                'note' => 'QAYED.TN · KASBAHOST SARL · TUNIS',
+                'note' => 'QAYED.TN · UW AGENCY SUARL · TUNIS',
             ]),
         ]];
     }
