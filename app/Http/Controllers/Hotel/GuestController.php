@@ -17,6 +17,10 @@ class GuestController extends Controller
     {
         $checkIn = $this->findCheckIn($checkInId);
 
+        if ($error = $this->assertModifiable($checkIn)) {
+            return $error;
+        }
+
         $validated = $request->validate([
             'first_name'       => ['required', 'string', 'max:100'],
             'last_name'        => ['required', 'string', 'max:100'],
@@ -46,7 +50,12 @@ class GuestController extends Controller
     public function update(Request $request, string $checkInId, string $guestId): JsonResponse
     {
         $checkIn = $this->findCheckIn($checkInId);
-        $guest   = $this->findGuest($checkIn, $guestId);
+
+        if ($error = $this->assertModifiable($checkIn)) {
+            return $error;
+        }
+
+        $guest = $this->findGuest($checkIn, $guestId);
 
         $validated = $request->validate([
             'first_name'       => ['sometimes', 'string', 'max:100'],
@@ -71,11 +80,33 @@ class GuestController extends Controller
     public function destroy(string $checkInId, string $guestId): JsonResponse
     {
         $checkIn = $this->findCheckIn($checkInId);
-        $guest   = $this->findGuest($checkIn, $guestId);
+
+        if ($error = $this->assertModifiable($checkIn)) {
+            return $error;
+        }
+
+        $guest = $this->findGuest($checkIn, $guestId);
 
         $this->service->removeGuest($checkIn, $guest);
 
         return response()->json(null, 204);
+    }
+
+    /**
+     * Guests may only be added/edited/removed while the check-in is still open
+     * (draft or active). Completed / cancelled / no-show stays are frozen for
+     * audit and police-record integrity. Returns a 409 response when frozen.
+     */
+    private function assertModifiable(CheckIn $checkIn): ?JsonResponse
+    {
+        if ($checkIn->canBeModified()) {
+            return null;
+        }
+
+        return response()->json([
+            'data'   => null,
+            'errors' => [['code' => 'CHECK_IN_NOT_MODIFIABLE', 'message' => 'Ce check-in est clôturé : la liste des voyageurs ne peut plus être modifiée.', 'field' => null]],
+        ], 409);
     }
 
     private function findCheckIn(string $id): CheckIn
