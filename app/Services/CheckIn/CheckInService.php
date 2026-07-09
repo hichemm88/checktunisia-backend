@@ -239,10 +239,18 @@ class CheckInService
 
     private function findOrCreateGuest(array $data): Guest
     {
-        // Try to find by document number to avoid duplicates
+        // Identify a returning traveler by their travel document so the same person
+        // is never created twice — their whole stay history (check_in_guests) then
+        // hangs off the single reused Guest record.
+        //
+        // The match MUST key on (type, document_number, issuing_country_code) — the
+        // exact same triple `upsertDocument()` uses. Matching on number+type alone
+        // would wrongly merge two DIFFERENT people from two countries that happen to
+        // share a document number.
         if (!empty($data['document']['document_number'])) {
-            $doc = TravelDocument::where('document_number', $data['document']['document_number'])
-                ->where('type', $data['document']['type'] ?? 'passport')
+            $doc = TravelDocument::where('type', $data['document']['type'] ?? 'passport')
+                ->where('document_number', $data['document']['document_number'])
+                ->where('issuing_country_code', $data['document']['issuing_country_code'] ?? 'TN')
                 ->first();
 
             // $doc->guest peut être null si l'enregistrement Guest a été supprimé

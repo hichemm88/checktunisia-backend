@@ -3,14 +3,16 @@ FROM php:8.3-cli-alpine
 # System dependencies
 RUN apk add --no-cache \
     bash curl git unzip libpng-dev libzip-dev oniguruma-dev \
+    libjpeg-turbo-dev freetype-dev \
     postgresql-dev icu-dev libxml2-dev \
     autoconf g++ make
 
-# PHP extensions
-RUN docker-php-ext-install \
+# PHP extensions (gd is required by the image resizer used in media uploads)
+RUN docker-php-ext-configure gd --with-jpeg --with-freetype \
+    && docker-php-ext-install \
     pdo pdo_pgsql pgsql \
     zip bcmath mbstring \
-    exif pcntl intl
+    exif pcntl intl gd
 
 # Redis
 RUN pecl install redis && docker-php-ext-enable redis

@@ -20,6 +20,16 @@ class EmailTemplate extends Model
 <div class="warning">⚠️&nbsp; Ce lien est valable 48 heures et à usage unique.</div>
 HTML,
         ],
+        'password_reset' => [
+            'subject' => "Réinitialisation de votre mot de passe Qayed",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{first_name}}</strong>,</p>
+<p>Vous avez demandé la réinitialisation de votre mot de passe sur <strong>Qayed</strong>.</p>
+<p>Cliquez sur le bouton ci-dessous pour en choisir un nouveau :</p>
+{{cta_button}}
+<div class="warning">⚠️&nbsp; Ce lien est valable 48 heures et à usage unique. Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail — votre mot de passe reste inchangé.</div>
+HTML,
+        ],
         'account_suspended' => [
             'subject' => "Votre compte Qayed a été suspendu",
             'body_html' => <<<'HTML'

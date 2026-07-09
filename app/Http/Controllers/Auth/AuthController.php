@@ -145,7 +145,21 @@ class AuthController extends Controller
     public function forgotPassword(Request $request): JsonResponse
     {
         $request->validate(['email' => ['required', 'email']]);
-        Password::sendResetLink($request->only('email'));
+
+        // Look the account up ourselves so we can send the branded reset email
+        // (same /set-password SPA link as invites) instead of Laravel's default
+        // notification. Route is throttled (throttle:5,1) → abuse/rate-limited.
+        $user = User::where('email', $request->email)->whereNull('deleted_at')->first();
+
+        if ($user && $user->status === 'active') {
+            \App\Services\Email\SystemMailer::sendPasswordReset($user);
+            AuditLogger::log('user.password_reset_requested', $user, actor: $user);
+        } else {
+            // Log the attempt without a subject — helps spot enumeration/abuse.
+            AuditLogger::log('user.password_reset_requested_unknown', newValues: ['email' => $request->email]);
+        }
+
+        // Always the same response → no account-enumeration oracle.
         return response()->json(['data' => ['message' => 'If this email exists, a reset link has been sent.']]);
     }
 

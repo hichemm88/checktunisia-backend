@@ -19,6 +19,11 @@ return Application::configure(basePath: dirname(__DIR__))
         apiPrefix: 'api/v1',
     )
     ->withMiddleware(function (Middleware $middleware) {
+        // Conservative security headers on every API response (defence in depth).
+        $middleware->api(append: [
+            \App\Http\Middleware\SecurityHeaders::class,
+        ]);
+
         $middleware->alias([
             'tenant'               => ResolveTenant::class,
             'subscription.active'  => EnsureActiveSubscription::class,

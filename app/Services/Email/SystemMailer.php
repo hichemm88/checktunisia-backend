@@ -113,6 +113,22 @@ class SystemMailer
         return self::frontendUrl('/set-password?email='.urlencode($user->email).'&token='.$token);
     }
 
+    /**
+     * Sends the branded "forgot password" email. Reuses the same reset-token
+     * mechanism and /set-password SPA page as the invite flow, so a forgotten
+     * password and a first password are validated identically server-side.
+     */
+    public static function sendPasswordReset(\App\Models\User $user): bool
+    {
+        $link = self::issueSetPasswordLink($user);
+
+        return self::send('password_reset', $user->email, [
+            'first_name' => $user->first_name,
+            'last_name'  => $user->last_name,
+            'cta_button' => self::ctaButton($link, 'Réinitialiser mon mot de passe'),
+        ]);
+    }
+
     public static function ctaButton(string $url, string $label = 'Se connecter'): string
     {
         return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 8px;"><tr><td align="center">'

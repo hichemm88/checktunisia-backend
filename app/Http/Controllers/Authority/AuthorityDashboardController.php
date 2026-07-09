@@ -39,6 +39,12 @@ class AuthorityDashboardController extends Controller
      */
     public function alerts(Request $request): JsonResponse
     {
+        // Feature temporarily disabled — return an empty payload without hitting
+        // the DB. Flip config('features.expired_document_alerts') to restore.
+        if (!config('features.expired_document_alerts')) {
+            return response()->json(['data' => [], 'meta' => ['disabled' => true]]);
+        }
+
         $profile     = $this->getProfile($request);
         $isMinistry  = ($profile['org_type'] ?? null) === 'ministry';
         $governorate = $profile['governorate'] ?? null;
@@ -212,12 +218,14 @@ class AuthorityDashboardController extends Controller
             return ['date' => $date, 'label' => $label, 'count' => $weeklyTrend[$date]->count ?? 0];
         })->values();
 
-        // Expiring documents (next 30 days)
-        $expiringCount = TravelDocument::whereNotNull('expiry_date')
-            ->whereDate('expiry_date', '>=', $today)
-            ->whereDate('expiry_date', '<=', now()->addDays(30)->toDateString())
-            ->whereHas('guest.checkIns', fn($q) => $q->where('status', 'active')->whereHas('hotel'))
-            ->count();
+        // Expiring documents (next 30 days) — feature-flagged; skip the query when off.
+        $expiringCount = config('features.expired_document_alerts')
+            ? TravelDocument::whereNotNull('expiry_date')
+                ->whereDate('expiry_date', '>=', $today)
+                ->whereDate('expiry_date', '<=', now()->addDays(30)->toDateString())
+                ->whereHas('guest.checkIns', fn($q) => $q->where('status', 'active')->whereHas('hotel'))
+                ->count()
+            : 0;
 
         return [
             'type'              => 'ministry',
@@ -260,18 +268,20 @@ class AuthorityDashboardController extends Controller
             )
             ->count();
 
-        // Expiring docs in zone
-        $expiringCount = TravelDocument::whereNotNull('expiry_date')
-            ->whereDate('expiry_date', '>=', $today)
-            ->whereDate('expiry_date', '<=', now()->addDays(30)->toDateString())
-            ->whereHas('guest.checkIns', function ($q) use ($governorate) {
-                $q->where('status', 'active')->whereHas('hotel', function ($h) use ($governorate) {
-                    if ($governorate) {
-                        $h->whereHas('address', fn($a) => $a->where('governorate', $governorate));
-                    }
-                });
-            })
-            ->count();
+        // Expiring docs in zone — feature-flagged; skip the query when off.
+        $expiringCount = config('features.expired_document_alerts')
+            ? TravelDocument::whereNotNull('expiry_date')
+                ->whereDate('expiry_date', '>=', $today)
+                ->whereDate('expiry_date', '<=', now()->addDays(30)->toDateString())
+                ->whereHas('guest.checkIns', function ($q) use ($governorate) {
+                    $q->where('status', 'active')->whereHas('hotel', function ($h) use ($governorate) {
+                        if ($governorate) {
+                            $h->whereHas('address', fn($a) => $a->where('governorate', $governorate));
+                        }
+                    });
+                })
+                ->count()
+            : 0;
 
         // Nationalities present in zone. Raw joins bypass the hotel's
         // SoftDeletingScope, so a deleted hotel must be excluded explicitly.

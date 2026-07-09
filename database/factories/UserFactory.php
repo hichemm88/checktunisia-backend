@@ -62,6 +62,14 @@ class UserFactory extends Factory
         return $this->afterCreating(function (User $user) use ($organization) {
             $user->assignRole('authority_user');
 
+            // Authority routes enforce mandatory 2FA (EnsureAuthorityCredentialValid).
+            // A usable authority account is therefore one that has already confirmed
+            // TOTP — otherwise every authority endpoint returns 403 2FA_SETUP_REQUIRED.
+            $user->forceFill([
+                'two_factor_secret'       => 'JBSWY3DPEHPK3PXP', // dummy base32 secret
+                'two_factor_confirmed_at' => now(),
+            ])->save();
+
             AuthorityUserProfile::create([
                 'user_id'         => $user->id,
                 'organization_id' => $organization->id,

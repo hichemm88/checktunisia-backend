@@ -9,9 +9,11 @@ use App\Models\HotelContact;
 use App\Models\Organization;
 use App\Models\Room;
 use App\Models\Subscription;
+use App\Services\Audit\AuditLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * Organization & multi-property management for hotel_admin.
@@ -28,6 +30,15 @@ use Illuminate\Support\Facades\DB;
  */
 class OrganizationController extends Controller
 {
+    /** Valid room types — shared by the single-room and bulk endpoints. */
+    private const ROOM_TYPES = [
+        'single', 'double', 'twin', 'triple', 'quadruple', 'suite', 'junior_suite',
+        'apartment', 'studio', 'family', 'villa', 'dormitory', 'standard',
+    ];
+
+    /** Hard cap on how many rooms a single bulk request may create. */
+    private const BULK_MAX = 500;
+
     // ── Org endpoints ──────────────────────────────────────────────────────────
 
     /** Return org info and its properties list. Falls back to tenant hotel for legacy users. */
@@ -319,6 +330,114 @@ class OrganizationController extends Controller
         ));
 
         return response()->json(['data' => $room], 201);
+    }
+
+    /**
+     * Bulk-create rooms from a numeric range (start → end) with optional
+     * prefix/suffix and zero-padding — e.g. 100→145, prefix "A-" → "A-100"…"A-145".
+     *
+     * The client shows a live preview built from the same rules; this endpoint is
+     * the source of truth: it re-generates the numbers, silently skips any that
+     * already exist for the property (no duplicates, no conflicts), enforces the
+     * plan's room limit, and inserts the survivors in chunks for performance.
+     */
+    public function bulkAddPropertyRooms(Request $request, string $propertyId): JsonResponse
+    {
+        $property = $this->resolveProperty($request, $propertyId);
+        if ($property instanceof JsonResponse) return $property;
+
+        $validated = $request->validate([
+            'start'    => ['required', 'integer', 'min:0', 'max:999999'],
+            'end'      => ['required', 'integer', 'min:0', 'max:999999', 'gte:start'],
+            'prefix'   => ['nullable', 'string', 'max:10'],
+            'suffix'   => ['nullable', 'string', 'max:10'],
+            'pad'      => ['sometimes', 'boolean'],
+            'floor'    => ['nullable', 'integer', 'min:-5', 'max:200'],
+            'building' => ['nullable', 'string', 'max:50'],
+            'type'     => ['required', 'string', 'in:' . implode(',', self::ROOM_TYPES)],
+            'capacity' => ['required', 'integer', 'min:1', 'max:20'],
+        ]);
+
+        $count = $validated['end'] - $validated['start'] + 1;
+        if ($count > self::BULK_MAX) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'BULK_LIMIT', 'message' => 'Vous ne pouvez pas créer plus de ' . self::BULK_MAX . ' chambres à la fois.', 'field' => 'end']],
+            ], 422);
+        }
+
+        // ── Generate the candidate numbers (must match the client preview) ──
+        $prefix = $validated['prefix'] ?? '';
+        $suffix = $validated['suffix'] ?? '';
+        $pad    = ($validated['pad'] ?? false) ? strlen((string) $validated['end']) : 0;
+
+        $numbers = [];
+        for ($n = $validated['start']; $n <= $validated['end']; $n++) {
+            $core      = $pad > 0 ? str_pad((string) $n, $pad, '0', STR_PAD_LEFT) : (string) $n;
+            $numbers[] = $prefix . $core . $suffix;
+        }
+        $numbers = array_values(array_unique($numbers));
+
+        // ── Dedup against rooms already on this property ──
+        $existing    = $property->rooms()->whereIn('number', $numbers)->pluck('number')->all();
+        $existingSet = array_flip($existing);
+        $toCreate    = array_values(array_filter($numbers, fn($num) => !isset($existingSet[$num])));
+
+        // ── Plan room-limit enforcement (org-level, mirrors addProperty) ──
+        $org = $request->user()->organization;
+        if ($org && ($sub = $org->activeSubscription) && ($plan = $sub->plan) && $plan->max_rooms) {
+            if ($org->totalRooms() + count($toCreate) > $plan->max_rooms) {
+                return response()->json([
+                    'data'   => null,
+                    'errors' => [['code' => 'PLAN_ROOM_LIMIT', 'message' => "Le total de chambres dépasse la limite de votre plan ({$plan->max_rooms}).", 'field' => 'end']],
+                ], 422);
+            }
+        }
+
+        // ── Chunked bulk insert (bypasses model events → generate UUIDs by hand) ──
+        if (!empty($toCreate)) {
+            $now = now();
+            // rooms.metadata is NOT NULL (default '{}') — never insert a bare null.
+            $meta = !empty($validated['building'])
+                ? json_encode(['building' => $validated['building']])
+                : '{}';
+
+            $rows = array_map(fn($num) => [
+                'id'         => (string) Str::uuid(),
+                'hotel_id'   => $property->id,
+                'number'     => $num,
+                'floor'      => $validated['floor'] ?? null,
+                'type'       => $validated['type'],
+                'capacity'   => $validated['capacity'],
+                'status'     => 'available',
+                'metadata'   => $meta,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ], $toCreate);
+
+            DB::transaction(function () use ($rows) {
+                foreach (array_chunk($rows, 200) as $chunk) {
+                    Room::insert($chunk);
+                }
+            });
+        }
+
+        AuditLogger::log('room.bulk_created', $property, [], [
+            'created_count' => count($toCreate),
+            'skipped_count' => count($existing),
+            'range'         => "{$validated['start']}-{$validated['end']}",
+            'prefix'        => $prefix,
+            'suffix'        => $suffix,
+        ], hotelId: $property->id);
+
+        return response()->json([
+            'data' => [
+                'created_count' => count($toCreate),
+                'skipped_count' => count($existing),
+                'created'       => $toCreate,
+                'skipped'       => array_values($existing),
+            ],
+        ], 201);
     }
 
     /** Update a room within a specific property. */

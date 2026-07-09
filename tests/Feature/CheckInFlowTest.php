@@ -86,6 +86,106 @@ class CheckInFlowTest extends TestCase
         $this->assertDatabaseHas('travel_documents', ['document_number' => 'TN12345678']);
     }
 
+    public function test_can_add_guest_to_active_checkin(): void
+    {
+        // A guest arriving hours after the primary — the stay is already active.
+        $checkIn = CheckIn::factory()->for($this->hotel)->active()->create([
+            'created_by' => $this->receptionist->id,
+        ]);
+
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/guests", [
+                'first_name'       => 'Latecomer',
+                'last_name'        => 'Guest',
+                'date_of_birth'    => '1990-06-20',
+                'sex'              => 'F',
+                'nationality_code' => 'FRA',
+                'is_primary'       => false,
+                'document'         => [
+                    'type'                 => 'passport',
+                    'document_number'      => 'FR55555555',
+                    'issuing_country_code' => 'FR',
+                ],
+            ])
+            ->assertCreated();
+
+        $this->assertDatabaseHas('travel_documents', ['document_number' => 'FR55555555']);
+    }
+
+    public function test_cannot_add_guest_to_completed_checkin(): void
+    {
+        $checkIn = CheckIn::factory()->for($this->hotel)->completed()->create([
+            'created_by' => $this->receptionist->id,
+        ]);
+
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/guests", [
+                'first_name'       => 'Too',
+                'last_name'        => 'Late',
+                'date_of_birth'    => '1990-06-20',
+                'sex'              => 'M',
+                'nationality_code' => 'TUN',
+                'document'         => [
+                    'type'                 => 'passport',
+                    'document_number'      => 'TN00000001',
+                    'issuing_country_code' => 'TN',
+                ],
+            ])
+            ->assertStatus(409);
+
+        $this->assertDatabaseMissing('travel_documents', ['document_number' => 'TN00000001']);
+    }
+
+    // ── Traveler uniqueness & stay history (Task 5) ───────────────────────────
+
+    public function test_same_document_reuses_guest_and_keeps_stay_history(): void
+    {
+        $doc = ['type' => 'passport', 'document_number' => 'TN70001122', 'issuing_country_code' => 'TN'];
+        $guestData = [
+            'first_name' => 'Rania', 'last_name' => 'Cherif',
+            'date_of_birth' => '1992-02-02', 'sex' => 'F', 'nationality_code' => 'TUN',
+            'document' => $doc,
+        ];
+
+        $ci1 = CheckIn::factory()->for($this->hotel)->active()->create(['created_by' => $this->receptionist->id]);
+        $ci2 = CheckIn::factory()->for($this->hotel)->active()->create(['created_by' => $this->receptionist->id]);
+
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$ci1->id}/guests", $guestData)->assertCreated();
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$ci2->id}/guests", $guestData)->assertCreated();
+
+        // Exactly one TravelDocument for that passport…
+        $this->assertEquals(1, \App\Models\TravelDocument::where('document_number', 'TN70001122')->count());
+        // …owned by a single reused Guest (last_name is stored upper-cased)…
+        $this->assertEquals(1, \App\Models\Guest::where('last_name', 'CHERIF')->count());
+        // …with two stays recorded (history preserved).
+        $guest = \App\Models\TravelDocument::where('document_number', 'TN70001122')->first()->guest;
+        $this->assertEquals(2, $guest->checkIns()->count());
+    }
+
+    public function test_same_document_number_from_different_country_are_distinct_people(): void
+    {
+        $ci1 = CheckIn::factory()->for($this->hotel)->active()->create(['created_by' => $this->receptionist->id]);
+        $ci2 = CheckIn::factory()->for($this->hotel)->active()->create(['created_by' => $this->receptionist->id]);
+
+        $this->actingAs($this->receptionist)->postJson("/api/v1/hotel/check-ins/{$ci1->id}/guests", [
+            'first_name' => 'Ali', 'last_name' => 'FromTunisia',
+            'date_of_birth' => '1990-01-01', 'sex' => 'M', 'nationality_code' => 'TUN',
+            'document' => ['type' => 'passport', 'document_number' => 'SHARED123', 'issuing_country_code' => 'TN'],
+        ])->assertCreated();
+
+        $this->actingAs($this->receptionist)->postJson("/api/v1/hotel/check-ins/{$ci2->id}/guests", [
+            'first_name' => 'Marie', 'last_name' => 'FromFrance',
+            'date_of_birth' => '1985-05-05', 'sex' => 'F', 'nationality_code' => 'FRA',
+            'document' => ['type' => 'passport', 'document_number' => 'SHARED123', 'issuing_country_code' => 'FR'],
+        ])->assertCreated();
+
+        // Two DISTINCT guests — the shared number must not merge them (last_name upper-cased).
+        $this->assertEquals(2, \App\Models\Guest::whereIn('last_name', ['FROMTUNISIA', 'FROMFRANCE'])->count());
+        $this->assertEquals(2, \App\Models\TravelDocument::where('document_number', 'SHARED123')->count());
+    }
+
     // ── 3. Complete the check-in (draft → active) ─────────────────────────────
 
     public function test_completing_checkin_changes_status_to_active(): void
