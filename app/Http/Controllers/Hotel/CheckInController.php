@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\CheckIn;
 use App\Models\Hotel;
 use App\Services\CheckIn\CheckInService;
+use App\Services\Notifications\PushNotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -145,6 +146,9 @@ class CheckInController extends Controller
         $checkIn->update($validated);
         \App\Services\Audit\AuditLogger::log('check_in.updated', $checkIn, $old, $checkIn->fresh()->toArray(), hotelId: $checkIn->hotel_id);
 
+        app(PushNotificationService::class)
+            ->notifyCheckInEvent($checkIn, PushNotificationService::TYPE_FICHE_UPDATED, $request->user());
+
         return response()->json(['data' => $this->detail($checkIn->fresh()->load(['room', 'guests.documents']))]);
     }
 
@@ -176,7 +180,7 @@ class CheckInController extends Controller
             'actual_check_out_date' => ['required', 'date', 'after_or_equal:' . $checkIn->check_in_date],
         ]);
 
-        $result = $this->service->checkout($checkIn, $validated['actual_check_out_date']);
+        $result = $this->service->checkout($checkIn, $validated['actual_check_out_date'], $request->user());
 
         return response()->json(['data' => ['id' => $result->id, 'status' => $result->status, 'actual_check_out_date' => $result->actual_check_out_date]]);
     }
@@ -189,7 +193,7 @@ class CheckInController extends Controller
             'reason' => ['required', 'string', 'max:500'],
         ]);
 
-        $result = $this->service->cancel($checkIn, $validated['reason']);
+        $result = $this->service->cancel($checkIn, $validated['reason'], $request->user());
         return response()->json(['data' => ['id' => $result->id, 'status' => $result->status]]);
     }
 

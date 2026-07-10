@@ -35,6 +35,8 @@ use App\Http\Controllers\Authority\AuthorityDashboardController;
 use App\Http\Controllers\Authority\WatchlistController;
 use App\Http\Controllers\Hotel\WatchlistHitController;
 use App\Http\Controllers\Hotel\PaymentController;
+use App\Http\Controllers\Notifications\DeviceController;
+use App\Http\Controllers\Notifications\NotificationController;
 use App\Http\Controllers\Referential\ReferentialController;
 use Illuminate\Support\Facades\Route;
 
@@ -89,6 +91,25 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
         Route::delete('auth/2fa/setup',         [TwoFactorController::class, 'disable']);
         Route::patch('profile',                 [AuthController::class, 'updateProfile']);
         Route::post('profile/password',         [AuthController::class, 'changePassword']);
+    });
+
+    /*
+    |----------------------------------------------------------------------
+    | Push notifications (mobile app)
+    |
+    | Device tokens: any authenticated user may register their device.
+    | Notification centre: managers only, spans all their properties
+    | (org-level, no tenant needed).
+    |----------------------------------------------------------------------
+    */
+    Route::post('devices',           [DeviceController::class, 'store']);
+    Route::delete('devices/{token}', [DeviceController::class, 'destroy'])->where('token', '.*');
+
+    Route::middleware('role:hotel_admin')->group(function () {
+        Route::get('notifications',              [NotificationController::class, 'index']);
+        Route::get('notifications/unread-count', [NotificationController::class, 'unreadCount']);
+        Route::post('notifications/read-all',    [NotificationController::class, 'readAll']);
+        Route::post('notifications/{id}/read',   [NotificationController::class, 'markRead']);
     });
 
     /*

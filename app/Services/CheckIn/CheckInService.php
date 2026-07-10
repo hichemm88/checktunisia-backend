@@ -10,6 +10,7 @@ use App\Models\Hotel;
 use App\Models\TravelDocument;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
+use App\Services\Notifications\PushNotificationService;
 use App\Services\OCR\OcrService;
 use App\Services\Watchlist\WatchlistService;
 use Illuminate\Http\UploadedFile;
@@ -166,6 +167,10 @@ class CheckInService
             // ── Watchlist check: flag hotel if any guest is on a watchlist ──
             app(WatchlistService::class)->checkCheckIn($checkIn->load('guests.documents'));
 
+            // ── Notify the property's managers (§6) — async, never blocks the check-in ──
+            app(PushNotificationService::class)
+                ->notifyCheckInEvent($checkIn, PushNotificationService::TYPE_CHECK_IN, $completedBy);
+
             return $checkIn->fresh()->load(['room', 'guests.documents', 'creator']);
         });
     }
@@ -173,9 +178,9 @@ class CheckInService
     /**
      * Record actual check-out.
      */
-    public function checkout(CheckIn $checkIn, string $checkOutDate): CheckIn
+    public function checkout(CheckIn $checkIn, string $checkOutDate, ?User $actor = null): CheckIn
     {
-        return DB::transaction(function () use ($checkIn, $checkOutDate) {
+        return DB::transaction(function () use ($checkIn, $checkOutDate, $actor) {
             $old = ['status' => $checkIn->status, 'actual_check_out_date' => null];
             $checkIn->update([
                 'status'                => 'completed',
@@ -184,6 +189,9 @@ class CheckInService
 
             AuditLogger::log('check_in.checked_out', $checkIn, $old, $checkIn->fresh()->only(['status', 'actual_check_out_date', 'reference']), hotelId: $checkIn->hotel_id);
 
+            app(PushNotificationService::class)
+                ->notifyCheckInEvent($checkIn, PushNotificationService::TYPE_CHECK_OUT, $actor);
+
             return $checkIn->fresh();
         });
     }
@@ -191,15 +199,18 @@ class CheckInService
     /**
      * Cancel a check-in.
      */
-    public function cancel(CheckIn $checkIn, string $reason): CheckIn
+    public function cancel(CheckIn $checkIn, string $reason, ?User $actor = null): CheckIn
     {
-        return DB::transaction(function () use ($checkIn, $reason) {
+        return DB::transaction(function () use ($checkIn, $reason, $actor) {
             $checkIn->update([
                 'status'   => 'cancelled',
                 'metadata' => array_merge($checkIn->metadata ?? [], ['cancel_reason' => $reason]),
             ]);
 
             AuditLogger::log('check_in.cancelled', $checkIn, newValues: ['reference' => $checkIn->reference, 'cancel_reason' => $reason], hotelId: $checkIn->hotel_id);
+
+            app(PushNotificationService::class)
+                ->notifyCheckInEvent($checkIn, PushNotificationService::TYPE_FICHE_CANCELLED, $actor);
 
             return $checkIn->fresh();
         });
