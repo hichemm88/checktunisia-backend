@@ -11,3 +11,6 @@ Schedule::command('watchlist:sync-opensanctions')->dailyAt('02:00');
 
 // Auto-expire subscriptions past their expiry date, blocking check-ins until renewed
 Schedule::command('subscriptions:expire-overdue')->dailyAt('03:00');
+
+// Notify managers of check-ins left unvalidated for >30 min (scan done, not finalised)
+Schedule::command('checkins:notify-pending')->everyTenMinutes()->withoutOverlapping();
