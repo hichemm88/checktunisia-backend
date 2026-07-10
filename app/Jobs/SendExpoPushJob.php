@@ -2,25 +2,22 @@
 
 namespace App\Jobs;
 
-use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Queue\InteractsWithQueue;
-use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Sends push notifications to devices via the Expo Push API. Queued so it never blocks the
- * request that triggered it; failures are logged, never rethrown (§6.3 — push must never
- * make a check-in fail).
+ * Sends push notifications to devices via the Expo Push API. Dispatched with ->afterResponse()
+ * so it runs in-process AFTER the HTTP response is sent — no queue worker required (the prod
+ * container runs `artisan serve` + scheduler but NO `queue:work`). Failures are logged, never
+ * rethrown (§6.3 — push must never make a check-in fail).
  *
  * Expo relays to FCM (Android) / APNs (iOS), so no Firebase service account is required —
  * the app registers Expo push tokens ("ExponentPushToken[...]").
  */
-class SendExpoPushJob implements ShouldQueue
+class SendExpoPushJob
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable;
 
     private const ENDPOINT = 'https://exp.host/--/api/v2/push/send';
 
@@ -58,7 +55,7 @@ class SendExpoPushJob implements ShouldQueue
         // Expo accepts up to 100 messages per request.
         foreach ($messages->chunk(100) as $chunk) {
             try {
-                $response = Http::acceptJson()->asJson()->post(self::ENDPOINT, $chunk->all());
+                $response = Http::acceptJson()->asJson()->timeout(10)->post(self::ENDPOINT, $chunk->all());
                 if (!$response->successful()) {
                     Log::warning('Expo push returned non-2xx', [
                         'status' => $response->status(),

@@ -73,10 +73,11 @@ class PushNotificationService
                 ->all();
 
             if (!empty($tokens)) {
-                SendExpoPushJob::dispatch($tokens, $title, $body, [
+                // Run after the response is flushed — no queue worker needed in prod.
+                dispatch(new SendExpoPushJob($tokens, $title, $body, [
                     'check_in_id' => $checkIn->id,
                     'type'        => $type,
-                ])->afterCommit();
+                ]))->afterResponse();
             }
         } catch (\Throwable $e) {
             Log::warning('PushNotificationService failed', [
