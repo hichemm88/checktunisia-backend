@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Notifications;
 
 use App\Http\Controllers\Controller;
 use App\Models\AppNotification;
+use App\Services\Notifications\PushNotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -39,6 +40,26 @@ class NotificationController extends Controller
                 'last_page'    => $page->lastPage(),
             ],
         ]);
+    }
+
+    /**
+     * Manager → receptionists broadcast: send a free-text message to the receptionists of a
+     * property (defaults to all the manager's properties). Manager-only (gated in routes).
+     */
+    public function broadcast(Request $request, PushNotificationService $push): JsonResponse
+    {
+        $validated = $request->validate([
+            'message'     => ['required', 'string', 'max:500'],
+            'property_id' => ['nullable', 'uuid'],
+        ]);
+
+        $sent = $push->notifyReceptionists(
+            $request->user(),
+            $validated['message'],
+            $validated['property_id'] ?? null,
+        );
+
+        return response()->json(['data' => ['sent' => $sent]], 201);
     }
 
     public function unreadCount(Request $request): JsonResponse

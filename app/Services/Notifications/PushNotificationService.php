@@ -22,6 +22,65 @@ class PushNotificationService
     public const TYPE_FICHE_UPDATED   = 'fiche_updated';
     public const TYPE_FICHE_CANCELLED = 'fiche_cancelled';
     public const TYPE_FICHE_PENDING   = 'fiche_pending';
+    public const TYPE_MANAGER_MESSAGE = 'manager_message';
+
+    /**
+     * A manager broadcasts a free-text message to the receptionists of a property (or, if no
+     * property is given, all of the manager's properties). Writes a persisted notification per
+     * recipient and sends a push. Returns the number of recipients. Never throws.
+     */
+    public function notifyReceptionists(User $actor, string $message, ?string $propertyId = null): int
+    {
+        try {
+            $hotels = $actor->hotels()->get();
+            if ($propertyId) {
+                $hotels = $hotels->where('id', $propertyId)->values();
+            }
+            if ($hotels->isEmpty()) {
+                return 0;
+            }
+
+            $actorName = trim("{$actor->first_name} {$actor->last_name}");
+            $title = "💬 Message — {$actorName}";
+            $tokens = [];
+            $sent = 0;
+
+            foreach ($hotels as $hotel) {
+                $recipients = $hotel->users()
+                    ->whereHas('roles', fn ($q) => $q->where('name', 'receptionist'))
+                    ->get();
+
+                foreach ($recipients as $recipient) {
+                    AppNotification::create([
+                        'user_id'  => $recipient->id,
+                        'hotel_id' => $hotel->id,
+                        'actor_id' => $actor->id,
+                        'type'     => self::TYPE_MANAGER_MESSAGE,
+                        'title'    => $title,
+                        'body'     => $message,
+                        'data'     => ['actor_name' => $actorName, 'property_name' => $hotel->name],
+                    ]);
+                    $sent++;
+                }
+
+                $tokens = array_merge(
+                    $tokens,
+                    DeviceToken::whereIn('user_id', $recipients->pluck('id'))->pluck('token')->all(),
+                );
+            }
+
+            if (!empty($tokens)) {
+                dispatch(new SendExpoPushJob(array_values(array_unique($tokens)), $title, $message, [
+                    'type' => self::TYPE_MANAGER_MESSAGE,
+                ]))->afterResponse();
+            }
+
+            return $sent;
+        } catch (\Throwable $e) {
+            Log::warning('notifyReceptionists failed', ['error' => $e->getMessage()]);
+            return 0;
+        }
+    }
 
     /**
      * Notify managers of a check-in event. Never throws.

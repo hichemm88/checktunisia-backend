@@ -98,18 +98,24 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     | Push notifications (mobile app)
     |
     | Device tokens: any authenticated user may register their device.
-    | Notification centre: managers only, spans all their properties
+    | Notification centre: both roles read their OWN rows (managers get check-in
+    | activity, receptionists get manager messages). Broadcast is manager-only.
     | (org-level, no tenant needed).
     |----------------------------------------------------------------------
     */
     Route::post('devices',           [DeviceController::class, 'store']);
     Route::delete('devices/{token}', [DeviceController::class, 'destroy'])->where('token', '.*');
 
-    Route::middleware('role:hotel_admin')->group(function () {
+    Route::middleware('role:hotel_admin|receptionist')->group(function () {
         Route::get('notifications',              [NotificationController::class, 'index']);
         Route::get('notifications/unread-count', [NotificationController::class, 'unreadCount']);
         Route::post('notifications/read-all',    [NotificationController::class, 'readAll']);
         Route::post('notifications/{id}/read',   [NotificationController::class, 'markRead']);
+    });
+
+    // Manager → receptionists broadcast.
+    Route::middleware('role:hotel_admin')->group(function () {
+        Route::post('notifications/broadcast',   [NotificationController::class, 'broadcast']);
     });
 
     /*
