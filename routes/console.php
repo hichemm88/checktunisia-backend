@@ -14,3 +14,6 @@ Schedule::command('subscriptions:expire-overdue')->dailyAt('03:00');
 
 // Notify managers of check-ins left unvalidated for >30 min (scan done, not finalised)
 Schedule::command('checkins:notify-pending')->everyTenMinutes()->withoutOverlapping();
+
+// Remind staff about active stays due to depart today with no check-out — 14:00 Tunis (§8)
+Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone('Africa/Tunis');

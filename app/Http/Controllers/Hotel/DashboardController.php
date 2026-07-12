@@ -8,12 +8,13 @@ use App\Models\Hotel;
 use App\Models\TravelDocument;
 use App\Models\WatchlistHit;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
         /** @var Hotel $hotel */
         $hotel  = app('tenant');
@@ -147,6 +148,79 @@ class DashboardController extends Controller
                 'reference'       => $row->reference,
             ]);
 
+        // ── Arrivals today (pending drafts) — actionable list (§4) ────────────
+        $arrivalsList = CheckIn::with(['room', 'guests'])
+            ->where('hotel_id', $hotel->id)
+            ->whereDate('check_in_date', $today)
+            ->where('status', 'draft')
+            ->orderBy('created_at')
+            ->get()
+            ->map(fn ($c) => [
+                'id'                      => $c->id,
+                'reference'               => $c->reference,
+                'guest_name'              => $c->guests->first()?->full_name,
+                'booking_reference'       => $c->booking_reference,
+                'room'                    => $c->room?->number,
+                'room_id'                 => $c->room_id,
+                'check_in_date'           => $c->check_in_date,
+                'expected_check_out_date' => $c->expected_check_out_date,
+                'adults_count'            => $c->adults_count,
+                'children_count'          => $c->children_count,
+            ]);
+
+        // ── Departures today (active stays leaving today) — actionable (§4) ───
+        $departuresList = CheckIn::with(['room', 'guests'])
+            ->where('hotel_id', $hotel->id)
+            ->whereDate('expected_check_out_date', $today)
+            ->where('status', 'active')
+            ->orderBy('expected_check_out_date')
+            ->get()
+            ->map(fn ($c) => [
+                'id'          => $c->id,
+                'reference'   => $c->reference,
+                'guest_name'  => $c->guests->first()?->full_name,
+                'room'        => $c->room?->number,
+            ]);
+
+        // ── Present guests (active stays) — for the tappable occupancy ring (§4) ─
+        $presentGuests = CheckIn::with(['room', 'guests'])
+            ->where('hotel_id', $hotel->id)
+            ->where('status', 'active')
+            ->get()
+            ->map(fn ($c) => [
+                'id'         => $c->id,
+                'guest_name' => $c->guests->first()?->full_name,
+                'room'       => $c->room?->number,
+            ]);
+
+        // ── Per-property recap for the multi-establishment switcher (§5) ──────
+        // Shown on the home screen for any user attached to more than one property, both roles.
+        $accessible = $request->user()->hotels()->orderBy('hotels.created_at')->get();
+        $propertiesSummary = $accessible->map(function ($h) use ($hotel) {
+            $active  = CheckIn::where('hotel_id', $h->id)->where('status', 'active')->count();
+            $present = (int) CheckIn::where('hotel_id', $h->id)->where('status', 'active')
+                ->selectRaw('COALESCE(SUM(adults_count + children_count), 0) as t')->value('t');
+            return [
+                'id'             => $h->id,
+                'name'           => $h->name,
+                'occupancy_rate' => $h->room_count > 0 ? (int) round($active / $h->room_count * 100) : 0,
+                'present'        => $present,
+                'is_active'      => $h->id === $hotel->id,
+            ];
+        });
+
+        // ── Other establishments the user works at (arrivals/departures today) — §4 ─
+        $otherHotelIds = $accessible->where('id', '!=', $hotel->id)->pluck('id');
+
+        $otherArrivals = $otherHotelIds->isEmpty() ? 0 : CheckIn::whereIn('hotel_id', $otherHotelIds)
+            ->whereDate('check_in_date', $today)
+            ->whereNotIn('status', ['cancelled', 'no_show'])
+            ->count();
+        $otherDepartures = $otherHotelIds->isEmpty() ? 0 : CheckIn::whereIn('hotel_id', $otherHotelIds)
+            ->whereDate('expected_check_out_date', $today)
+            ->where('status', 'active')
+            ->count();
+
         // ── Recent check-ins (today) ──────────────────────────────────────────
         $recentCheckIns = CheckIn::with(['room', 'guests'])
             ->where('hotel_id', $hotel->id)
@@ -184,6 +258,14 @@ class DashboardController extends Controller
                 'room_count'     => $hotel->room_count,
                 'weekly_trend'   => $weekly,
                 'occupancy_7d'   => $occupancy,
+                'arrivals_today'   => $arrivalsList,
+                'departures_today_list' => $departuresList,
+                'present_guests' => $presentGuests,
+                'properties_summary' => $propertiesSummary,
+                'other_properties' => [
+                    'arrivals'   => $otherArrivals,
+                    'departures' => $otherDepartures,
+                ],
                 'expiry_alerts'  => $expiryAlerts,
                 'subscription' => $sub ? [
                     'status'         => $sub->status,

@@ -23,6 +23,7 @@ class PushNotificationService
     public const TYPE_FICHE_CANCELLED = 'fiche_cancelled';
     public const TYPE_FICHE_PENDING   = 'fiche_pending';
     public const TYPE_MANAGER_MESSAGE = 'manager_message';
+    public const TYPE_DEPARTURE_DUE   = 'departure_due';
 
     /**
      * A manager broadcasts a free-text message to the receptionists of a property (or, if no
@@ -165,6 +166,61 @@ class PushNotificationService
                 'type'     => $type,
                 'error'    => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * Notify an establishment's staff (managers AND receptionists) that an active stay's
+     * expected departure is today and no check-out has been recorded (§8). Deep-links to the
+     * stay so the check-out can be confirmed. Never throws.
+     */
+    public function notifyDepartureDue(CheckIn $checkIn): void
+    {
+        try {
+            $hotel = $checkIn->hotel;
+            if (!$hotel) {
+                return;
+            }
+
+            $recipients = $hotel->users()
+                ->whereHas('roles', fn ($q) => $q->whereIn('name', ['hotel_admin', 'receptionist']))
+                ->get();
+
+            if ($recipients->isEmpty()) {
+                return;
+            }
+
+            $room  = $checkIn->room?->number ? "Ch. {$checkIn->room->number}" : 'Sans chambre';
+            $guest = optional($checkIn->guests->first());
+            $name  = $guest->exists ? trim("{$guest->first_name} {$guest->last_name}") : $checkIn->reference;
+
+            $title = "Départ non enregistré — {$hotel->name}";
+            $body  = "{$room} · {$name} · départ prévu aujourd'hui. Confirmer le check-out ?";
+
+            foreach ($recipients as $recipient) {
+                AppNotification::create([
+                    'user_id'     => $recipient->id,
+                    'hotel_id'    => $hotel->id,
+                    'check_in_id' => $checkIn->id,
+                    'actor_id'    => null,
+                    'type'        => self::TYPE_DEPARTURE_DUE,
+                    'title'       => $title,
+                    'body'        => $body,
+                    'data'        => ['property_name' => $hotel->name, 'check_in_id' => $checkIn->id],
+                ]);
+            }
+
+            $tokens = DeviceToken::whereIn('user_id', $recipients->pluck('id'))->pluck('token')->all();
+            if (!empty($tokens)) {
+                dispatch(new SendExpoPushJob(array_values(array_unique($tokens)), $title, $body, [
+                    'check_in_id'   => $checkIn->id,
+                    'property_id'   => $hotel->id,
+                    'property_name' => $hotel->name,
+                    'type'          => self::TYPE_DEPARTURE_DUE,
+                ]))->afterResponse();
+            }
+        } catch (\Throwable $e) {
+            Log::warning('notifyDepartureDue failed', ['check_in' => $checkIn->id ?? null, 'error' => $e->getMessage()]);
         }
     }
 
