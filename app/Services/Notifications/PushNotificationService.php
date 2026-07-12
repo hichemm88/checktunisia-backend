@@ -133,9 +133,13 @@ class PushNotificationService
 
             if (!empty($tokens)) {
                 // Run after the response is flushed — no queue worker needed in prod.
+                // property_id/property_name let the app switch to the right establishment
+                // when the notification points at a stay outside the active property.
                 dispatch(new SendExpoPushJob($tokens, $title, $body, [
-                    'check_in_id' => $checkIn->id,
-                    'type'        => $type,
+                    'check_in_id'   => $checkIn->id,
+                    'property_id'   => $hotel->id,
+                    'property_name' => $hotel->name,
+                    'type'          => $type,
                 ]))->afterResponse();
             }
         } catch (\Throwable $e) {
