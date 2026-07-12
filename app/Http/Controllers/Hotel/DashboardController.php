@@ -78,6 +78,45 @@ class DashboardController extends Controller
             ];
         }
 
+        // ── Occupancy — 7-day window (j-4 → j+2) ──────────────────────────────
+        // Single source of truth for the dashboard occupancy chart. Today's value is set to
+        // $activeCheckIns / room_count so it equals the "Taux d'occupation" KPI card exactly
+        // (no parallel front-end formula). Past nights use real departure dates, future nights
+        // project active stays forward. A night J is occupied by a stay when
+        // check_in_date <= J < departure (checkout day is not an occupied night).
+        $occEnd = $today->copy()->addDays(2);
+        $occStays = CheckIn::where('hotel_id', $hotel->id)
+            ->whereIn('status', ['active', 'completed'])
+            ->whereDate('check_in_date', '<=', $occEnd)
+            ->get(['check_in_date', 'expected_check_out_date', 'actual_check_out_date']);
+
+        $roomCount = max($hotel->room_count, 1);
+        $occupancy = [];
+        for ($i = 4; $i >= -2; $i--) {
+            $d = $today->copy()->subDays($i);
+
+            if ($d->isSameDay($today)) {
+                $units = $activeCheckIns; // matches the KPI card by construction
+            } else {
+                $units = $occStays->filter(function ($s) use ($d, $today) {
+                    $in = Carbon::parse($s->check_in_date)->startOfDay();
+                    $rawOut = ($d->lt($today) && $s->actual_check_out_date)
+                        ? $s->actual_check_out_date
+                        : $s->expected_check_out_date;
+                    $out = Carbon::parse($rawOut)->startOfDay();
+                    return $in->lte($d) && $out->gt($d);
+                })->count();
+            }
+
+            $occupancy[] = [
+                'date'      => $d->format('Y-m-d'),
+                'label'     => $d->locale('fr')->isoFormat('ddd D'),
+                'rate'      => (int) min(round(($units / $roomCount) * 100), 100),
+                'is_today'  => $d->isSameDay($today),
+                'is_future' => $d->gt($today),
+            ];
+        }
+
         // ── Document expiry alerts (next 30 days) ─────────────────────────────
         $expiryAlerts = TravelDocument::join('guests', 'travel_documents.guest_id', '=', 'guests.id')
             ->join('check_in_guests', 'guests.id', '=', 'check_in_guests.guest_id')
@@ -142,7 +181,9 @@ class DashboardController extends Controller
                 'month' => [
                     'check_ins_total' => $monthTotal,
                 ],
+                'room_count'     => $hotel->room_count,
                 'weekly_trend'   => $weekly,
+                'occupancy_7d'   => $occupancy,
                 'expiry_alerts'  => $expiryAlerts,
                 'subscription' => $sub ? [
                     'status'         => $sub->status,
