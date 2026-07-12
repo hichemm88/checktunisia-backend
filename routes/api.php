@@ -115,6 +115,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
     // Manager → receptionists broadcast.
     Route::middleware('role:hotel_admin')->group(function () {
+        Route::get('notifications/recipients',   [NotificationController::class, 'recipients']);
         Route::post('notifications/broadcast',   [NotificationController::class, 'broadcast']);
     });
 

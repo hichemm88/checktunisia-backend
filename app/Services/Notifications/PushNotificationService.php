@@ -23,16 +23,21 @@ class PushNotificationService
     public const TYPE_FICHE_CANCELLED = 'fiche_cancelled';
     public const TYPE_FICHE_PENDING   = 'fiche_pending';
     public const TYPE_MANAGER_MESSAGE = 'manager_message';
+    public const TYPE_DEPARTURE_DUE   = 'departure_due';
 
     /**
      * A manager broadcasts a free-text message to the receptionists of a property (or, if no
      * property is given, all of the manager's properties). Writes a persisted notification per
      * recipient and sends a push. Returns the number of recipients. Never throws.
      */
-    public function notifyReceptionists(User $actor, string $message, ?string $propertyId = null): int
-    {
+    public function notifyReceptionists(
+        User $actor,
+        string $message,
+        ?string $propertyId = null,
+        ?array $recipientIds = null,
+    ): int {
         try {
-            $hotels = $actor->hotels()->get();
+            $hotels = $actor->hotels()->orderBy('hotels.created_at')->get();
             if ($propertyId) {
                 $hotels = $hotels->where('id', $propertyId)->values();
             }
@@ -41,41 +46,54 @@ class PushNotificationService
             }
 
             $actorName = trim("{$actor->first_name} {$actor->last_name}");
-            $title = "💬 Message — {$actorName}";
-            $tokens = [];
-            $sent = 0;
+            $title = "Message — {$actorName}";
+
+            // Build a UNIQUE recipient set across the manager's properties so a receptionist
+            // assigned to several of them is notified once. Each recipient keeps their first
+            // property as the notification's establishment context. An explicit recipientIds
+            // list narrows the audience; null/empty preserves the "all receptionists" default.
+            $wanted = !empty($recipientIds) ? array_flip($recipientIds) : null;
+            $recipients = []; // user_id => ['user' => User, 'hotel' => Hotel]
 
             foreach ($hotels as $hotel) {
-                $recipients = $hotel->users()
+                $receps = $hotel->users()
                     ->whereHas('roles', fn ($q) => $q->where('name', 'receptionist'))
                     ->get();
 
-                foreach ($recipients as $recipient) {
-                    AppNotification::create([
-                        'user_id'  => $recipient->id,
-                        'hotel_id' => $hotel->id,
-                        'actor_id' => $actor->id,
-                        'type'     => self::TYPE_MANAGER_MESSAGE,
-                        'title'    => $title,
-                        'body'     => $message,
-                        'data'     => ['actor_name' => $actorName, 'property_name' => $hotel->name],
-                    ]);
-                    $sent++;
+                foreach ($receps as $recipient) {
+                    if ($wanted !== null && !isset($wanted[$recipient->id])) {
+                        continue;
+                    }
+                    if (!isset($recipients[$recipient->id])) {
+                        $recipients[$recipient->id] = ['user' => $recipient, 'hotel' => $hotel];
+                    }
                 }
-
-                $tokens = array_merge(
-                    $tokens,
-                    DeviceToken::whereIn('user_id', $recipients->pluck('id'))->pluck('token')->all(),
-                );
             }
 
+            if (empty($recipients)) {
+                return 0;
+            }
+
+            foreach ($recipients as $entry) {
+                AppNotification::create([
+                    'user_id'  => $entry['user']->id,
+                    'hotel_id' => $entry['hotel']->id,
+                    'actor_id' => $actor->id,
+                    'type'     => self::TYPE_MANAGER_MESSAGE,
+                    'title'    => $title,
+                    'body'     => $message,
+                    'data'     => ['actor_name' => $actorName, 'property_name' => $entry['hotel']->name],
+                ]);
+            }
+
+            $tokens = DeviceToken::whereIn('user_id', array_keys($recipients))->pluck('token')->all();
             if (!empty($tokens)) {
                 dispatch(new SendExpoPushJob(array_values(array_unique($tokens)), $title, $message, [
                     'type' => self::TYPE_MANAGER_MESSAGE,
                 ]))->afterResponse();
             }
 
-            return $sent;
+            return count($recipients);
         } catch (\Throwable $e) {
             Log::warning('notifyReceptionists failed', ['error' => $e->getMessage()]);
             return 0;
@@ -133,9 +151,13 @@ class PushNotificationService
 
             if (!empty($tokens)) {
                 // Run after the response is flushed — no queue worker needed in prod.
+                // property_id/property_name let the app switch to the right establishment
+                // when the notification points at a stay outside the active property.
                 dispatch(new SendExpoPushJob($tokens, $title, $body, [
-                    'check_in_id' => $checkIn->id,
-                    'type'        => $type,
+                    'check_in_id'   => $checkIn->id,
+                    'property_id'   => $hotel->id,
+                    'property_name' => $hotel->name,
+                    'type'          => $type,
                 ]))->afterResponse();
             }
         } catch (\Throwable $e) {
@@ -144,6 +166,61 @@ class PushNotificationService
                 'type'     => $type,
                 'error'    => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * Notify an establishment's staff (managers AND receptionists) that an active stay's
+     * expected departure is today and no check-out has been recorded (§8). Deep-links to the
+     * stay so the check-out can be confirmed. Never throws.
+     */
+    public function notifyDepartureDue(CheckIn $checkIn): void
+    {
+        try {
+            $hotel = $checkIn->hotel;
+            if (!$hotel) {
+                return;
+            }
+
+            $recipients = $hotel->users()
+                ->whereHas('roles', fn ($q) => $q->whereIn('name', ['hotel_admin', 'receptionist']))
+                ->get();
+
+            if ($recipients->isEmpty()) {
+                return;
+            }
+
+            $room  = $checkIn->room?->number ? "Ch. {$checkIn->room->number}" : 'Sans chambre';
+            $guest = optional($checkIn->guests->first());
+            $name  = $guest->exists ? trim("{$guest->first_name} {$guest->last_name}") : $checkIn->reference;
+
+            $title = "Départ non enregistré — {$hotel->name}";
+            $body  = "{$room} · {$name} · départ prévu aujourd'hui. Confirmer le check-out ?";
+
+            foreach ($recipients as $recipient) {
+                AppNotification::create([
+                    'user_id'     => $recipient->id,
+                    'hotel_id'    => $hotel->id,
+                    'check_in_id' => $checkIn->id,
+                    'actor_id'    => null,
+                    'type'        => self::TYPE_DEPARTURE_DUE,
+                    'title'       => $title,
+                    'body'        => $body,
+                    'data'        => ['property_name' => $hotel->name, 'check_in_id' => $checkIn->id],
+                ]);
+            }
+
+            $tokens = DeviceToken::whereIn('user_id', $recipients->pluck('id'))->pluck('token')->all();
+            if (!empty($tokens)) {
+                dispatch(new SendExpoPushJob(array_values(array_unique($tokens)), $title, $body, [
+                    'check_in_id'   => $checkIn->id,
+                    'property_id'   => $hotel->id,
+                    'property_name' => $hotel->name,
+                    'type'          => self::TYPE_DEPARTURE_DUE,
+                ]))->afterResponse();
+            }
+        } catch (\Throwable $e) {
+            Log::warning('notifyDepartureDue failed', ['check_in' => $checkIn->id ?? null, 'error' => $e->getMessage()]);
         }
     }
 
@@ -161,25 +238,27 @@ class PushNotificationService
         $guest     = optional($checkIn->guests->first());
         $guestName = $guest ? trim("{$guest->first_name} {$guest->last_name}") : $checkIn->reference;
 
+        // No emojis — the in-app centre carries the event type via a coloured icon pill, and
+        // pushes carry it in the title text alone (§6, sober Qayed identity).
         return match ($type) {
             self::TYPE_CHECK_OUT => [
-                "🔁 Check-out — {$hotelName}",
+                "Check-out — {$hotelName}",
                 "{$room} · par {$actorName} · {$time}",
             ],
             self::TYPE_FICHE_UPDATED => [
-                "✏️ Fiche modifiée — {$hotelName}",
+                "Fiche modifiée — {$hotelName}",
                 "{$guestName} · par {$actorName}",
             ],
             self::TYPE_FICHE_CANCELLED => [
-                "❌ Fiche annulée — {$hotelName}",
+                "Fiche annulée — {$hotelName}",
                 "par {$actorName}",
             ],
             self::TYPE_FICHE_PENDING => [
-                "⚠️ Fiche non validée — {$hotelName}",
+                "Fiche non validée — {$hotelName}",
                 "{$room} · en attente",
             ],
             default => [ // TYPE_CHECK_IN
-                "✅ Check-in — {$hotelName}",
+                "Check-in — {$hotelName}",
                 "{$room} · {$people} pers. · par {$actorName} · {$time}",
             ],
         };

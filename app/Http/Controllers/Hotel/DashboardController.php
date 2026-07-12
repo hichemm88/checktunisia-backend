@@ -8,12 +8,13 @@ use App\Models\Hotel;
 use App\Models\TravelDocument;
 use App\Models\WatchlistHit;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
         /** @var Hotel $hotel */
         $hotel  = app('tenant');
@@ -78,6 +79,45 @@ class DashboardController extends Controller
             ];
         }
 
+        // ── Occupancy — 7-day window (j-4 → j+2) ──────────────────────────────
+        // Single source of truth for the dashboard occupancy chart. Today's value is set to
+        // $activeCheckIns / room_count so it equals the "Taux d'occupation" KPI card exactly
+        // (no parallel front-end formula). Past nights use real departure dates, future nights
+        // project active stays forward. A night J is occupied by a stay when
+        // check_in_date <= J < departure (checkout day is not an occupied night).
+        $occEnd = $today->copy()->addDays(2);
+        $occStays = CheckIn::where('hotel_id', $hotel->id)
+            ->whereIn('status', ['active', 'completed'])
+            ->whereDate('check_in_date', '<=', $occEnd)
+            ->get(['check_in_date', 'expected_check_out_date', 'actual_check_out_date']);
+
+        $roomCount = max($hotel->room_count, 1);
+        $occupancy = [];
+        for ($i = 4; $i >= -2; $i--) {
+            $d = $today->copy()->subDays($i);
+
+            if ($d->isSameDay($today)) {
+                $units = $activeCheckIns; // matches the KPI card by construction
+            } else {
+                $units = $occStays->filter(function ($s) use ($d, $today) {
+                    $in = Carbon::parse($s->check_in_date)->startOfDay();
+                    $rawOut = ($d->lt($today) && $s->actual_check_out_date)
+                        ? $s->actual_check_out_date
+                        : $s->expected_check_out_date;
+                    $out = Carbon::parse($rawOut)->startOfDay();
+                    return $in->lte($d) && $out->gt($d);
+                })->count();
+            }
+
+            $occupancy[] = [
+                'date'      => $d->format('Y-m-d'),
+                'label'     => $d->locale('fr')->isoFormat('ddd D'),
+                'rate'      => (int) min(round(($units / $roomCount) * 100), 100),
+                'is_today'  => $d->isSameDay($today),
+                'is_future' => $d->gt($today),
+            ];
+        }
+
         // ── Document expiry alerts (next 30 days) ─────────────────────────────
         $expiryAlerts = TravelDocument::join('guests', 'travel_documents.guest_id', '=', 'guests.id')
             ->join('check_in_guests', 'guests.id', '=', 'check_in_guests.guest_id')
@@ -107,6 +147,79 @@ class DashboardController extends Controller
                 'check_in_id'     => $row->check_in_id,
                 'reference'       => $row->reference,
             ]);
+
+        // ── Arrivals today (pending drafts) — actionable list (§4) ────────────
+        $arrivalsList = CheckIn::with(['room', 'guests'])
+            ->where('hotel_id', $hotel->id)
+            ->whereDate('check_in_date', $today)
+            ->where('status', 'draft')
+            ->orderBy('created_at')
+            ->get()
+            ->map(fn ($c) => [
+                'id'                      => $c->id,
+                'reference'               => $c->reference,
+                'guest_name'              => $c->guests->first()?->full_name,
+                'booking_reference'       => $c->booking_reference,
+                'room'                    => $c->room?->number,
+                'room_id'                 => $c->room_id,
+                'check_in_date'           => $c->check_in_date,
+                'expected_check_out_date' => $c->expected_check_out_date,
+                'adults_count'            => $c->adults_count,
+                'children_count'          => $c->children_count,
+            ]);
+
+        // ── Departures today (active stays leaving today) — actionable (§4) ───
+        $departuresList = CheckIn::with(['room', 'guests'])
+            ->where('hotel_id', $hotel->id)
+            ->whereDate('expected_check_out_date', $today)
+            ->where('status', 'active')
+            ->orderBy('expected_check_out_date')
+            ->get()
+            ->map(fn ($c) => [
+                'id'          => $c->id,
+                'reference'   => $c->reference,
+                'guest_name'  => $c->guests->first()?->full_name,
+                'room'        => $c->room?->number,
+            ]);
+
+        // ── Present guests (active stays) — for the tappable occupancy ring (§4) ─
+        $presentGuests = CheckIn::with(['room', 'guests'])
+            ->where('hotel_id', $hotel->id)
+            ->where('status', 'active')
+            ->get()
+            ->map(fn ($c) => [
+                'id'         => $c->id,
+                'guest_name' => $c->guests->first()?->full_name,
+                'room'       => $c->room?->number,
+            ]);
+
+        // ── Per-property recap for the multi-establishment switcher (§5) ──────
+        // Shown on the home screen for any user attached to more than one property, both roles.
+        $accessible = $request->user()->hotels()->orderBy('hotels.created_at')->get();
+        $propertiesSummary = $accessible->map(function ($h) use ($hotel) {
+            $active  = CheckIn::where('hotel_id', $h->id)->where('status', 'active')->count();
+            $present = (int) CheckIn::where('hotel_id', $h->id)->where('status', 'active')
+                ->selectRaw('COALESCE(SUM(adults_count + children_count), 0) as t')->value('t');
+            return [
+                'id'             => $h->id,
+                'name'           => $h->name,
+                'occupancy_rate' => $h->room_count > 0 ? (int) round($active / $h->room_count * 100) : 0,
+                'present'        => $present,
+                'is_active'      => $h->id === $hotel->id,
+            ];
+        });
+
+        // ── Other establishments the user works at (arrivals/departures today) — §4 ─
+        $otherHotelIds = $accessible->where('id', '!=', $hotel->id)->pluck('id');
+
+        $otherArrivals = $otherHotelIds->isEmpty() ? 0 : CheckIn::whereIn('hotel_id', $otherHotelIds)
+            ->whereDate('check_in_date', $today)
+            ->whereNotIn('status', ['cancelled', 'no_show'])
+            ->count();
+        $otherDepartures = $otherHotelIds->isEmpty() ? 0 : CheckIn::whereIn('hotel_id', $otherHotelIds)
+            ->whereDate('expected_check_out_date', $today)
+            ->where('status', 'active')
+            ->count();
 
         // ── Recent check-ins (today) ──────────────────────────────────────────
         $recentCheckIns = CheckIn::with(['room', 'guests'])
@@ -142,7 +255,17 @@ class DashboardController extends Controller
                 'month' => [
                     'check_ins_total' => $monthTotal,
                 ],
+                'room_count'     => $hotel->room_count,
                 'weekly_trend'   => $weekly,
+                'occupancy_7d'   => $occupancy,
+                'arrivals_today'   => $arrivalsList,
+                'departures_today_list' => $departuresList,
+                'present_guests' => $presentGuests,
+                'properties_summary' => $propertiesSummary,
+                'other_properties' => [
+                    'arrivals'   => $otherArrivals,
+                    'departures' => $otherDepartures,
+                ],
                 'expiry_alerts'  => $expiryAlerts,
                 'subscription' => $sub ? [
                     'status'         => $sub->status,

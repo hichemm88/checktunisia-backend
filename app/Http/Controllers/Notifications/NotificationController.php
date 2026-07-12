@@ -49,17 +49,53 @@ class NotificationController extends Controller
     public function broadcast(Request $request, PushNotificationService $push): JsonResponse
     {
         $validated = $request->validate([
-            'message'     => ['required', 'string', 'max:500'],
-            'property_id' => ['nullable', 'uuid'],
+            'message'        => ['required', 'string', 'max:500'],
+            'property_id'    => ['nullable', 'uuid'],
+            'recipient_ids'  => ['nullable', 'array'],
+            'recipient_ids.*' => ['uuid'],
         ]);
 
         $sent = $push->notifyReceptionists(
             $request->user(),
             $validated['message'],
             $validated['property_id'] ?? null,
+            $validated['recipient_ids'] ?? null,
         );
 
         return response()->json(['data' => ['sent' => $sent]], 201);
+    }
+
+    /**
+     * List the manager's receptionists across all their properties for the broadcast recipient
+     * picker (§9). Each receptionist appears once, tagged with every property they're assigned
+     * to (their first property leads, ordered by the property's creation date).
+     */
+    public function recipients(Request $request): JsonResponse
+    {
+        $hotels = $request->user()->hotels()->orderBy('hotels.created_at')->get();
+
+        $map = []; // user_id => ['user' => User, 'properties' => [['id','name'], ...]]
+        foreach ($hotels as $hotel) {
+            $receps = $hotel->users()
+                ->whereHas('roles', fn ($q) => $q->where('name', 'receptionist'))
+                ->get();
+
+            foreach ($receps as $u) {
+                if (!isset($map[$u->id])) {
+                    $map[$u->id] = ['user' => $u, 'properties' => []];
+                }
+                $map[$u->id]['properties'][] = ['id' => $hotel->id, 'name' => $hotel->name];
+            }
+        }
+
+        $data = array_values(array_map(fn ($e) => [
+            'id'         => $e['user']->id,
+            'first_name' => $e['user']->first_name,
+            'last_name'  => $e['user']->last_name,
+            'properties' => $e['properties'],
+        ], $map));
+
+        return response()->json(['data' => $data]);
     }
 
     public function unreadCount(Request $request): JsonResponse
@@ -101,8 +137,8 @@ class NotificationController extends Controller
         return [
             'id'            => $n->id,
             'type'          => $n->type,
-            'title'         => $n->title,
-            'body'          => $n->body,
+            'title'         => $this->stripEmoji($n->title),
+            'body'          => $this->stripEmoji($n->body),
             'property_id'   => $n->hotel_id,
             'property_name' => $n->hotel?->name,
             'check_in_id'   => $n->check_in_id,
@@ -110,5 +146,20 @@ class NotificationController extends Controller
             'created_at'    => $n->created_at?->toIso8601String(),
             'read_at'       => $n->read_at?->toIso8601String(),
         ];
+    }
+
+    /**
+     * Strip leading emoji/pictographs from historical notification copy so pre-§6 rows render
+     * cleanly without a data migration. New notifications are already emoji-free at creation.
+     */
+    private function stripEmoji(?string $text): ?string
+    {
+        if ($text === null) {
+            return null;
+        }
+
+        $clean = preg_replace('/[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{2190}-\x{21FF}\x{2B00}-\x{2BFF}\x{FE0F}]/u', '', $text);
+
+        return trim($clean ?? $text);
     }
 }

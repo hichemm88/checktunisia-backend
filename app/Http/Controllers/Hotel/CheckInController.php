@@ -20,7 +20,7 @@ class CheckInController extends Controller
         /** @var Hotel $hotel */
         $hotel = app('tenant');
 
-        $query = CheckIn::with(['room', 'creator'])
+        $query = CheckIn::with(['room', 'creator', 'guests.documents'])
             ->where('hotel_id', $hotel->id)
             ->withCount('guests');
 
@@ -236,6 +236,7 @@ class CheckInController extends Controller
             'expected_check_out_date' => $c->expected_check_out_date,
             'status'                  => $c->status,
             'guests_count'            => $c->guests_count,
+            'document_expired'        => $this->hasExpiredDocument($c),
             'primary_guest'           => $primary ? [
                 'first_name'      => $primary->first_name,
                 'last_name'       => $primary->last_name,
@@ -243,6 +244,21 @@ class CheckInController extends Controller
             ] : null,
             'created_at' => $c->created_at,
         ];
+    }
+
+    /**
+     * True when any traveller's document was already expired on the stay's arrival date (§3).
+     * Derived from the persisted expiry_date, so the flag is stable over time.
+     */
+    private function hasExpiredDocument(CheckIn $c): bool
+    {
+        $arrival = $c->check_in_date;
+
+        return $c->guests->contains(function ($g) use ($arrival) {
+            return $g->documents->contains(function ($d) use ($arrival) {
+                return $d->expiry_date && $d->expiry_date < $arrival;
+            });
+        });
     }
 
     private function detail(CheckIn $c): array
@@ -260,6 +276,7 @@ class CheckInController extends Controller
             'adults_count'            => $c->adults_count,
             'children_count'          => $c->children_count,
             'notes'                   => $c->notes,
+            'document_expired'        => $this->hasExpiredDocument($c),
             'guests'                  => $c->guests->map(fn($g) => $this->formatGuest($g, $c->id)),
             'created_by'              => $c->creator ? ['id' => $c->creator->id, 'first_name' => $c->creator->first_name, 'last_name' => $c->creator->last_name] : null,
             'completed_by'            => $c->completedBy ? ['id' => $c->completedBy->id, 'first_name' => $c->completedBy->first_name] : null,
