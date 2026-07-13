@@ -26,7 +26,8 @@ return new class extends Migration
 
             // property_id / checkin_id / traveler_id (§5). Le log survit à la
             // suppression du check-in/voyageur → nullOnDelete plutôt que cascade.
-            $table->foreignUuid('hotel_id')->constrained('hotels')->cascadeOnDelete();
+            // Nullable : un message de test [TEST] n'est rattaché à aucune propriété.
+            $table->foreignUuid('hotel_id')->nullable()->constrained('hotels')->cascadeOnDelete();
             $table->foreignUuid('check_in_id')->nullable()->constrained('check_ins')->nullOnDelete();
             $table->foreignUuid('guest_id')->nullable()->constrained('guests')->nullOnDelete();
             // Référence à la photo déjà stockée (jamais de copie).
