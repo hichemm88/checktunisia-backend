@@ -13,9 +13,9 @@ use App\Services\Audit\AuditLogger;
 use App\Services\Notifications\PushNotificationService;
 use App\Services\OCR\OcrService;
 use App\Services\Watchlist\WatchlistService;
+use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 
 class CheckInService
 {
@@ -28,17 +28,17 @@ class CheckInService
     {
         return DB::transaction(function () use ($hotel, $creator, $data) {
             $checkIn = CheckIn::create([
-                'hotel_id'                => $hotel->id,
-                'room_id'                 => $data['room_id'] ?? null,
-                'booking_reference'       => $data['booking_reference'] ?? null,
-                'booking_source'          => $data['booking_source'] ?? 'direct',
-                'check_in_date'           => $data['check_in_date'],
+                'hotel_id' => $hotel->id,
+                'room_id' => $data['room_id'] ?? null,
+                'booking_reference' => $data['booking_reference'] ?? null,
+                'booking_source' => $data['booking_source'] ?? 'direct',
+                'check_in_date' => $data['check_in_date'],
                 'expected_check_out_date' => $data['expected_check_out_date'],
-                'adults_count'            => $data['adults_count'] ?? 1,
-                'children_count'          => $data['children_count'] ?? 0,
-                'notes'                   => $data['notes'] ?? null,
-                'status'                  => 'draft',
-                'created_by'              => $creator->id,
+                'adults_count' => $data['adults_count'] ?? 1,
+                'children_count' => $data['children_count'] ?? 0,
+                'notes' => $data['notes'] ?? null,
+                'status' => 'draft',
+                'created_by' => $creator->id,
             ]);
 
             AuditLogger::log(
@@ -62,7 +62,7 @@ class CheckInService
             $guest = $this->findOrCreateGuest($data);
 
             // Upsert travel document
-            if (!empty($data['document'])) {
+            if (! empty($data['document'])) {
                 $this->upsertDocument($guest, $data['document']);
             }
 
@@ -79,7 +79,7 @@ class CheckInService
                 subject: $guest,
                 newValues: [
                     'check_in_id' => $checkIn->id, 'guest_id' => $guest->id,
-                    'first_name'  => $guest->first_name, 'last_name' => $guest->last_name,
+                    'first_name' => $guest->first_name, 'last_name' => $guest->last_name,
                 ],
                 hotelId: $checkIn->hotel_id,
             );
@@ -96,20 +96,20 @@ class CheckInService
         return DB::transaction(function () use ($checkIn, $guest, $data) {
             $old = $guest->toArray();
             $guest->update(array_filter([
-                'first_name'      => $data['first_name'] ?? null,
-                'last_name'       => $data['last_name'] ?? null,
-                'date_of_birth'   => $data['date_of_birth'] ?? null,
-                'sex'             => $data['sex'] ?? null,
+                'first_name' => $data['first_name'] ?? null,
+                'last_name' => $data['last_name'] ?? null,
+                'date_of_birth' => $data['date_of_birth'] ?? null,
+                'sex' => $data['sex'] ?? null,
                 'nationality_code' => $data['nationality_code'] ?? null,
-                'place_of_birth'  => $data['place_of_birth'] ?? null,
-                'email'           => $data['email'] ?? null,
-                'phone'           => $data['phone'] ?? null,
-            ], fn($v) => !is_null($v)));
+                'place_of_birth' => $data['place_of_birth'] ?? null,
+                'email' => $data['email'] ?? null,
+                'phone' => $data['phone'] ?? null,
+            ], fn ($v) => ! is_null($v)));
 
-            if (!empty($data['document'])) {
+            if (! empty($data['document'])) {
                 $doc = $guest->primaryDocument;
                 if ($doc) {
-                    $doc->update(array_filter($data['document'], fn($v) => !is_null($v)));
+                    $doc->update(array_filter($data['document'], fn ($v) => ! is_null($v)));
                 }
             }
 
@@ -137,7 +137,7 @@ class CheckInService
 
             AuditLogger::log('guest.removed', $guest, [
                 'check_in_id' => $checkIn->id,
-                'first_name'  => $guest->first_name, 'last_name' => $guest->last_name,
+                'first_name' => $guest->first_name, 'last_name' => $guest->last_name,
             ], [], hotelId: $checkIn->hotel_id);
         });
     }
@@ -147,7 +147,7 @@ class CheckInService
      */
     public function complete(CheckIn $checkIn, User $completedBy): CheckIn
     {
-        if (!$checkIn->isDraft()) {
+        if (! $checkIn->isDraft()) {
             throw new \DomainException('Only draft check-ins can be completed.');
         }
 
@@ -157,7 +157,7 @@ class CheckInService
 
         return DB::transaction(function () use ($checkIn, $completedBy) {
             $checkIn->update([
-                'status'       => 'active',
+                'status' => 'active',
                 'completed_by' => $completedBy->id,
                 'completed_at' => now(),
             ]);
@@ -171,6 +171,14 @@ class CheckInService
             app(PushNotificationService::class)
                 ->notifyCheckInEvent($checkIn, PushNotificationService::TYPE_CHECK_IN, $completedBy);
 
+            // ── MODULE PROVISOIRE — à retirer après homologation MI. ──────────────
+            // Voir PROMPT-CLAUDE-CODE-QAYED-AUTORITE.md
+            // Enfile la fiche de police + photo pour envoi WhatsApp au destinataire
+            // unique. Uniquement de l'enfilage (inserts) : l'envoi réel est fait par
+            // le worker Node. Entièrement gardé/avalé — un souci WhatsApp ne doit
+            // jamais bloquer ni ralentir le check-in. Inerte si WHATSAPP_POLICE_ENABLED=false.
+            app(WhatsappOutboxService::class)->enqueueForCheckIn($checkIn);
+
             return $checkIn->fresh()->load(['room', 'guests.documents', 'creator']);
         });
     }
@@ -183,7 +191,7 @@ class CheckInService
         return DB::transaction(function () use ($checkIn, $checkOutDate, $actor) {
             $old = ['status' => $checkIn->status, 'actual_check_out_date' => null];
             $checkIn->update([
-                'status'                => 'completed',
+                'status' => 'completed',
                 'actual_check_out_date' => $checkOutDate,
             ]);
 
@@ -203,7 +211,7 @@ class CheckInService
     {
         return DB::transaction(function () use ($checkIn, $reason, $actor) {
             $checkIn->update([
-                'status'   => 'cancelled',
+                'status' => 'cancelled',
                 'metadata' => array_merge($checkIn->metadata ?? [], ['cancel_reason' => $reason]),
             ]);
 
@@ -221,17 +229,17 @@ class CheckInService
      */
     public function uploadScan(CheckIn $checkIn, User $uploader, UploadedFile $file): DocumentScan
     {
-        $hash    = hash_file('sha256', $file->getRealPath());
-        $path    = $file->store("scans/{$checkIn->hotel_id}/{$checkIn->id}", config('filesystems.passport_scan_disk', 'local'));
+        $hash = hash_file('sha256', $file->getRealPath());
+        $path = $file->store("scans/{$checkIn->hotel_id}/{$checkIn->id}", config('filesystems.passport_scan_disk', 'local'));
 
         $scan = DocumentScan::create([
-            'check_in_id'   => $checkIn->id,
-            'file_path'     => $path,
-            'file_hash'     => $hash,
+            'check_in_id' => $checkIn->id,
+            'file_path' => $path,
+            'file_hash' => $hash,
             'file_size_bytes' => $file->getSize(),
-            'mime_type'     => $file->getMimeType(),
-            'ocr_status'    => 'pending',
-            'uploaded_by'   => $uploader->id,
+            'mime_type' => $file->getMimeType(),
+            'ocr_status' => 'pending',
+            'uploaded_by' => $uploader->id,
         ]);
 
         AuditLogger::log('scan.uploaded', $scan, [], ['check_in_id' => $checkIn->id], hotelId: $checkIn->hotel_id);
@@ -258,7 +266,7 @@ class CheckInService
         // exact same triple `upsertDocument()` uses. Matching on number+type alone
         // would wrongly merge two DIFFERENT people from two countries that happen to
         // share a document number.
-        if (!empty($data['document']['document_number'])) {
+        if (! empty($data['document']['document_number'])) {
             $doc = TravelDocument::where('type', $data['document']['type'] ?? 'passport')
                 ->where('document_number', $data['document']['document_number'])
                 ->where('issuing_country_code', $data['document']['issuing_country_code'] ?? 'TN')
@@ -266,19 +274,21 @@ class CheckInService
 
             // $doc->guest peut être null si l'enregistrement Guest a été supprimé
             // sans cascader sur travel_documents (orphelin). On ignore et on recrée.
-            if ($doc && $doc->guest) return $doc->guest;
+            if ($doc && $doc->guest) {
+                return $doc->guest;
+            }
         }
 
         return Guest::create([
-            'first_name'      => $data['first_name'],
-            'last_name'       => strtoupper($data['last_name']),
-            'date_of_birth'   => $data['date_of_birth'],
-            'sex'             => $data['sex'] ?? 'M',
+            'first_name' => $data['first_name'],
+            'last_name' => strtoupper($data['last_name']),
+            'date_of_birth' => $data['date_of_birth'],
+            'sex' => $data['sex'] ?? 'M',
             'nationality_code' => $data['nationality_code'],
             'country_of_birth' => $data['country_of_birth'] ?? null,
-            'place_of_birth'  => $data['place_of_birth'] ?? null,
-            'email'           => $data['email'] ?? null,
-            'phone'           => $data['phone'] ?? null,
+            'place_of_birth' => $data['place_of_birth'] ?? null,
+            'email' => $data['email'] ?? null,
+            'phone' => $data['phone'] ?? null,
         ]);
     }
 
@@ -286,16 +296,16 @@ class CheckInService
     {
         return TravelDocument::updateOrCreate(
             [
-                'type'                => $docData['type'] ?? 'passport',
-                'document_number'     => $docData['document_number'],
+                'type' => $docData['type'] ?? 'passport',
+                'document_number' => $docData['document_number'],
                 'issuing_country_code' => $docData['issuing_country_code'] ?? 'TN',
             ],
             [
-                'guest_id'    => $guest->id,
-                'issue_date'  => $docData['issue_date'] ?? null,
+                'guest_id' => $guest->id,
+                'issue_date' => $docData['issue_date'] ?? null,
                 'expiry_date' => $docData['expiry_date'] ?? null,
-                'mrz_line1'   => $docData['mrz_line1'] ?? null,
-                'mrz_line2'   => $docData['mrz_line2'] ?? null,
+                'mrz_line1' => $docData['mrz_line1'] ?? null,
+                'mrz_line2' => $docData['mrz_line2'] ?? null,
                 'is_verified' => true,
             ]
         );

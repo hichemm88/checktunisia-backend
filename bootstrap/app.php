@@ -1,14 +1,22 @@
 <?php
 
+use App\Http\Middleware\AuditRequestMiddleware;
 use App\Http\Middleware\EnsureActiveSubscription;
 use App\Http\Middleware\EnsureAuthorityCredentialValid;
 use App\Http\Middleware\Require2FA;
 use App\Http\Middleware\ResolveTenant;
-use App\Http\Middleware\AuditRequestMiddleware;
+use App\Http\Middleware\SecurityHeaders;
+use App\Http\Middleware\VerifyWhatsappWorker;
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
+use Spatie\Permission\Exceptions\UnauthorizedException;
+use Spatie\Permission\Middleware\PermissionMiddleware;
+use Spatie\Permission\Middleware\RoleMiddleware;
+use Spatie\Permission\Middleware\RoleOrPermissionMiddleware;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -21,40 +29,42 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         // Conservative security headers on every API response (defence in depth).
         $middleware->api(append: [
-            \App\Http\Middleware\SecurityHeaders::class,
+            SecurityHeaders::class,
         ]);
 
         $middleware->alias([
-            'tenant'               => ResolveTenant::class,
-            'subscription.active'  => EnsureActiveSubscription::class,
+            'tenant' => ResolveTenant::class,
+            'subscription.active' => EnsureActiveSubscription::class,
             'authority.credential' => EnsureAuthorityCredentialValid::class,
-            'require.2fa'          => Require2FA::class,
-            'audit'                => AuditRequestMiddleware::class,
-            'role'                 => \Spatie\Permission\Middleware\RoleMiddleware::class,
-            'permission'           => \Spatie\Permission\Middleware\PermissionMiddleware::class,
-            'role_or_permission'   => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
+            'require.2fa' => Require2FA::class,
+            'audit' => AuditRequestMiddleware::class,
+            'role' => RoleMiddleware::class,
+            'permission' => PermissionMiddleware::class,
+            'role_or_permission' => RoleOrPermissionMiddleware::class,
+            // MODULE PROVISOIRE — relais WhatsApp (à retirer après homologation MI).
+            'whatsapp.worker' => VerifyWhatsappWorker::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         $exceptions->render(function (NotFoundHttpException $e, Request $request) {
             if ($request->is('api/*')) {
                 return response()->json([
-                    'data'   => null,
+                    'data' => null,
                     'errors' => [['code' => 'RESOURCE_NOT_FOUND', 'message' => 'Resource not found.', 'field' => null]],
                 ], 404);
             }
         });
 
-        $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e, Request $request) {
+        $exceptions->render(function (AuthenticationException $e, Request $request) {
             if ($request->is('api/*')) {
                 return response()->json([
-                    'data'   => null,
+                    'data' => null,
                     'errors' => [['code' => 'UNAUTHENTICATED', 'message' => 'Unauthenticated.', 'field' => null]],
                 ], 401);
             }
         });
 
-        $exceptions->render(function (\Illuminate\Validation\ValidationException $e, Request $request) {
+        $exceptions->render(function (ValidationException $e, Request $request) {
             if ($request->is('api/*')) {
                 $errors = [];
                 foreach ($e->errors() as $field => $messages) {
@@ -62,14 +72,15 @@ return Application::configure(basePath: dirname(__DIR__))
                         $errors[] = ['code' => 'VALIDATION_ERROR', 'message' => $message, 'field' => $field];
                     }
                 }
+
                 return response()->json(['data' => null, 'errors' => $errors], 422);
             }
         });
 
-        $exceptions->render(function (\Spatie\Permission\Exceptions\UnauthorizedException $e, Request $request) {
+        $exceptions->render(function (UnauthorizedException $e, Request $request) {
             if ($request->is('api/*')) {
                 return response()->json([
-                    'data'   => null,
+                    'data' => null,
                     'errors' => [['code' => 'PERMISSION_DENIED', 'message' => 'You do not have permission to perform this action.', 'field' => null]],
                 ], 403);
             }
