@@ -57,6 +57,11 @@ Un QR s'affiche dans le terminal : le scanner **avec la SIM dédiée Qayed**
 (jamais un numéro personnel — risque de ban Meta). La session est ensuite
 persistée dans `WHATSAPP_SESSION_PATH` et survit aux redémarrages.
 
+> 📱 **Depuis un téléphone / Railway** : le QR est aussi servi en image sur
+> **`GET /qr`** (ex. `https://<service-node>.up.railway.app/qr`). Ouvre cette
+> page dans un navigateur et scanne-la avec le téléphone de la SIM Qayed. La
+> page se rafraîchit seule et affiche « connectée » une fois la session prête.
+
 > ⚠️ **Railway / conteneurs** : le disque est éphémère. Monter un **volume
 > persistant** sur `WHATSAPP_SESSION_PATH`, sinon le QR devra être re-scanné à
 > chaque redéploiement.

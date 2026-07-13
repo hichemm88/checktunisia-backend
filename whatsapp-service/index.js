@@ -20,6 +20,7 @@ require('dotenv').config();
 
 const express = require('express');
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const axios = require('axios');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 
@@ -51,6 +52,7 @@ const state = {
   lastPollAt: null,
   sentCount: 0,
   failedCount: 0,
+  qrDataUrl: null, // QR courant en image (pour la page /qr, scannable au téléphone)
 };
 
 let ready = false;
@@ -84,14 +86,19 @@ async function reportSession(status, reason = null) {
 
 client.on('qr', (qr) => {
   // Premier démarrage : scanner ce QR avec la SIM dédiée Qayed (jamais un numéro perso).
-  console.log('[whatsapp] Scannez ce QR avec le téléphone émetteur Qayed :');
+  // 1) dans les logs (ASCII) ; 2) en image sur la page /qr (scannable depuis un téléphone).
+  console.log('[whatsapp] Scannez ce QR avec le téléphone émetteur Qayed (ou ouvrez /qr) :');
   qrcode.generate(qr, { small: true });
+  QRCode.toDataURL(qr, { margin: 2, width: 320 })
+    .then((url) => { state.qrDataUrl = url; })
+    .catch((err) => console.warn('[whatsapp] QR image error:', err.message));
 });
 
 client.on('authenticated', () => console.log('[whatsapp] authentifié.'));
 
 client.on('ready', () => {
   ready = true;
+  state.qrDataUrl = null; // plus besoin du QR une fois connecté
   console.log('[whatsapp] session prête.');
   reportSession('ready');
 });
@@ -189,9 +196,32 @@ function sleep(ms) {
 // ── Endpoint santé local du service Node ─────────────────────────────────────
 const app = express();
 app.get('/health', (_req, res) => {
-  res.json({ ok: ready, ...state });
+  const { qrDataUrl, ...safe } = state;
+  res.json({ ok: ready, has_qr: !!qrDataUrl, ...safe });
 });
-app.listen(HEALTH_PORT, () => console.log(`[whatsapp] health sur :${HEALTH_PORT}/health`));
+
+// Page de connexion : affiche le QR en image (scannable au téléphone) ou l'état.
+// Se rafraîchit toute seule jusqu'à ce que la session soit prête.
+app.get('/qr', (_req, res) => {
+  const body = ready
+    ? '<h2 style="color:#1a7f4b">✅ Session WhatsApp connectée</h2><p>Rien à scanner. Tu peux fermer cette page.</p>'
+    : state.qrDataUrl
+      ? `<h2>Scanne ce code avec le téléphone de la SIM Qayed</h2>
+         <p>WhatsApp → Appareils connectés → Connecter un appareil</p>
+         <img src="${state.qrDataUrl}" alt="QR WhatsApp" style="width:320px;height:320px" />`
+      : `<h2>En attente du QR…</h2><p>Le service démarre. Cette page se rafraîchit automatiquement.</p>`;
+
+  res.set('Content-Type', 'text/html; charset=utf-8').send(
+    `<!doctype html><html lang="fr"><head><meta charset="utf-8">
+     <meta name="viewport" content="width=device-width,initial-scale=1">
+     <meta http-equiv="refresh" content="10">
+     <title>Connexion WhatsApp Qayed</title></head>
+     <body style="font-family:system-ui,sans-serif;text-align:center;padding:24px;max-width:420px;margin:0 auto">
+     ${body}</body></html>`,
+  );
+});
+
+app.listen(HEALTH_PORT, () => console.log(`[whatsapp] health sur :${HEALTH_PORT}/health, QR sur :${HEALTH_PORT}/qr`));
 
 // ── Démarrage ────────────────────────────────────────────────────────────────
 process.on('unhandledRejection', (err) => console.warn('[whatsapp] unhandledRejection:', err?.message || err));
