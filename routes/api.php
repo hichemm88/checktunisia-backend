@@ -138,7 +138,8 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('my-properties', [MyPropertiesController::class, 'index']);
 
             // Rooms (read for all staff)
-            Route::get('rooms', [RoomController::class, 'index']);
+            Route::get('rooms',              [RoomController::class, 'index']);
+            Route::get('rooms/availability', [RoomController::class, 'availability']);
 
             // Watchlist hits
             Route::get('watchlist-hits',                         [WatchlistHitController::class, 'index']);
