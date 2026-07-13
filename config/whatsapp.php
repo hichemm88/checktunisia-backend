@@ -44,4 +44,9 @@ return [
 
     // Âge maximum d'un job avant abandon définitif (24 h).
     'max_age_minutes' => (int) env('WHATSAPP_MAX_AGE_MINUTES', 1440),
+
+    // Rétention des images de documents (heures). Minimisation des données : les
+    // scans ne sont conservés que le temps nécessaire aux envois (retries max
+    // 24 h), puis purgés automatiquement. Aligné sur max_age_minutes.
+    'image_retention_hours' => (int) env('WHATSAPP_IMAGE_RETENTION_HOURS', 24),
 ];

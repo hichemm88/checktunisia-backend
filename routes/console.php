@@ -17,3 +17,7 @@ Schedule::command('checkins:notify-pending')->everyTenMinutes()->withoutOverlapp
 
 // Remind staff about active stays due to depart today with no check-out — 14:00 Tunis (§8)
 Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone('Africa/Tunis');
+
+// MODULE PROVISOIRE — relais WhatsApp : purge horaire des images de documents
+// au-delà de la rétention (24 h). Minimisation des données.
+Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
