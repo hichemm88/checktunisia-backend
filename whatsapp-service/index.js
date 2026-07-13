@@ -18,6 +18,8 @@
 
 require('dotenv').config();
 
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
@@ -58,6 +60,41 @@ const state = {
 let ready = false;
 
 // ── Session whatsapp-web.js (LocalAuth persistant) ───────────────────────────
+/**
+ * Supprime les fichiers de verrou Chromium périmés (SingletonLock/Cookie/Socket)
+ * laissés par un conteneur coupé brutalement. Sans ça, au redémarrage (surtout
+ * avec un volume persistant), Chromium refuse de démarrer et whatsapp-web.js
+ * reste bloqué en « initializing » sans jamais émettre de QR.
+ */
+function cleanupStaleLocks(dir) {
+  try {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        cleanupStaleLocks(full);
+      } else if (/^Singleton(Lock|Cookie|Socket)$/.test(entry.name)) {
+        try { fs.rmSync(full, { force: true }); console.log('[whatsapp] verrou périmé supprimé :', full); } catch (_) { /* ignore */ }
+      }
+    }
+  } catch (err) {
+    console.warn('[whatsapp] cleanup locks:', err.message);
+  }
+}
+
+/** Vide le contenu du dossier de session (sans retirer le point de montage du volume). */
+function wipeSession(dir) {
+  try {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir)) {
+      fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+    }
+    console.warn('[whatsapp] session vidée :', dir);
+  } catch (err) {
+    console.warn('[whatsapp] wipe session:', err.message);
+  }
+}
+
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
   puppeteer: {
@@ -84,7 +121,20 @@ async function reportSession(status, reason = null) {
   }
 }
 
+// Watchdog anti-blocage : si ni QR ni connexion sous WATCHDOG_MS, la session
+// sur le volume est probablement corrompue → on la vide et on redémarre le
+// conteneur (Railway relance) pour repartir sur un QR frais.
+const WATCHDOG_MS = parseInt(process.env.WHATSAPP_WATCHDOG_MS || '120000', 10);
+const watchdog = setTimeout(() => {
+  if (!ready && !state.qrDataUrl) {
+    console.error('[whatsapp] bloqué au démarrage (ni QR ni connexion) — réinitialisation de la session.');
+    wipeSession(SESSION_PATH);
+    process.exit(1); // Railway relance le conteneur → session fraîche → nouveau QR
+  }
+}, WATCHDOG_MS);
+
 client.on('qr', (qr) => {
+  clearTimeout(watchdog);
   // Premier démarrage : scanner ce QR avec la SIM dédiée Qayed (jamais un numéro perso).
   // 1) dans les logs (ASCII) ; 2) en image sur la page /qr (scannable depuis un téléphone).
   console.log('[whatsapp] Scannez ce QR avec le téléphone émetteur Qayed (ou ouvrez /qr) :');
@@ -97,6 +147,7 @@ client.on('qr', (qr) => {
 client.on('authenticated', () => console.log('[whatsapp] authentifié.'));
 
 client.on('ready', () => {
+  clearTimeout(watchdog);
   ready = true;
   state.qrDataUrl = null; // plus besoin du QR une fois connecté
   console.log('[whatsapp] session prête.');
@@ -227,5 +278,6 @@ app.listen(HEALTH_PORT, () => console.log(`[whatsapp] health sur :${HEALTH_PORT}
 process.on('unhandledRejection', (err) => console.warn('[whatsapp] unhandledRejection:', err?.message || err));
 
 reportSession('initializing');
+cleanupStaleLocks(SESSION_PATH); // retire les verrous Chromium périmés avant de démarrer
 client.initialize();
 loop();
