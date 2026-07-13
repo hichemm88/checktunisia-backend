@@ -1,0 +1,6 @@
+node_modules/
+.env
+# Session WhatsApp persistée (LocalAuth) — ne jamais committer.
+.wwebjs_auth/
+.wwebjs_cache/
+*.log
