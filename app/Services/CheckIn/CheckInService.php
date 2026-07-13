@@ -74,6 +74,19 @@ class CheckInService
                 ['is_primary' => $isPrimary, 'added_by' => $addedBy->id, 'added_at' => now()],
             );
 
+            // MODULE PROVISOIRE — relais WhatsApp : relie le scan de ce voyageur
+            // (téléversé à l'étape scan, guest_id null) à son voyageur, pour que
+            // chaque fiche parte avec LA bonne photo (support multi-voyageurs).
+            if (! empty($data['scan_id'])) {
+                DocumentScan::where('id', $data['scan_id'])
+                    ->where('check_in_id', $checkIn->id)
+                    ->whereNull('guest_id')
+                    ->update([
+                        'guest_id' => $guest->id,
+                        'travel_document_id' => $guest->documents()->latest('created_at')->value('id'),
+                    ]);
+            }
+
             AuditLogger::log(
                 action: 'guest.added',
                 subject: $guest,

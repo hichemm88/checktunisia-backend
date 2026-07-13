@@ -22,24 +22,27 @@ class GuestController extends Controller
         }
 
         $validated = $request->validate([
-            'first_name'       => ['required', 'string', 'max:100'],
-            'last_name'        => ['required', 'string', 'max:100'],
-            'date_of_birth'    => ['required', 'date', 'before:today'],
-            'sex'              => ['required', 'in:M,F,X'],
+            'first_name' => ['required', 'string', 'max:100'],
+            'last_name' => ['required', 'string', 'max:100'],
+            'date_of_birth' => ['required', 'date', 'before:today'],
+            'sex' => ['required', 'in:M,F,X'],
             'nationality_code' => ['required', 'string', 'size:3'],
             'country_of_birth' => ['nullable', 'string', 'size:3'],
-            'place_of_birth'   => ['nullable', 'string', 'max:150'],
-            'email'            => ['nullable', 'email'],
-            'phone'            => ['nullable', 'string', 'max:30'],
-            'is_primary'       => ['boolean'],
-            'document'                             => ['required', 'array'],
-            'document.type'                        => ['required', 'string', 'in:passport,national_id,residence_permit,visa,travel_document'],
-            'document.document_number'             => ['required', 'string', 'max:100'],
-            'document.issuing_country_code'        => ['required', 'string', 'min:2', 'max:3'],
-            'document.issue_date'                  => ['nullable', 'date'],
-            'document.expiry_date'                 => ['nullable', 'date'],
-            'document.mrz_line1'                   => ['nullable', 'string', 'max:50'],
-            'document.mrz_line2'                   => ['nullable', 'string', 'max:50'],
+            'place_of_birth' => ['nullable', 'string', 'max:150'],
+            'email' => ['nullable', 'email'],
+            'phone' => ['nullable', 'string', 'max:30'],
+            'is_primary' => ['boolean'],
+            // MODULE PROVISOIRE — relais WhatsApp : scan à relier à ce voyageur
+            // (téléversé à l'étape scan) pour joindre la bonne photo à sa fiche.
+            'scan_id' => ['nullable', 'uuid'],
+            'document' => ['required', 'array'],
+            'document.type' => ['required', 'string', 'in:passport,national_id,residence_permit,visa,travel_document'],
+            'document.document_number' => ['required', 'string', 'max:100'],
+            'document.issuing_country_code' => ['required', 'string', 'min:2', 'max:3'],
+            'document.issue_date' => ['nullable', 'date'],
+            'document.expiry_date' => ['nullable', 'date'],
+            'document.mrz_line1' => ['nullable', 'string', 'max:50'],
+            'document.mrz_line2' => ['nullable', 'string', 'max:50'],
         ]);
 
         $guest = $this->service->addGuest($checkIn, $request->user(), $validated);
@@ -58,17 +61,17 @@ class GuestController extends Controller
         $guest = $this->findGuest($checkIn, $guestId);
 
         $validated = $request->validate([
-            'first_name'       => ['sometimes', 'string', 'max:100'],
-            'last_name'        => ['sometimes', 'string', 'max:100'],
-            'date_of_birth'    => ['sometimes', 'date'],
-            'sex'              => ['sometimes', 'in:M,F,X'],
+            'first_name' => ['sometimes', 'string', 'max:100'],
+            'last_name' => ['sometimes', 'string', 'max:100'],
+            'date_of_birth' => ['sometimes', 'date'],
+            'sex' => ['sometimes', 'in:M,F,X'],
             'nationality_code' => ['sometimes', 'string', 'size:3'],
-            'place_of_birth'   => ['nullable', 'string', 'max:150'],
-            'email'            => ['nullable', 'email'],
-            'phone'            => ['nullable', 'string', 'max:30'],
-            'document'                      => ['sometimes', 'array'],
-            'document.expiry_date'          => ['nullable', 'date'],
-            'document.document_number'      => ['sometimes', 'string'],
+            'place_of_birth' => ['nullable', 'string', 'max:150'],
+            'email' => ['nullable', 'email'],
+            'phone' => ['nullable', 'string', 'max:30'],
+            'document' => ['sometimes', 'array'],
+            'document.expiry_date' => ['nullable', 'date'],
+            'document.document_number' => ['sometimes', 'string'],
             'document.issuing_country_code' => ['sometimes', 'string', 'size:2'],
         ]);
 
@@ -104,7 +107,7 @@ class GuestController extends Controller
         }
 
         return response()->json([
-            'data'   => null,
+            'data' => null,
             'errors' => [['code' => 'CHECK_IN_NOT_MODIFIABLE', 'message' => 'Ce check-in est clôturé : la liste des voyageurs ne peut plus être modifiée.', 'field' => null]],
         ], 409);
     }
@@ -124,21 +127,22 @@ class GuestController extends Controller
     private function format(Guest $guest, string $checkInId): array
     {
         $doc = $guest->documents->first();
+
         return [
-            'id'               => $guest->id,
-            'first_name'       => $guest->first_name,
-            'last_name'        => $guest->last_name,
-            'date_of_birth'    => $guest->date_of_birth,
-            'sex'              => $guest->sex,
+            'id' => $guest->id,
+            'first_name' => $guest->first_name,
+            'last_name' => $guest->last_name,
+            'date_of_birth' => $guest->date_of_birth,
+            'sex' => $guest->sex,
             'nationality_code' => $guest->nationality_code,
-            'is_primary'       => (bool) $guest->pivot?->is_primary,
-            'document'         => $doc ? [
-                'id'                   => $doc->id,
-                'type'                 => $doc->type,
-                'document_number'      => $doc->document_number,
+            'is_primary' => (bool) $guest->pivot?->is_primary,
+            'document' => $doc ? [
+                'id' => $doc->id,
+                'type' => $doc->type,
+                'document_number' => $doc->document_number,
                 'issuing_country_code' => $doc->issuing_country_code,
-                'expiry_date'          => $doc->expiry_date,
-                'is_verified'          => $doc->is_verified,
+                'expiry_date' => $doc->expiry_date,
+                'is_verified' => $doc->is_verified,
             ] : null,
         ];
     }
