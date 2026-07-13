@@ -199,12 +199,37 @@ class WhatsappOutboxService
     }
 
     /** Scan (photo) le plus récent de ce voyageur pour ce check-in. */
+    /**
+     * Photo (scan) à joindre à la fiche de ce voyageur.
+     *
+     * Le scan est rattaché au check-in mais PAS toujours au voyageur : le
+     * document est scanné avant la création du voyageur, donc guest_id est
+     * souvent null sur document_scans. On procède donc ainsi :
+     *  1. scan explicitement lié à ce voyageur (guest_id renseigné) ;
+     *  2. sinon, si le check-in n'a qu'UN voyageur, le scan du check-in lui
+     *     appartient sans ambiguïté → on le joint ;
+     *  3. en multi-voyageurs sans lien scan→voyageur, on ne joint pas de photo
+     *     (mieux vaut pas de photo qu'un mauvais document sur une fiche police).
+     */
     private function photoScanId(CheckIn $checkIn, Guest $guest): ?string
     {
-        return DocumentScan::query()
+        $forGuest = DocumentScan::query()
             ->where('check_in_id', $checkIn->id)
             ->where('guest_id', $guest->id)
             ->latest('created_at')
             ->value('id');
+
+        if ($forGuest) {
+            return $forGuest;
+        }
+
+        if ($checkIn->guests->count() <= 1) {
+            return DocumentScan::query()
+                ->where('check_in_id', $checkIn->id)
+                ->latest('created_at')
+                ->value('id');
+        }
+
+        return null;
     }
 }
