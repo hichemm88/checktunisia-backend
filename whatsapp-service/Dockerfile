@@ -18,8 +18,9 @@ COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
 COPY . .
 
-# Volume persistant pour la session (sinon re-scan du QR à chaque redéploiement).
-VOLUME ["/app/.wwebjs_auth"]
+# Persistance de la session : monter un Railway Volume sur WHATSAPP_SESSION_PATH
+# (ex. /app/.wwebjs_auth) via l'interface Railway. Ne PAS utiliser l'instruction
+# Docker VOLUME ici — Railway ne la supporte pas et refuse le build.
 
 EXPOSE 3001
 CMD ["node", "index.js"]
