@@ -79,6 +79,7 @@ class WhatsappAdminController extends Controller
                 'attempts' => $l->attempts,
                 'last_error' => $l->last_error,
                 'is_test' => $l->is_test,
+                'has_photo' => (bool) $l->scan_id,
                 'message_id_whatsapp' => $l->message_id_whatsapp,
                 'queued_at' => $l->queued_at,
                 'sent_at' => $l->sent_at,
