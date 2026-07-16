@@ -115,11 +115,14 @@ const client = new Client({
   // poussée par Meta et incompatible avec whatsapp-web.js casse la session.
   // ⚠️ Doit être un fichier EXACT du repo wa-version (l'alias 2.3000.x.html
   // n'existe pas → 404 → fallback silencieux sur la version live). Les versions
-  // expirent ~2 mois après publication (champ expire de versions.json) : ici
-  // 2.3000.1043234067-alpha expire le 2026-09-15 — à rafraîchir avant.
+  // expirent ~2 mois après publication (champ expire de versions.json).
+  // Les builds à partir du ~14/07/2026 renomment id._serialized en id.$1 et
+  // cassent sendMessage sur toutes les versions de whatsapp-web.js (issues
+  // wwebjs #201829/#201832/#201840) : on reste sur le build du 10/07, qui
+  // expire le 2026-09-10 — à rafraîchir avant (ou dès que la lib publie le fix).
   webVersionCache: {
     type: 'remote',
-    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1043234067-alpha.html',
+    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1042991638-alpha.html',
   },
 });
 
