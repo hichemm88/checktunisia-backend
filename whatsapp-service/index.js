@@ -108,6 +108,16 @@ const client = new Client({
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      // Contention mémoire : le conteneur est plafonné à 1 Go (plan Railway) et
+      // le renderer WhatsApp Web s'est fait OOM-kill (memory.events oom_kill=1,
+      // pic mesuré 885 Mo) → page « ready » mais morte, envois suspendus sans
+      // erreur. On borne le tas JS du renderer et on limite les process pour
+      // rester sous le plafond ; le vrai remède est d'augmenter la RAM du plan.
+      '--js-flags=--max-old-space-size=460',
+      '--renderer-process-limit=2',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-extensions',
+      '--disable-background-networking',
     ],
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
   },
