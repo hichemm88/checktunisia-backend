@@ -214,6 +214,12 @@ async function sendJob(job, minIntervalSeconds) {
   await sleep(Math.max(minIntervalSeconds, 1) * 1000);
 }
 
+// Auto-réparation : au-delà de N échecs d'envoi consécutifs, Chromium est
+// considéré comme « zombie » (page WhatsApp Web pendue, ex. Runtime.callFunctionOn
+// timed out) — on quitte, Railway relance le conteneur avec un navigateur frais.
+const MAX_CONSECUTIVE_SEND_FAILURES = parseInt(process.env.WHATSAPP_MAX_SEND_FAILURES || '3', 10);
+let consecutiveSendFailures = 0;
+
 async function tick() {
   state.lastPollAt = new Date().toISOString();
 
@@ -231,6 +237,7 @@ async function tick() {
 
     try {
       await sendJob(job, control.min_interval_seconds);
+      consecutiveSendFailures = 0;
     } catch (err) {
       state.failedCount += 1;
       console.warn(`[whatsapp] envoi ${job.id} échoué:`, err.message);
@@ -238,6 +245,13 @@ async function tick() {
         status: 'failed',
         error: String(err.message || err).slice(0, 500),
       }).catch(() => {});
+
+      consecutiveSendFailures += 1;
+      if (consecutiveSendFailures >= MAX_CONSECUTIVE_SEND_FAILURES) {
+        console.error(`[whatsapp] ${consecutiveSendFailures} échecs d'envoi consécutifs — redémarrage du conteneur (Chromium frais). La session LocalAuth est conservée sur le volume.`);
+        await reportSession('disconnected', 'auto-restart après échecs d\'envoi consécutifs');
+        process.exit(1); // Railway relance le conteneur
+      }
     }
 
     // Enchaîner immédiatement sur le job suivant (l'intervalle a déjà été respecté).

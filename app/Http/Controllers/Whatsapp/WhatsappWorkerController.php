@@ -38,12 +38,22 @@ class WhatsappWorkerController extends Controller
             return response()->json(['data' => ['job' => null]]);
         }
 
+        // La photo n'est proposée au worker que si le fichier existe encore :
+        // un scan purgé ou perdu (disque éphémère redéployé) ne doit jamais
+        // bloquer la fiche en boucle de 404 — elle part alors sans photo.
+        $hasPhoto = false;
+        if ($job->scan_id) {
+            $scan = DocumentScan::find($job->scan_id);
+            $disk = config('filesystems.passport_scan_disk', 'local');
+            $hasPhoto = $scan !== null && Storage::disk($disk)->exists($scan->file_path);
+        }
+
         return response()->json(['data' => ['job' => [
             'id' => $job->id,
             'recipient' => $job->recipient,
             'caption' => $job->caption,
-            'has_photo' => (bool) $job->scan_id,
-            'photo_url' => $job->scan_id
+            'has_photo' => $hasPhoto,
+            'photo_url' => $hasPhoto
                 ? url("/api/v1/internal/whatsapp/scan/{$job->scan_id}")
                 : null,
         ]]]);
