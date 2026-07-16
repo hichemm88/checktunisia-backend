@@ -186,6 +186,23 @@ client.on('disconnected', (reason) => {
 // surface conversationnelle. (Listener explicite pour documenter l'intention.)
 client.on('message', () => { /* ignoré volontairement — pas de bot */ });
 
+/**
+ * Timeout dur autour d'une promesse. Nécessaire car certains hangs de
+ * Chromium/WhatsApp Web ne déclenchent ni erreur ni le protocolTimeout de
+ * puppeteer — sans ceci, la boucle d'envoi reste suspendue indéfiniment.
+ * ⚠️ La promesse sous-jacente n'est pas annulée : un envoi « timeouté » peut
+ * malgré tout aboutir plus tard (doublon possible côté destinataire, préférable
+ * à une file bloquée).
+ */
+const SEND_TIMEOUT_MS = parseInt(process.env.WHATSAPP_SEND_TIMEOUT_MS || '120000', 10);
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} sans réponse après ${Math.round(ms / 1000)}s`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 // ── Boucle de travail (FIFO, un envoi à la fois) ─────────────────────────────
 async function sendJob(job, minIntervalSeconds) {
   let media = null;
@@ -236,7 +253,7 @@ async function tick() {
     }
 
     try {
-      await sendJob(job, control.min_interval_seconds);
+      await withTimeout(sendJob(job, control.min_interval_seconds), SEND_TIMEOUT_MS, `envoi ${job.id}`);
       consecutiveSendFailures = 0;
     } catch (err) {
       state.failedCount += 1;
@@ -279,6 +296,23 @@ const app = express();
 app.get('/health', (_req, res) => {
   const { qrDataUrl, ...safe } = state;
   res.json({ ok: ready, has_qr: !!qrDataUrl, ...safe });
+});
+
+// Diagnostic : version WhatsApp Web réellement chargée dans Chromium (permet de
+// vérifier que le pin webVersionCache s'applique) + réactivité de la page.
+app.get('/debug', async (_req, res) => {
+  const out = { ready, session: state.session };
+  try {
+    out.wweb_version = await withTimeout(client.getWWebVersion(), 10000, 'getWWebVersion');
+  } catch (err) {
+    out.wweb_version_error = err.message;
+  }
+  try {
+    out.page_url = client.pupPage ? await withTimeout(client.pupPage.url(), 5000, 'page.url') : null;
+  } catch (err) {
+    out.page_url_error = err.message;
+  }
+  res.json(out);
 });
 
 // Page de connexion : affiche le QR en image (scannable au téléphone) ou l'état.
