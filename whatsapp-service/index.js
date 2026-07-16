@@ -99,6 +99,9 @@ const client = new Client({
   authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
   puppeteer: {
     headless: true,
+    // Chromium en conteneur (Railway) répond lentement sous charge : sans ce
+    // timeout élargi, puppeteer coupe à 30 s → « Runtime.callFunctionOn timed out ».
+    protocolTimeout: 300000,
     // Arguments indispensables en conteneur (Railway/Docker).
     args: [
       '--no-sandbox',
@@ -107,6 +110,12 @@ const client = new Client({
       '--disable-gpu',
     ],
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+  },
+  // Version web de WhatsApp épinglée (wppconnect) : évite qu'une version
+  // poussée par Meta et incompatible avec whatsapp-web.js casse la session.
+  webVersionCache: {
+    type: 'remote',
+    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.x.html',
   },
 });
 
