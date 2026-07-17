@@ -109,9 +109,10 @@ class BillingService
         }
 
         $settings = PlatformSetting::get();
-        $amount   = (float) ($sub->custom_price
-            ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->effective_price_yearly : $sub->plan?->price_monthly)
-            ?? 0);
+        // Formule unique : base + suppléments par établissement (config en
+        // base), prix négocié prioritaire. Voir PlanPricing.
+        $pricing = \App\Services\Subscription\PlanPricing::detail($sub);
+        $amount  = $pricing['cycle_total'];
         if ($amount <= 0) {
             return null;
         }
@@ -129,13 +130,19 @@ class BillingService
             'status'          => 'sent',
             'due_at'          => $sub->expires_at,
             'notes'           => 'Renouvellement '.($sub->billing_cycle === 'yearly' ? 'annuel' : 'mensuel')
-                .' — période du '.$periodStart->format('d/m/Y').' au '.$periodEnd->format('d/m/Y'),
+                .' — période du '.$periodStart->format('d/m/Y').' au '.$periodEnd->format('d/m/Y')
+                .($pricing['extra_count'] > 0 && !$pricing['negotiated']
+                    ? sprintf(' · base %s + %d établissement(s) suppl. × %s TND',
+                        number_format($pricing['base'], 3, '.', ''), $pricing['extra_count'],
+                        number_format((float) $pricing['extra_property_price'], 3, '.', ''))
+                    : ''),
             'metadata'        => [
                 'renewal'              => true,
                 'renewal_period_start' => $periodStart->toIso8601String(),
                 'renewal_period_end'   => $periodEnd->toIso8601String(),
                 'tax_rate'             => (string) $settings->tax_rate,
                 'timbre_fiscal'        => (string) $settings->timbre_fiscal,
+                'pricing'              => $pricing,
             ],
         ]);
 

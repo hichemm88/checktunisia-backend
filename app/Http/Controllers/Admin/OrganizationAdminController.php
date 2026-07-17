@@ -78,11 +78,10 @@ class OrganizationAdminController extends Controller
 
         $sub = $org->activeSubscription;
         $mrr = null;
+        $pricing = null;
         if ($sub && in_array($sub->status, ['active', 'trial'], true)) {
-            $effectivePrice = $sub->custom_price ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->effective_price_yearly : $sub->plan?->price_monthly);
-            if ($effectivePrice !== null) {
-                $mrr = $sub->billing_cycle === 'yearly' ? round($effectivePrice / 12, 3) : round((float) $effectivePrice, 3);
-            }
+            $mrr = \App\Services\Subscription\PlanPricing::monthlyValue($sub, $org->properties->count());
+            $pricing = \App\Services\Subscription\PlanPricing::detail($sub, $org->properties->count());
         }
 
         return response()->json(['data' => array_merge($org->toArray(), [
@@ -96,6 +95,7 @@ class OrganizationAdminController extends Controller
             // l'édition « deal négocié » sur la fiche).
             'entitlements'      => \App\Services\Subscription\PlanEntitlements::summary($org),
             'feature_overrides' => (array) ($sub?->metadata['feature_overrides'] ?? []),
+            'pricing'           => $pricing,
         ])]);
     }
 

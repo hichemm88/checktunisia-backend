@@ -15,6 +15,8 @@ class StorePlanRequest extends FormRequest {
             'max_rooms'     => ['nullable', 'integer', 'min:1'],
             'price_monthly' => ['required', 'numeric', 'min:0'],
             'price_yearly'  => ['nullable', 'numeric', 'min:0'],
+            'included_properties'  => ['sometimes', 'integer', 'min:1'],
+            'extra_property_price' => ['sometimes', 'nullable', 'numeric', 'min:0'],
             'currency'      => ['sometimes', 'string', 'max:10'],
             'features'      => ['sometimes', 'array'],
             'is_active'     => ['sometimes', 'boolean'],

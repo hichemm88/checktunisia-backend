@@ -16,7 +16,8 @@ class PublicPlatformController extends Controller
         $plans = SubscriptionPlan::where('is_active', true)
             ->orderBy('sort_order')
             ->get(['id', 'name', 'slug', 'scope', 'min_rooms', 'max_rooms',
-                   'price_monthly', 'price_yearly', 'currency', 'features', 'marketing']);
+                   'price_monthly', 'price_yearly', 'currency', 'features', 'marketing',
+                   'included_properties', 'extra_property_price']);
 
         return response()->json(['data' => $plans]);
     }

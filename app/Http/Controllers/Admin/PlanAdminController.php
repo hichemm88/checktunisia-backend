@@ -46,11 +46,11 @@ class PlanAdminController extends Controller
     public function update(UpdatePlanRequest $request, int $id): JsonResponse
     {
         $plan = SubscriptionPlan::findOrFail($id);
-        $old  = $plan->only(['name', 'slug', 'price_monthly', 'price_yearly', 'is_active', 'sort_order']);
+        $old  = $plan->only(['name', 'slug', 'price_monthly', 'price_yearly', 'included_properties', 'extra_property_price', 'features', 'is_active', 'sort_order']);
 
         $plan->update($request->validated());
 
-        AuditLogger::log('plan.updated', $plan, $old, $plan->fresh()->only(['name', 'slug', 'price_monthly', 'price_yearly', 'is_active', 'sort_order']));
+        AuditLogger::log('plan.updated', $plan, $old, $plan->fresh()->only(['name', 'slug', 'price_monthly', 'price_yearly', 'included_properties', 'extra_property_price', 'features', 'is_active', 'sort_order']));
 
         return response()->json(['data' => $plan->fresh()]);
     }

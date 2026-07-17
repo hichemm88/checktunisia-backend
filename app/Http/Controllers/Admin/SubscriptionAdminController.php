@@ -130,9 +130,8 @@ class SubscriptionAdminController extends Controller {
         $sub = Subscription::where('organization_id', $hostId)->with('plan')->findOrFail($v['subscription_id']);
 
         if (!isset($v['amount'])) {
-            $v['amount'] = $sub->custom_price
-                ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->effective_price_yearly : $sub->plan?->price_monthly)
-                ?? 0;
+            // Formule unique base + suppléments par établissement (PlanPricing).
+            $v['amount'] = \App\Services\Subscription\PlanPricing::cycleAmount($sub);
         }
         $v['tax_amount']     = $v['tax_amount'] ?? 0;
         $v['total_amount']   = $v['amount'] + $v['tax_amount'];
