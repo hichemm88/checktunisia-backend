@@ -28,7 +28,7 @@ class SubscriptionExpiringNotification extends Notification implements ShouldQue
     {
         $planName   = $this->subscription->plan?->name ?? 'Actuel';
         $expiresAt  = $this->subscription->expires_at?->format('d/m/Y') ?? '—';
-        $urgency    = $this->daysRemaining <= 3 ? '⚠️ URGENT — ' : '';
+        $urgency    = $this->daysRemaining <= 3 ? 'URGENT — ' : '';
 
         return (new MailMessage)
             ->subject("{$urgency}[Qayed] Votre abonnement expire dans {$this->daysRemaining} jour(s)")

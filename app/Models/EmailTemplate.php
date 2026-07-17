@@ -17,7 +17,7 @@ class EmailTemplate extends Model
 <p>Un compte a été créé pour vous sur <strong>Qayed</strong> en tant que <strong>{{role_label}}</strong> de l'établissement <strong>{{hotel_name}}</strong>.</p>
 <p>Pour activer votre compte, définissez votre mot de passe en cliquant sur le bouton ci-dessous :</p>
 {{cta_button}}
-<div class="warning">⚠️&nbsp; Ce lien est valable 48 heures et à usage unique.</div>
+<div class="warning">Ce lien est valable 48 heures et à usage unique.</div>
 HTML,
         ],
         'password_reset' => [
@@ -27,7 +27,7 @@ HTML,
 <p>Vous avez demandé la réinitialisation de votre mot de passe sur <strong>Qayed</strong>.</p>
 <p>Cliquez sur le bouton ci-dessous pour en choisir un nouveau :</p>
 {{cta_button}}
-<div class="warning">⚠️&nbsp; Ce lien est valable 48 heures et à usage unique. Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail — votre mot de passe reste inchangé.</div>
+<div class="warning">Ce lien est valable 48 heures et à usage unique. Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail — votre mot de passe reste inchangé.</div>
 HTML,
         ],
         'account_suspended' => [
@@ -35,7 +35,7 @@ HTML,
             'body_html' => <<<'HTML'
 <p>Bonjour <strong>{{name}}</strong>,</p>
 <p>Votre compte hébergeur sur <strong>Qayed</strong> a été suspendu.</p>
-<div class="danger">🛑&nbsp; <strong>Motif :</strong> {{reason}}</div>
+<div class="danger"><strong>Motif :</strong> {{reason}}</div>
 <p style="margin-top:20px;">Pour toute question ou pour régulariser la situation, contactez <a href="mailto:support@qayed.tn" style="color:#5346A8;">support@qayed.tn</a>.</p>
 HTML,
         ],
