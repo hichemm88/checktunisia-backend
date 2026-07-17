@@ -118,6 +118,10 @@ const client = new Client({
       '--disable-features=IsolateOrigins,site-per-process',
       '--disable-extensions',
       '--disable-background-networking',
+      // Ne pas charger les images de l'interface (avatars, aperçus) : gros gain
+      // mémoire. Sans impact sur l'ENVOI de médias, qui passe par MessageMedia
+      // (base64 → Store JS), pas par le rendu de la page.
+      '--blink-settings=imagesEnabled=false',
     ],
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
   },
@@ -192,17 +196,36 @@ let livenessTimer = null;
 function startPageLivenessWatchdog() {
   if (livenessTimer) return;
   let misses = 0;
+  let reloads = 0;
   livenessTimer = setInterval(async () => {
     try {
       await withTimeout(client.pupPage.evaluate('1'), 15000, 'sonde de vivacité');
       misses = 0;
+      reloads = 0;
     } catch (err) {
       misses += 1;
       console.warn(`[whatsapp] page muette (${misses}/3):`, err.message);
-      if (misses >= 3) {
-        console.error('[whatsapp] page WhatsApp morte (renderer OOM-kill probable) — redémarrage du conteneur.');
-        reportSession('disconnected', 'page morte (OOM renderer probable) — auto-restart').finally(() => process.exit(1));
+      if (misses < 3) return;
+
+      // 1er niveau : recharger la page — un reload crée un renderer NEUF sans
+      // consommer le budget de redémarrages Railway (10 crashs max avant arrêt
+      // définitif du service). La session LocalAuth du profil est réutilisée.
+      if (reloads < 2) {
+        reloads += 1;
+        misses = 0;
+        console.warn(`[whatsapp] rechargement de la page WhatsApp (tentative ${reloads}/2)…`);
+        try {
+          await withTimeout(client.pupPage.reload({ waitUntil: 'domcontentloaded' }), 60000, 'reload');
+          console.log('[whatsapp] page rechargée.');
+        } catch (reloadErr) {
+          console.warn('[whatsapp] reload échoué:', reloadErr.message);
+        }
+        return;
       }
+
+      // 2e niveau : le reload ne suffit pas → redémarrage complet du conteneur.
+      console.error('[whatsapp] page WhatsApp morte malgré les reloads (OOM renderer probable) — redémarrage du conteneur.');
+      reportSession('disconnected', 'page morte (OOM renderer probable) — auto-restart').finally(() => process.exit(1));
     }
   }, 60000);
 }
