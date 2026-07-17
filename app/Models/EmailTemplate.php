@@ -66,6 +66,16 @@ HTML,
 {{cta_button}}
 HTML,
         ],
+        'invoice_overdue' => [
+            'subject' => "Facture {{invoice_number}} en attente de règlement — Qayed",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>Sauf erreur de notre part, la facture <strong>{{invoice_number}}</strong> de votre abonnement <strong>{{plan_name}}</strong> est impayée depuis <strong>{{days_late}} jour(s)</strong>.</p>
+{{credentials_box}}
+<p>Pour éviter toute interruption de service, merci de la régler dès que possible. Si le paiement a déjà été effectué, vous pouvez ignorer ce message.</p>
+{{cta_button}}
+HTML,
+        ],
         'invoice_available' => [
             'subject' => "Votre facture Qayed {{invoice_number}} est disponible",
             'body_html' => <<<'HTML'

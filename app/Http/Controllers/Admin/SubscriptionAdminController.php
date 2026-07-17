@@ -124,7 +124,7 @@ class SubscriptionAdminController extends Controller {
         $v['tax_amount']     = $v['tax_amount'] ?? 0;
         $v['total_amount']   = $v['amount'] + $v['tax_amount'];
         $v['hotel_id']       = null; // org-level invoice — no specific établissement
-        $v['invoice_number'] = 'INV-' . date('Y') . '-' . str_pad(Invoice::whereYear('created_at', now()->year)->count() + 1, 4, '0', STR_PAD_LEFT);
+        $v['invoice_number'] = app(\App\Services\Billing\BillingService::class)->nextInvoiceNumber();
         $v['created_by']     = $request->user()->id;
         $invoice = Invoice::create($v);
 
@@ -156,43 +156,11 @@ class SubscriptionAdminController extends Controller {
         AuditLogger::log('invoice.updated', $invoice);
 
         if (!$wasPaid && $invoice->fresh()->status === 'paid') {
-            $this->recordPaymentForPaidInvoice($invoice->fresh(), $request->user()->id);
-            $this->notifyPaymentReceived($invoice);
+            app(\App\Services\Billing\BillingService::class)
+                ->handleInvoicePaid($invoice->fresh(), $request->user()->id);
         }
 
         return response()->json(['data' => $invoice->fresh()]);
-    }
-
-    /**
-     * Une facture payée doit TOUJOURS laisser une trace dans l'historique des
-     * paiements : complète le paiement pending existant (virement déclaré) ou
-     * crée un paiement manuel, sans jamais dupliquer un paiement déjà complété.
-     */
-    private function recordPaymentForPaidInvoice(Invoice $invoice, ?string $validatedBy = null): void
-    {
-        if ($invoice->payments()->where('status', 'completed')->exists()) {
-            return;
-        }
-
-        $pending = $invoice->payments()->where('status', 'pending')->latest('created_at')->first();
-        if ($pending) {
-            $pending->update(['status' => 'completed', 'completed_at' => $invoice->paid_at ?? now()]);
-            AuditLogger::log('payment.recorded', $pending, newValues: ['invoice_id' => $invoice->id]);
-            return;
-        }
-
-        $payment = \App\Models\Payment::create([
-            'invoice_id'         => $invoice->id,
-            'hotel_id'           => $invoice->hotel_id,
-            'provider'           => $invoice->payment_method ?: 'virement',
-            'declared_reference' => $invoice->payment_reference,
-            'status'             => 'completed',
-            'amount'             => $invoice->total_amount,
-            'currency'           => $invoice->currency,
-            'completed_at'       => $invoice->paid_at ?? now(),
-            'provider_response'  => ['recorded_by' => $validatedBy, 'source' => 'admin_invoice_update'],
-        ]);
-        AuditLogger::log('payment.recorded', $payment, newValues: ['invoice_id' => $invoice->id]);
     }
 
     /** Deletes an invoice (payments cascade at the DB level). Paid invoices are protected — void them instead. */
@@ -228,7 +196,10 @@ class SubscriptionAdminController extends Controller {
         ]);
 
         AuditLogger::log('payment.virement_validated', $payment, newValues: ['invoice_id' => $invoice->id]);
-        $this->notifyPaymentReceived($invoice->fresh());
+        // Une seule action : paiement tracé + facture payée + abonnement
+        // (ré)activé/prolongé + email « Paiement reçu ».
+        app(\App\Services\Billing\BillingService::class)
+            ->handleInvoicePaid($invoice->fresh(), $request->user()->id);
 
         return response()->json(['data' => ['id' => $payment->id, 'status' => 'completed']]);
     }
@@ -295,25 +266,4 @@ class SubscriptionAdminController extends Controller {
         ])->download("facture-{$invoice->invoice_number}.pdf");
     }
 
-    /** Shared by invoice update paths that transition an invoice to "paid". */
-    private function notifyPaymentReceived(Invoice $invoice): void
-    {
-        $invoice->loadMissing(['hotel', 'subscription.organization', 'subscription.plan']);
-        $sub  = $invoice->subscription;
-        $org  = $sub?->organization ?? $invoice->hotel?->organization;
-        $hotel = $invoice->hotel;
-
-        $to = $org?->contact_email
-            ?? $hotel?->contacts()->where('type', 'email')->where('is_primary', true)->first()?->value;
-
-        \App\Services\Email\SystemMailer::send('payment_received', $to, [
-            'name'       => $org?->name ?? $hotel?->name ?? 'Client Qayed',
-            'plan_name'  => $sub?->plan?->name ?? '—',
-            'expires_at' => $sub?->expires_at?->format('d/m/Y') ?? '—',
-            'credentials_box' => \App\Services\Email\SystemMailer::amountBox(
-                \App\Support\Money::tnd($invoice->total_amount, $invoice->currency),
-                $invoice->invoice_number,
-            ),
-        ]);
-    }
 }

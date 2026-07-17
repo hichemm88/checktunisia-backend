@@ -145,6 +145,11 @@ class PaymentController extends Controller
             ]);
 
             AuditLogger::log('payment.completed', $payment->invoice, actor: $request->user());
+
+            // Réactivation/prolongation automatique de l'abonnement + email
+            // « Paiement reçu » — même circuit que le virement validé.
+            app(\App\Services\Billing\BillingService::class)
+                ->handleInvoicePaid($payment->invoice()->first(), $request->user()?->id);
         } else {
             $payment->update([
                 'status'            => 'failed',

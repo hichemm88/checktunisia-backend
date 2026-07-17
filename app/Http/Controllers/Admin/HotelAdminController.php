@@ -241,6 +241,22 @@ class HotelAdminController extends Controller
             ->get()
             ->map(fn($p) => ['id' => $p->id, 'hotel_name' => $p->hotel?->name, 'amount' => $p->amount, 'created_at' => $p->created_at]);
 
+        // Chantier A3 — virements déclarés en attente de validation (1 clic).
+        $pendingVirements = \App\Models\Payment::with(['invoice.subscription.organization', 'hotel'])
+            ->where('provider', 'virement')
+            ->where('status', 'pending')
+            ->orderBy('created_at')
+            ->limit(10)
+            ->get()
+            ->map(fn($p) => [
+                'id'             => $p->id,
+                'name'           => $p->invoice?->subscription?->organization?->name ?? $p->hotel?->name ?? '—',
+                'invoice_number' => $p->invoice?->invoice_number,
+                'amount'         => $p->amount,
+                'reference'      => $p->declared_reference,
+                'declared_at'    => $p->declared_at,
+            ]);
+
         $recentlySuspended = Hotel::where('status', 'suspended')
             ->where('updated_at', '>=', now()->subDays(7))
             ->orderByDesc('updated_at')
@@ -329,6 +345,7 @@ class HotelAdminController extends Controller
                     'expiring_subscriptions' => $expiringSoon,
                     'failed_payments'        => $failedPayments,
                     'recently_suspended'     => $recentlySuspended,
+                    'pending_virements'      => $pendingVirements,
                 ],
                 'mrr'              => round($mrr, 3),
                 'mrr_breakdown'    => $mrrBreakdown,
