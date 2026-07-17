@@ -27,3 +27,7 @@ Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone(
 // MODULE PROVISOIRE — relais WhatsApp : purge horaire des images de documents
 // au-delà de la rétention (24 h). Minimisation des données.
 Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
+
+// MODULE PROVISOIRE — relais WhatsApp : alerte admin si le worker est
+// silencieux (heartbeat périmé > 10 min) — chantier B3.
+Schedule::command('whatsapp:check-health')->everyTenMinutes();

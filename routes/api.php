@@ -370,6 +370,8 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             // Audit logs
             Route::get('audit-logs', [AuditLogController::class, 'index']);
+            Route::get('audit-logs/actions', [AuditLogController::class, 'actions']);
+            Route::get('audit-logs/export', [AuditLogController::class, 'export']);
             Route::get('audit-logs/{id}', [AuditLogController::class, 'show']);
             Route::get('authority-search-logs', [AuditLogController::class, 'searchLogs']);
 

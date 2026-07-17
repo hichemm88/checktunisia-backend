@@ -35,6 +35,21 @@ class WhatsappAlertService
         );
     }
 
+    /**
+     * Worker muet : plus aucun battement de cœur depuis N minutes — le
+     * conteneur est probablement mort (OOM, crash loop, déploiement bloqué),
+     * il ne peut donc pas signaler lui-même sa panne.
+     */
+    public function workerSilent(int $minutes): void
+    {
+        $this->dispatch(
+            'WhatsApp Qayed — worker injoignable',
+            "Le worker WhatsApp n'a donné aucun signe de vie depuis {$minutes} minute(s). "
+            .'Le conteneur est probablement arrêté ou bloqué : vérifiez le service Railway '
+            .'(logs, redeploy). Les fiches s\'accumulent en attente et repartiront au retour du worker.',
+        );
+    }
+
     /** Job abandonné après épuisement des retries (24 h). */
     public function jobPermanentlyFailed(WhatsappSendLog $job, ?string $error): void
     {
