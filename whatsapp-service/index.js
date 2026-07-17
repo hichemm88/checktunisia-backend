@@ -178,7 +178,34 @@ client.on('ready', () => {
   state.qrDataUrl = null; // plus besoin du QR une fois connecté
   console.log('[whatsapp] session prête.');
   reportSession('ready');
+  startPageLivenessWatchdog();
 });
+
+/**
+ * Watchdog de vivacité de la page : quand le renderer WhatsApp Web se fait
+ * OOM-kill (conteneur plafonné à 1 Go), la session reste « ready » mais la page
+ * ne répond plus à AUCUN evaluate — sans erreur ni protocolTimeout. On sonde
+ * la page toutes les 60 s ; après 3 sondes muettes consécutives, on redémarre
+ * le conteneur (session LocalAuth conservée sur le volume).
+ */
+let livenessTimer = null;
+function startPageLivenessWatchdog() {
+  if (livenessTimer) return;
+  let misses = 0;
+  livenessTimer = setInterval(async () => {
+    try {
+      await withTimeout(client.pupPage.evaluate('1'), 15000, 'sonde de vivacité');
+      misses = 0;
+    } catch (err) {
+      misses += 1;
+      console.warn(`[whatsapp] page muette (${misses}/3):`, err.message);
+      if (misses >= 3) {
+        console.error('[whatsapp] page WhatsApp morte (renderer OOM-kill probable) — redémarrage du conteneur.');
+        reportSession('disconnected', 'page morte (OOM renderer probable) — auto-restart').finally(() => process.exit(1));
+      }
+    }
+  }, 60000);
+}
 
 client.on('auth_failure', (msg) => {
   ready = false;
