@@ -299,18 +299,13 @@ class HotelAdminController extends Controller
             ->get()
             ->unique(fn($sub) => $sub->organization_id ?? 'hotel:' . $sub->hotel_id)
             ->values();
-        $mrrBreakdown = $activeSubs->map(function ($sub) {
-            $price = $sub->custom_price ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->effective_price_yearly : $sub->plan?->price_monthly);
-            $monthly = $price === null ? 0.0
-                : ($sub->billing_cycle === 'yearly' ? (float) $price / 12 : (float) $price);
-            return [
-                'customer'      => $sub->organization?->name ?? $sub->hotel?->name ?? '—',
-                'plan'          => $sub->plan?->name ?? '—',
-                'billing_cycle' => $sub->billing_cycle,
-                'negotiated'    => $sub->custom_price !== null,
-                'monthly_value' => round($monthly, 3),
-            ];
-        });
+        $mrrBreakdown = $activeSubs->map(fn($sub) => [
+            'customer'      => $sub->organization?->name ?? $sub->hotel?->name ?? '—',
+            'plan'          => $sub->plan?->name ?? '—',
+            'billing_cycle' => $sub->billing_cycle,
+            'negotiated'    => $sub->custom_price !== null,
+            'monthly_value' => \App\Services\Subscription\PlanPricing::monthlyValue($sub),
+        ]);
         $mrr = $mrrBreakdown->sum('monthly_value');
 
         // Top 5 établissements by check-in volume this month.

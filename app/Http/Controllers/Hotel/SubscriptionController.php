@@ -52,6 +52,9 @@ class SubscriptionController extends Controller
                 // Fonctionnalités effectives (pack + overrides négociés) avec
                 // usage — même payload pour web et mobile.
                 'entitlements'   => $org ? \App\Services\Subscription\PlanEntitlements::summary($org) : null,
+                // Détail du prix : base + suppléments par établissement (ou
+                // prix négocié). Même formule sur toutes les surfaces.
+                'pricing'        => \App\Services\Subscription\PlanPricing::detail($sub),
             ],
         ]);
     }

@@ -64,7 +64,19 @@ class PlanEntitlements
         $sub  = $org->activeSubscription()->with('plan')->first();
         $plan = $sub?->plan;
 
+        // Plafond d'établissements dérivé de la TARIFICATION : un pack sans
+        // prix par établissement supplémentaire est plafonné à ses inclus ;
+        // avec un prix par supplément (Multi-sites), AUCUN plafond — seul le
+        // prix évolue. Une valeur explicite dans features prime.
+        $derived = [];
+        if ($plan) {
+            $derived['max_properties'] = $plan->extra_property_price === null
+                ? max(1, (int) ($plan->included_properties ?? 1))
+                : -1;
+        }
+
         $fromPlan = array_merge(
+            $derived,
             (array) ($plan?->features ?? []),
             // max_rooms vit dans une colonne dédiée du plan (historique).
             $plan && $plan->max_rooms !== null ? ['max_rooms' => (int) $plan->max_rooms] : [],

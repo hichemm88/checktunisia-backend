@@ -77,22 +77,22 @@ class SubscriptionPlanSeeder extends Seeder {
                     'ar' => 'للمجموعات التي تدير عدة مؤسسات من حساب واحد.',
                 ],
                 'price_note'   => [
-                    'fr' => 'par société / mois · tous établissements inclus',
-                    'en' => 'per company / month · all properties included',
-                    'ar' => 'لكل شركة / شهريًا · جميع المؤسسات مشمولة',
+                    'fr' => 'par société / mois',
+                    'en' => 'per company / month',
+                    'ar' => 'لكل شركة / شهريًا',
                 ],
                 'price_note_yearly' => [
-                    'fr' => 'par société / an · tous établissements · 12 mois au prix de 11',
-                    'en' => 'per company / year · all properties · 12 months for the price of 11',
-                    'ar' => 'لكل شركة / سنويًا · جميع المؤسسات · 12 شهرًا بسعر 11',
+                    'fr' => 'par société / an · 12 mois au prix de 11',
+                    'en' => 'per company / year · 12 months for the price of 11',
+                    'ar' => 'لكل شركة / سنويًا · 12 شهرًا بسعر 11',
                 ],
                 'badge'        => null,
                 'featured'     => false,
                 'cta_label'    => $cta,
                 'bullets'      => [
-                    ['included' => true, 'text' => ['fr' => 'Établissements illimités', 'en' => 'Unlimited properties', 'ar' => 'مؤسسات غير محدودة']],
+                    ['included' => true, 'text' => ['fr' => 'Registre consolidé multi-établissements', 'en' => 'Consolidated multi-property register', 'ar' => 'سجل موحد متعدد المؤسسات']],
                     ['included' => true, 'text' => ['fr' => 'Check-ins illimités', 'en' => 'Unlimited check-ins', 'ar' => 'تسجيلات وصول غير محدودة']],
-                    ['included' => true, 'text' => ['fr' => 'Comptes utilisateurs illimités', 'en' => 'Unlimited user accounts', 'ar' => 'حسابات مستخدمين غير محدودة']],
+                    ['included' => true, 'text' => ['fr' => 'Équipe illimitée, accès par établissement', 'en' => 'Unlimited team, per-property access', 'ar' => 'فريق غير محدود، وصول لكل مؤسسة']],
                     ['included' => true, 'text' => ['fr' => 'Tableau de bord multi-sites', 'en' => 'Multi-property dashboard', 'ar' => 'لوحة قيادة متعددة المواقع']],
                     ['included' => true, 'text' => ['fr' => "Journal d'activité consolidé", 'en' => 'Consolidated activity log', 'ar' => 'سجل نشاط موحّد']],
                     ['included' => true, 'text' => ['fr' => 'Export CSV multi-établissements', 'en' => 'Multi-property CSV export', 'ar' => 'تصدير CSV متعدد المؤسسات']],
@@ -106,9 +106,13 @@ class SubscriptionPlanSeeder extends Seeder {
         $marketing = self::marketingDefaults();
         $plans = [
             // price_yearly null = règle "1 mois offert" (11 × mensuel) via effective_price_yearly
-            ['name'=>'Essentiel','slug'=>'essentiel','scope'=>'hotel','min_rooms'=>1,'max_rooms'=>5,'price_monthly'=>59.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>2,'ocr_scans_per_month'=>100],'sort_order'=>1],
-            ['name'=>'Pro','slug'=>'pro','scope'=>'hotel','min_rooms'=>6,'max_rooms'=>20,'price_monthly'=>119.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>5,'ocr_scans_per_month'=>-1],'sort_order'=>2],
-            ['name'=>'Multi-sites','slug'=>'multi-sites','scope'=>'organization','min_rooms'=>1,'max_rooms'=>null,'price_monthly'=>199.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>-1,'ocr_scans_per_month'=>-1],'sort_order'=>3],
+            // included_properties / extra_property_price : grille tarifaire par
+            // établissement. Essentiel & Pro plafonnés à 1 établissement (pas
+            // d'extension) ; Multi-sites inclut 3 établissements puis +39 TND/mois
+            // par établissement supplémentaire (pas de plafond).
+            ['name'=>'Essentiel','slug'=>'essentiel','scope'=>'hotel','min_rooms'=>1,'max_rooms'=>5,'price_monthly'=>59.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>2,'ocr_scans_per_month'=>100],'included_properties'=>1,'extra_property_price'=>null,'sort_order'=>1],
+            ['name'=>'Pro','slug'=>'pro','scope'=>'hotel','min_rooms'=>6,'max_rooms'=>20,'price_monthly'=>119.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>5,'ocr_scans_per_month'=>-1],'included_properties'=>1,'extra_property_price'=>null,'sort_order'=>2],
+            ['name'=>'Multi-sites','slug'=>'multi-sites','scope'=>'organization','min_rooms'=>1,'max_rooms'=>null,'price_monthly'=>199.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>-1,'ocr_scans_per_month'=>-1],'included_properties'=>3,'extra_property_price'=>39.000,'sort_order'=>3],
         ];
         foreach ($plans as $plan) {
             $plan['marketing'] = $marketing[$plan['slug']] ?? null;
