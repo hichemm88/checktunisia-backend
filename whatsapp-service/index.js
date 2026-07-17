@@ -176,12 +176,32 @@ client.on('qr', (qr) => {
 
 client.on('authenticated', () => console.log('[whatsapp] authentifié.'));
 
+// Tampon circulaire des derniers messages/erreurs de la page WhatsApp Web —
+// exposé sur /debug pour diagnostiquer les blocages d'envoi de médias.
+const pageLog = [];
+function pushPageLog(kind, text) {
+  pageLog.push(`${new Date().toISOString()} [${kind}] ${String(text).slice(0, 300)}`);
+  if (pageLog.length > 40) pageLog.shift();
+}
+let pageHooksAttached = false;
+function attachPageDiagnostics() {
+  if (pageHooksAttached || !client.pupPage) return;
+  pageHooksAttached = true;
+  client.pupPage.on('pageerror', (err) => pushPageLog('pageerror', err.message));
+  client.pupPage.on('error', (err) => pushPageLog('error', err.message));
+  client.pupPage.on('console', (msg) => {
+    const t = msg.type();
+    if (t === 'error' || t === 'warning') pushPageLog('console:' + t, msg.text());
+  });
+}
+
 client.on('ready', () => {
   clearTimeout(watchdog);
   ready = true;
   state.qrDataUrl = null; // plus besoin du QR une fois connecté
   console.log('[whatsapp] session prête.');
   reportSession('ready');
+  attachPageDiagnostics();
   startPageLivenessWatchdog();
 });
 
@@ -372,7 +392,57 @@ app.get('/debug', async (_req, res) => {
   } catch (err) {
     out.page_url_error = err.message;
   }
+  out.page_log = pageLog.slice(-20);
   res.json(out);
+});
+
+/**
+ * Self-test d'envoi de média isolé de la file d'attente : envoie une image
+ * minuscule (1×1 px) au destinataire configuré, en instrumentant chaque étape,
+ * et renvoie EXACTEMENT où ça bloque (upload vs sérialisation du retour) plus
+ * les erreurs de la page pendant l'envoi. Sert à diagnostiquer le figement
+ * des fiches AVEC photo sans polluer le vrai flux.
+ */
+const TINY_JPEG_B64 = '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAAv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AfwD/2Q==';
+app.get('/selftest-media', async (_req, res) => {
+  const t0 = Date.now();
+  const steps = [];
+  const mark = (s) => steps.push(`${Date.now() - t0}ms ${s}`);
+  const before = pageLog.length;
+  try {
+    if (!ready) return res.status(503).json({ ok: false, error: 'session non prête' });
+    mark('début');
+    const control = (await api.get('/internal/whatsapp/control')).data.data;
+    const to = control.recipient;
+    if (!to) return res.status(400).json({ ok: false, error: 'recipient absent du control' });
+    mark('recipient récupéré');
+    const media = new MessageMedia('image/jpeg', TINY_JPEG_B64, 'selftest.jpg');
+    mark('MessageMedia construit');
+    const sent = await withTimeout(
+      client.sendMessage(to, media, { caption: '[SELFTEST] ignore' }),
+      60000,
+      'sendMessage média',
+    );
+    mark('sendMessage résolu');
+    res.json({
+      ok: true,
+      ms: Date.now() - t0,
+      steps,
+      message_id: sent?.id?._serialized ?? sent?.id?.$1 ?? sent?.id?.id ?? null,
+      has_media_returned: sent?.hasMedia ?? null,
+      type_returned: sent?.type ?? null,
+      page_log_during: pageLog.slice(before),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      ms: Date.now() - t0,
+      steps,
+      error: err.message,
+      stack: String(err.stack || '').split('\n').slice(0, 4),
+      page_log_during: pageLog.slice(before),
+    });
+  }
 });
 
 // Page de connexion : affiche le QR en image (scannable au téléphone) ou l'état.

@@ -151,6 +151,9 @@ class WhatsappWorkerController extends Controller
             'enabled' => $this->outbox->enabled(),
             'paused' => $state->paused,
             'min_interval_seconds' => (int) config('whatsapp.min_interval_seconds', 3),
+            // Exposé pour le self-test média du worker (/selftest-media) — évite
+            // de faire transiter le numéro en clair dans une URL.
+            'recipient' => (string) config('whatsapp.recipient'),
         ]]);
     }
 }
