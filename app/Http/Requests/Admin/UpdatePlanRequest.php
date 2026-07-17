@@ -19,6 +19,6 @@ class UpdatePlanRequest extends FormRequest {
             'features'      => ['sometimes', 'array'],
             'is_active'     => ['sometimes', 'boolean'],
             'sort_order'    => ['sometimes', 'integer'],
-        ], StorePlanRequest::marketingRules());
+        ], StorePlanRequest::featureRules(), StorePlanRequest::marketingRules());
     }
 }

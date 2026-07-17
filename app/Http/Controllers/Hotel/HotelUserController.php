@@ -68,6 +68,11 @@ class HotelUserController extends Controller {
 
         $targetHotelIds = !empty($v['hotel_ids']) ? $v['hotel_ids'] : [$hotel->id];
 
+        // Limite d'utilisateurs du pack (pilotée dans Admin > Abonnements).
+        if ($org = ($request->user()->organization ?? $hotel->organization)) {
+            \App\Services\Subscription\PlanEntitlements::assertWithinLimit($org, 'max_users');
+        }
+
         $user = DB::transaction(function() use ($v, $targetHotelIds) {
             $u = User::create([
                 'first_name'        => $v['first_name'],

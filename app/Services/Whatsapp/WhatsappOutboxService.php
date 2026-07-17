@@ -51,7 +51,15 @@ class WhatsappOutboxService
 
         try {
             $recipient = (string) config('whatsapp.recipient');
-            $checkIn->loadMissing(['hotel', 'room', 'guests.documents']);
+            $checkIn->loadMissing(['hotel.organization', 'room', 'guests.documents']);
+
+            // Le relais peut être coupé par pack ou par client (Admin > Abonnements).
+            $org = $checkIn->hotel?->organization;
+            if ($org && ! \App\Services\Subscription\PlanEntitlements::allows($org, 'whatsapp_relay')) {
+                Log::info('[whatsapp] relais désactivé par le pack pour org '.$org->id.' — check-in '.$checkIn->id.' non enfilé.');
+
+                return 0;
+            }
 
             // Voyageur principal d'abord, puis les accompagnants.
             $guests = $checkIn->guests

@@ -189,6 +189,9 @@ class OrganizationController extends Controller
             });
         }
 
+        // Limite d'établissements du pack (pilotée dans Admin > Abonnements).
+        \App\Services\Subscription\PlanEntitlements::assertWithinLimit($org, 'max_properties');
+
         $validated = $request->validate([
             'name'                => ['required', 'string', 'max:255'],
             'type'                => ['required', 'in:hotel,guesthouse,appartement,villa,riad,maison_hotes,hostel,resort,bungalow,rental,residence'],
