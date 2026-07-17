@@ -15,6 +15,10 @@ ENV PUPPETEER_SKIP_DOWNLOAD=1 \
 
 WORKDIR /app
 COPY package.json package-lock.json* ./
+# Les patches doivent être présents AVANT npm install : le postinstall lance
+# patch-package, qui applique patches/whatsapp-web.js+1.34.7.patch (compat `$1`
+# / envoi de médias contre la version live de WhatsApp Web).
+COPY patches ./patches
 RUN npm install --omit=dev
 COPY . .
 

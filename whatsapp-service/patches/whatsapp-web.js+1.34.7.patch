@@ -1,0 +1,191 @@
+diff --git a/node_modules/whatsapp-web.js/src/Client.js b/node_modules/whatsapp-web.js/src/Client.js
+index 800109e..505209d 100644
+--- a/node_modules/whatsapp-web.js/src/Client.js
++++ b/node_modules/whatsapp-web.js/src/Client.js
+@@ -3314,8 +3314,8 @@ class Client extends EventEmitter {
+                         await window.WWebJS.enforceLidAndPnRetrieval(userId);
+ 
+                     return {
+-                        lid: lid?._serialized,
+-                        pn: phone?._serialized,
++                        lid: lid?._serialized ?? lid?.$1,
++                        pn: phone?._serialized ?? phone?.$1,
+                     };
+                 }),
+             );
+diff --git a/node_modules/whatsapp-web.js/src/structures/Message.js b/node_modules/whatsapp-web.js/src/structures/Message.js
+index dd977e8..d69a7d0 100644
+--- a/node_modules/whatsapp-web.js/src/structures/Message.js
++++ b/node_modules/whatsapp-web.js/src/structures/Message.js
+@@ -74,7 +74,7 @@ class Message extends Base {
+          */
+         this.from =
+             typeof data.from === 'object' && data.from !== null
+-                ? data.from._serialized
++                ? data.from._serialized ?? data.from.$1
+                 : data.from;
+ 
+         /**
+@@ -86,7 +86,7 @@ class Message extends Base {
+          */
+         this.to =
+             typeof data.to === 'object' && data.to !== null
+-                ? data.to._serialized
++                ? data.to._serialized ?? data.to.$1
+                 : data.to;
+ 
+         /**
+@@ -95,7 +95,7 @@ class Message extends Base {
+          */
+         this.author =
+             typeof data.author === 'object' && data.author !== null
+-                ? data.author._serialized
++                ? data.author._serialized ?? data.author.$1
+                 : data.author;
+ 
+         /**
+@@ -515,6 +515,10 @@ class Message extends Base {
+             return undefined;
+         }
+ 
++        // Dual-compat: prefer `_serialized` (legacy), fall back to `$1` (newer WA Web).
++        const _msgId = this.id?._serialized ?? this.id?.$1;
++        if (!_msgId) return undefined;
++
+         const result = await this.client.pupPage.evaluate(async (msgId) => {
+             const msg =
+                 window.require('WAWebCollections').Msg.get(msgId) ||
+@@ -585,7 +589,7 @@ class Message extends Base {
+                 if (e.status && e.status === 404) return undefined;
+                 throw e;
+             }
+-        }, this.id._serialized);
++        }, _msgId);
+ 
+         if (!result) return undefined;
+         return new MessageMedia(
+diff --git a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
+index 540078a..60055a2 100644
+--- a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
++++ b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
+@@ -3,6 +3,46 @@
+ exports.LoadUtils = () => {
+     window.WWebJS = {};
+ 
++    /**
++     * Dual-compat serialized id helper.
++     * Older WhatsApp Web builds expose WID/MsgKey as `_serialized`.
++     * Newer builds (e.g. 2.3000.1043xxx) expose the same value as `$1`.
++     * Prefer `_serialized` first so clients that have not updated keep working.
++     */
++    window.WWebJS.widSerialized = (wid) => {
++        if (!wid || typeof wid === 'string') return wid;
++        return (
++            wid._serialized ??
++            wid.$1 ??
++            (typeof wid.toString === 'function' ? wid.toString() : undefined)
++        );
++    };
++
++    /**
++     * Mirror `$1` onto `_serialized` in plain objects returned to Node so
++     * existing node-side code keeps reading `id._serialized`.
++     * Never overwrites an existing `_serialized` value.
++     */
++    window.WWebJS.normalizeSerialized = (obj, depth = 0) => {
++        if (!obj || typeof obj !== 'object' || depth > 8) return obj;
++        if (Array.isArray(obj)) {
++            for (const item of obj) {
++                window.WWebJS.normalizeSerialized(item, depth + 1);
++            }
++            return obj;
++        }
++        if (obj.$1 !== undefined && obj._serialized === undefined) {
++            obj._serialized = obj.$1;
++        }
++        for (const key of Object.keys(obj)) {
++            const value = obj[key];
++            if (value && typeof value === 'object') {
++                window.WWebJS.normalizeSerialized(value, depth + 1);
++            }
++        }
++        return obj;
++    };
++
+     /**
+      * Helper function that compares between two WWeb versions. Its purpose is to help the developer to choose the correct code implementation depending on the comparison value and the WWeb version.
+      * @param {string} lOperand The left operand for the WWeb version string to compare with
+@@ -830,13 +870,13 @@ exports.LoadUtils = () => {
+ 
+         if (typeof msg.id.remote === 'object') {
+             msg.id = Object.assign({}, msg.id, {
+-                remote: msg.id.remote._serialized,
++                remote: window.WWebJS.widSerialized(msg.id.remote),
+             });
+         }
+ 
+         delete msg.pendingAckUpdate;
+ 
+-        return msg;
++        return window.WWebJS.normalizeSerialized(msg);
+     };
+ 
+     window.WWebJS.getChat = async (chatId, { getAsModel = true } = {}) => {
+@@ -953,7 +993,7 @@ exports.LoadUtils = () => {
+             model.isGroup = true;
+             const chatWid = window
+                 .require('WAWebWidFactory')
+-                .createWid(chat.id._serialized);
++                .createWid(window.WWebJS.widSerialized(chat.id));
+             const groupMetadata =
+                 window.require('WAWebCollections').GroupMetadata ||
+                 window.require('WAWebCollections').WAWebGroupMetadataCollection;
+@@ -981,28 +1021,32 @@ exports.LoadUtils = () => {
+ 
+         model.lastMessage = null;
+         if (model.msgs && model.msgs.length) {
+-            const lastMessage = chat.lastReceivedKey
+-                ? window
+-                      .require('WAWebCollections')
+-                      .Msg.get(chat.lastReceivedKey._serialized) ||
+-                  (
+-                      await window
+-                          .require('WAWebCollections')
+-                          .Msg.getMessagesById([
+-                              chat.lastReceivedKey._serialized,
+-                          ])
+-                  )?.messages?.[0]
+-                : null;
+-            lastMessage &&
+-                (model.lastMessage =
+-                    window.WWebJS.getMessageModel(lastMessage));
++            try {
++                const lastKeyId = window.WWebJS.widSerialized(
++                    chat.lastReceivedKey,
++                );
++                const lastMessage = lastKeyId
++                    ? window.require('WAWebCollections').Msg.get(lastKeyId) ||
++                      (
++                          await window
++                              .require('WAWebCollections')
++                              .Msg.getMessagesById([lastKeyId])
++                      )?.messages?.[0]
++                    : null;
++                lastMessage &&
++                    (model.lastMessage =
++                        window.WWebJS.getMessageModel(lastMessage));
++            } catch (_) {
++                // Key-format changes must not break the entire chat model
++                model.lastMessage = null;
++            }
+         }
+ 
+         delete model.msgs;
+         delete model.msgUnsyncedButtonReplyMsgs;
+         delete model.unsyncedButtonReplies;
+ 
+-        return model;
++        return window.WWebJS.normalizeSerialized(model);
+     };
+ 
+     window.WWebJS.getContactModel = (contact) => {
