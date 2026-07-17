@@ -156,10 +156,43 @@ class SubscriptionAdminController extends Controller {
         AuditLogger::log('invoice.updated', $invoice);
 
         if (!$wasPaid && $invoice->fresh()->status === 'paid') {
+            $this->recordPaymentForPaidInvoice($invoice->fresh(), $request->user()->id);
             $this->notifyPaymentReceived($invoice);
         }
 
         return response()->json(['data' => $invoice->fresh()]);
+    }
+
+    /**
+     * Une facture payée doit TOUJOURS laisser une trace dans l'historique des
+     * paiements : complète le paiement pending existant (virement déclaré) ou
+     * crée un paiement manuel, sans jamais dupliquer un paiement déjà complété.
+     */
+    private function recordPaymentForPaidInvoice(Invoice $invoice, ?string $validatedBy = null): void
+    {
+        if ($invoice->payments()->where('status', 'completed')->exists()) {
+            return;
+        }
+
+        $pending = $invoice->payments()->where('status', 'pending')->latest('created_at')->first();
+        if ($pending) {
+            $pending->update(['status' => 'completed', 'completed_at' => $invoice->paid_at ?? now()]);
+            AuditLogger::log('payment.recorded', $pending, newValues: ['invoice_id' => $invoice->id]);
+            return;
+        }
+
+        $payment = \App\Models\Payment::create([
+            'invoice_id'         => $invoice->id,
+            'hotel_id'           => $invoice->hotel_id,
+            'provider'           => $invoice->payment_method ?: 'virement',
+            'declared_reference' => $invoice->payment_reference,
+            'status'             => 'completed',
+            'amount'             => $invoice->total_amount,
+            'currency'           => $invoice->currency,
+            'completed_at'       => $invoice->paid_at ?? now(),
+            'provider_response'  => ['recorded_by' => $validatedBy, 'source' => 'admin_invoice_update'],
+        ]);
+        AuditLogger::log('payment.recorded', $payment, newValues: ['invoice_id' => $invoice->id]);
     }
 
     /** Deletes an invoice (payments cascade at the DB level). Paid invoices are protected — void them instead. */

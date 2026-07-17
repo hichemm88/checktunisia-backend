@@ -103,6 +103,14 @@ class WhatsappAdminController extends Controller
         return response()->json(['data' => ['ok' => true, 'status' => $job->fresh()->status]]);
     }
 
+    /** POST admin/whatsapp/logs/resend-all — remet en file tous les envois échoués. */
+    public function resendAll(): JsonResponse
+    {
+        $count = $this->outbox->resendAllFailed();
+
+        return response()->json(['data' => ['ok' => true, 'requeued' => $count]]);
+    }
+
     /** POST admin/whatsapp/test — enfile une fiche factice [TEST]. */
     public function test(Request $request): JsonResponse
     {
