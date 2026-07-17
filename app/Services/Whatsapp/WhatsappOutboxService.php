@@ -60,6 +60,11 @@ class WhatsappOutboxService
 
             $count = 0;
             foreach ($guests as $guest) {
+                // Jamais de fiche police sans identité voyageur : on trace le
+                // blocage dans le journal (cause visible côté admin) au lieu
+                // d'envoyer une fiche « — » inutilisable.
+                $hasIdentity = trim((string) $guest->first_name.(string) $guest->last_name) !== '';
+
                 WhatsappSendLog::create([
                     'hotel_id' => $checkIn->hotel_id,
                     'check_in_id' => $checkIn->id,
@@ -67,11 +72,14 @@ class WhatsappOutboxService
                     'scan_id' => $this->photoScanId($checkIn, $guest),
                     'recipient' => $recipient,
                     'caption' => FicheFormatter::format($checkIn, $guest),
-                    'status' => WhatsappSendLog::STATUS_PENDING,
-                    'next_attempt_at' => now(),
+                    'status' => $hasIdentity ? WhatsappSendLog::STATUS_PENDING : WhatsappSendLog::STATUS_CANCELLED,
+                    'last_error' => $hasIdentity ? null : 'Identité voyageur manquante (nom et prénom vides) — fiche bloquée avant envoi.',
+                    'next_attempt_at' => $hasIdentity ? now() : null,
                     'queued_at' => now(),
                 ]);
-                $count++;
+                if ($hasIdentity) {
+                    $count++;
+                }
             }
 
             return $count;
@@ -175,10 +183,14 @@ class WhatsappOutboxService
         ]);
     }
 
-    /** Renvoi manuel depuis l'écran admin (bouton « Renvoyer »). */
+    /**
+     * Renvoi manuel depuis l'écran admin (bouton « Renvoyer »). Régénère la
+     * fiche depuis les données à jour (l'hébergeur a pu corriger le nom du
+     * voyageur depuis l'enfilage) et refuse de renvoyer sans identité.
+     */
     public function resend(WhatsappSendLog $job): void
     {
-        $job->update([
+        $updates = [
             'status' => WhatsappSendLog::STATUS_PENDING,
             'attempts' => 0,
             'last_error' => null,
@@ -186,7 +198,42 @@ class WhatsappOutboxService
             'sent_at' => null,
             'next_attempt_at' => now(),
             'queued_at' => now(),
-        ]);
+        ];
+
+        if ($job->check_in_id && $job->guest_id) {
+            $checkIn = CheckIn::with(['hotel', 'room', 'guests.documents'])->find($job->check_in_id);
+            $guest = $checkIn?->guests->firstWhere('id', $job->guest_id);
+
+            if ($checkIn && $guest) {
+                if (trim((string) $guest->first_name.(string) $guest->last_name) === '') {
+                    $job->update([
+                        'status' => WhatsappSendLog::STATUS_CANCELLED,
+                        'last_error' => 'Identité voyageur manquante (nom et prénom vides) — fiche bloquée avant envoi.',
+                        'next_attempt_at' => null,
+                    ]);
+
+                    return;
+                }
+                $updates['caption'] = FicheFormatter::format($checkIn, $guest);
+                $updates['scan_id'] = $job->scan_id ?? $this->photoScanId($checkIn, $guest);
+            }
+        }
+
+        $job->update($updates);
+    }
+
+    /**
+     * Renvoi groupé (bouton « Relancer tout ») : remet en file tous les envois
+     * échoués. Renvoie le nombre de fiches relancées.
+     */
+    public function resendAllFailed(): int
+    {
+        $jobs = WhatsappSendLog::where('status', WhatsappSendLog::STATUS_FAILED)->get();
+        foreach ($jobs as $job) {
+            $this->resend($job);
+        }
+
+        return $jobs->count();
     }
 
     /** Backoff exponentiel : 1 min, 5 min, 15 min, 1 h, puis toutes les 4 h. */

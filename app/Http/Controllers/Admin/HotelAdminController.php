@@ -241,6 +241,22 @@ class HotelAdminController extends Controller
             ->get()
             ->map(fn($p) => ['id' => $p->id, 'hotel_name' => $p->hotel?->name, 'amount' => $p->amount, 'created_at' => $p->created_at]);
 
+        // Chantier A3 — virements déclarés en attente de validation (1 clic).
+        $pendingVirements = \App\Models\Payment::with(['invoice.subscription.organization', 'hotel'])
+            ->where('provider', 'virement')
+            ->where('status', 'pending')
+            ->orderBy('created_at')
+            ->limit(10)
+            ->get()
+            ->map(fn($p) => [
+                'id'             => $p->id,
+                'name'           => $p->invoice?->subscription?->organization?->name ?? $p->hotel?->name ?? '—',
+                'invoice_number' => $p->invoice?->invoice_number,
+                'amount'         => $p->amount,
+                'reference'      => $p->declared_reference,
+                'declared_at'    => $p->declared_at,
+            ]);
+
         $recentlySuspended = Hotel::where('status', 'suspended')
             ->where('updated_at', '>=', now()->subDays(7))
             ->orderByDesc('updated_at')
@@ -273,13 +289,29 @@ class HotelAdminController extends Controller
             return ['date' => $day, 'count' => (int) ($rawDaily[$day] ?? 0)];
         });
 
-        // MRR = sum of every active/trial subscription's price normalized to monthly.
-        $activeSubs = \App\Models\Subscription::with('plan')->whereIn('status', ['active', 'trial'])->get();
-        $mrr = $activeSubs->sum(function ($sub) {
+        // MRR = somme des abonnements actifs au prix effectif (négocié si présent),
+        // annuels / 12. Un seul abonnement compté par client (le plus récent) :
+        // un vieil abonnement resté « active » à côté du courant ne doit pas
+        // gonfler le chiffre. Les essais (trial) ne rapportent rien → exclus.
+        $activeSubs = \App\Models\Subscription::with(['plan', 'organization:id,name', 'hotel:id,name'])
+            ->where('status', 'active')
+            ->orderByDesc('started_at')
+            ->get()
+            ->unique(fn($sub) => $sub->organization_id ?? 'hotel:' . $sub->hotel_id)
+            ->values();
+        $mrrBreakdown = $activeSubs->map(function ($sub) {
             $price = $sub->custom_price ?? ($sub->billing_cycle === 'yearly' ? $sub->plan?->effective_price_yearly : $sub->plan?->price_monthly);
-            if ($price === null) return 0;
-            return $sub->billing_cycle === 'yearly' ? ((float) $price / 12) : (float) $price;
+            $monthly = $price === null ? 0.0
+                : ($sub->billing_cycle === 'yearly' ? (float) $price / 12 : (float) $price);
+            return [
+                'customer'      => $sub->organization?->name ?? $sub->hotel?->name ?? '—',
+                'plan'          => $sub->plan?->name ?? '—',
+                'billing_cycle' => $sub->billing_cycle,
+                'negotiated'    => $sub->custom_price !== null,
+                'monthly_value' => round($monthly, 3),
+            ];
         });
+        $mrr = $mrrBreakdown->sum('monthly_value');
 
         // Top 5 établissements by check-in volume this month.
         $topHotels = Hotel::withCount(['checkIns' => fn($q) => $q->whereMonth('created_at', now()->month)->whereYear('created_at', now()->year)])
@@ -313,8 +345,10 @@ class HotelAdminController extends Controller
                     'expiring_subscriptions' => $expiringSoon,
                     'failed_payments'        => $failedPayments,
                     'recently_suspended'     => $recentlySuspended,
+                    'pending_virements'      => $pendingVirements,
                 ],
                 'mrr'              => round($mrr, 3),
+                'mrr_breakdown'    => $mrrBreakdown,
                 'check_ins_chart'  => $checkInsChart,
                 'top_hotels'       => $topHotels,
                 'recent_signups'   => $recentSignups,
@@ -327,7 +361,7 @@ class HotelAdminController extends Controller
     {
         $q = trim((string) $request->query('q', ''));
         if (mb_strlen($q) < 2) {
-            return response()->json(['data' => ['organizations' => [], 'hotels' => [], 'users' => [], 'check_ins' => []]]);
+            return response()->json(['data' => ['organizations' => [], 'hotels' => [], 'users' => [], 'check_ins' => [], 'invoices' => []]]);
         }
 
         $organizations = \App\Models\Organization::where('name', 'ilike', "%{$q}%")
@@ -355,11 +389,24 @@ class HotelAdminController extends Controller
             ->map(fn($c) => ['id' => $c->hotel_id, 'label' => "{$c->reference} — {$c->hotel->name}", 'type' => 'check_in'])
             ->values();
 
+        // Factures par numéro (INV-2026-0001, ou juste « 0001 » / « 2026 »).
+        $invoices = \App\Models\Invoice::where('invoice_number', 'ilike', "%{$q}%")
+            ->with('subscription.organization:id,name')
+            ->limit(5)->get(['id', 'invoice_number', 'subscription_id', 'total_amount', 'currency', 'status'])
+            ->map(fn($inv) => [
+                'id'     => $inv->id,
+                'label'  => $inv->invoice_number
+                    . ($inv->subscription?->organization ? " — {$inv->subscription->organization->name}" : ''),
+                'type'   => 'invoice',
+                'status' => $inv->status,
+            ]);
+
         return response()->json(['data' => [
             'organizations' => $organizations,
             'hotels'        => $hotels,
             'users'         => $users,
             'check_ins'     => $checkIns,
+            'invoices'      => $invoices,
         ]]);
     }
 }

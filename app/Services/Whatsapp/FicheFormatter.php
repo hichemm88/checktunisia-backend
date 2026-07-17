@@ -17,7 +17,8 @@ use Illuminate\Support\Carbon;
  * Contraintes produit :
  *  - Nom de la propriété EN TÊTE (le destinataire trie sur ce fil unique vers
  *    quel poste transférer).
- *  - Emoji-free sauf le 🔹 d'en-tête (décision produit « emoji-free » mobile v2).
+ *  - Emoji-free, sans exception (règle transverse Admin V2 : aucun emoji
+ *    dans les communications sortantes).
  *  - Format transférable tel quel (photo + légende dans un seul message).
  */
 class FicheFormatter
@@ -35,7 +36,7 @@ class FicheFormatter
         $companions = $checkIn->guests->reject(fn ($g) => $g->id === $guest->id)->values();
 
         $lines = [];
-        $lines[] = '🔹 FICHE DE POLICE — '.mb_strtoupper($propertyName);
+        $lines[] = 'FICHE DE POLICE — '.mb_strtoupper($propertyName);
         $lines[] = 'Nom : '.self::fullName($guest);
         $lines[] = 'Nationalité : '.self::nationality($guest->nationality_code);
         $lines[] = 'Document : '.self::document($guest);
@@ -59,7 +60,7 @@ class FicheFormatter
         $now = Carbon::now(self::TZ);
 
         return implode("\n", [
-            '[TEST] 🔹 FICHE DE POLICE — '.mb_strtoupper($propertyName ?? 'QAYED DÉMO'),
+            '[TEST] FICHE DE POLICE — '.mb_strtoupper($propertyName ?? 'QAYED DÉMO'),
             'Nom : EXEMPLE Voyageur',
             'Nationalité : Tunisie',
             'Document : Passeport n° X0000000',

@@ -12,6 +12,12 @@ Schedule::command('watchlist:sync-opensanctions')->dailyAt('02:00');
 // Auto-expire subscriptions past their expiry date, blocking check-ins until renewed
 Schedule::command('subscriptions:expire-overdue')->dailyAt('03:00');
 
+// Chantier A2 — facturation automatique : émission des factures de
+// renouvellement à J-7 de l'échéance, puis relances impayé J+3/7/14 et
+// suspension à J+21. La génération tourne avant les relances.
+Schedule::command('invoices:generate-due')->dailyAt('07:00');
+Schedule::command('invoices:dunning')->dailyAt('07:30');
+
 // Notify managers of check-ins left unvalidated for >30 min (scan done, not finalised)
 Schedule::command('checkins:notify-pending')->everyTenMinutes()->withoutOverlapping();
 
@@ -21,3 +27,7 @@ Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone(
 // MODULE PROVISOIRE — relais WhatsApp : purge horaire des images de documents
 // au-delà de la rétention (24 h). Minimisation des données.
 Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
+
+// MODULE PROVISOIRE — relais WhatsApp : alerte admin si le worker est
+// silencieux (heartbeat périmé > 10 min) — chantier B3.
+Schedule::command('whatsapp:check-health')->everyTenMinutes();

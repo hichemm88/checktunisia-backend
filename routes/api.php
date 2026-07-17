@@ -370,6 +370,8 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             // Audit logs
             Route::get('audit-logs', [AuditLogController::class, 'index']);
+            Route::get('audit-logs/actions', [AuditLogController::class, 'actions']);
+            Route::get('audit-logs/export', [AuditLogController::class, 'export']);
             Route::get('audit-logs/{id}', [AuditLogController::class, 'show']);
             Route::get('authority-search-logs', [AuditLogController::class, 'searchLogs']);
 
@@ -404,6 +406,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             // Voir PROMPT-CLAUDE-CODE-QAYED-AUTORITE.md
             Route::get('whatsapp/health', [WhatsappAdminController::class, 'health']);
             Route::get('whatsapp/logs', [WhatsappAdminController::class, 'logs']);
+            Route::post('whatsapp/logs/resend-all', [WhatsappAdminController::class, 'resendAll']);
             Route::post('whatsapp/logs/{id}/resend', [WhatsappAdminController::class, 'resend']);
             Route::post('whatsapp/test', [WhatsappAdminController::class, 'test']);
             Route::post('whatsapp/pause', [WhatsappAdminController::class, 'pause']);

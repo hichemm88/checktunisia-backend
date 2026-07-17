@@ -98,7 +98,20 @@
 
         <table class="totals">
             <tr><td>Sous-total</td><td style="text-align:right;">{{ \App\Support\Money::tnd($invoice->amount, $invoice->currency) }}</td></tr>
-            <tr><td>TVA</td><td style="text-align:right;">{{ \App\Support\Money::tnd($invoice->tax_amount, $invoice->currency) }}</td></tr>
+            @php
+                // Factures générées automatiquement : le détail TVA/timbre est
+                // dans metadata — lignes dédiées. Sinon, ligne TVA globale.
+                $taxRate = $invoice->metadata['tax_rate'] ?? null;
+                $timbre  = (float) ($invoice->metadata['timbre_fiscal'] ?? 0);
+            @endphp
+            @if($taxRate !== null)
+                <tr><td>TVA ({{ rtrim(rtrim(number_format((float) $taxRate, 2, '.', ''), '0'), '.') }} %)</td><td style="text-align:right;">{{ \App\Support\Money::tnd((float) $invoice->tax_amount - $timbre, $invoice->currency) }}</td></tr>
+                @if($timbre > 0)
+                    <tr><td>Timbre fiscal</td><td style="text-align:right;">{{ \App\Support\Money::tnd($timbre, $invoice->currency) }}</td></tr>
+                @endif
+            @else
+                <tr><td>TVA</td><td style="text-align:right;">{{ \App\Support\Money::tnd($invoice->tax_amount, $invoice->currency) }}</td></tr>
+            @endif
             <tr class="grand"><td>Total</td><td style="text-align:right;">{{ \App\Support\Money::tnd($invoice->total_amount, $invoice->currency) }}</td></tr>
         </table>
 

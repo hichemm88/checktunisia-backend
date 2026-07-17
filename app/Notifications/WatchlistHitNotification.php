@@ -30,9 +30,9 @@ class WatchlistHitNotification extends Notification implements ShouldQueue
     {
         $guestName = trim("{$this->guest->first_name} {$this->guest->last_name}");
         $alertLabel = match($this->entry->alert_level ?? 'medium') {
-            'critical' => '🔴 CRITIQUE',
-            'high'     => '🟠 ÉLEVÉ',
-            default    => '🟡 MOYEN',
+            'critical' => 'CRITIQUE',
+            'high'     => 'ÉLEVÉ',
+            default    => 'MOYEN',
         };
 
         return (new MailMessage)

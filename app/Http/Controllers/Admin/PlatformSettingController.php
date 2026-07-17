@@ -34,6 +34,8 @@ class PlatformSettingController extends Controller
             'virement_bank_name'   => ['sometimes', 'nullable', 'string', 'max:100'],
             'virement_beneficiary' => ['sometimes', 'nullable', 'string', 'max:150'],
             'virement_details'     => ['sometimes', 'nullable', 'string'],
+            'tax_rate'             => ['sometimes', 'numeric', 'min:0', 'max:100'],
+            'timbre_fiscal'        => ['sometimes', 'numeric', 'min:0', 'max:100'],
         ]);
 
         $s = PlatformSetting::get();

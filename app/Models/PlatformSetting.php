@@ -19,6 +19,8 @@ class PlatformSetting extends Model
         'virement_bank_name',
         'virement_beneficiary',
         'virement_details',
+        'tax_rate',
+        'timbre_fiscal',
     ];
 
     protected function casts(): array
@@ -26,6 +28,8 @@ class PlatformSetting extends Model
         return [
             'flouci_enabled'   => 'boolean',
             'virement_enabled' => 'boolean',
+            'tax_rate'         => 'decimal:2',
+            'timbre_fiscal'    => 'decimal:3',
         ];
     }
 
@@ -56,6 +60,8 @@ class PlatformSetting extends Model
             'virement_bank_name'   => $this->virement_bank_name,
             'virement_beneficiary' => $this->virement_beneficiary,
             'virement_details'     => $this->virement_details,
+            'tax_rate'             => $this->tax_rate,
+            'timbre_fiscal'        => $this->timbre_fiscal,
         ];
     }
 }

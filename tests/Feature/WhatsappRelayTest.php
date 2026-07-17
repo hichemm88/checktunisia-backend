@@ -225,4 +225,56 @@ class WhatsappRelayTest extends TestCase
             ->getJson('/api/v1/admin/whatsapp/logs')
             ->assertForbidden();
     }
+
+    // ── §1.3 : jamais de fiche sans identité voyageur ────────────────────────
+
+    public function test_nameless_guest_is_blocked_before_send_with_visible_cause(): void
+    {
+        $checkIn = CheckIn::factory()->for($this->hotel)->draft()->withGuest('', '')->create([
+            'created_by' => $this->receptionist->id,
+        ]);
+
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/complete")
+            ->assertOk();
+
+        $row = WhatsappSendLog::first();
+        $this->assertSame('cancelled', $row->status);
+        $this->assertStringContainsString('Identité voyageur manquante', $row->last_error);
+    }
+
+    public function test_resend_of_nameless_fiche_stays_blocked(): void
+    {
+        $checkIn = CheckIn::factory()->for($this->hotel)->draft()->withGuest('', '')->create([
+            'created_by' => $this->receptionist->id,
+        ]);
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/complete")
+            ->assertOk();
+        $job = WhatsappSendLog::first();
+
+        $this->actingAs($this->platformAdmin)
+            ->postJson("/api/v1/admin/whatsapp/logs/{$job->id}/resend")
+            ->assertOk();
+
+        $this->assertSame('cancelled', $job->fresh()->status);
+    }
+
+    // ── §1.3 : bouton « Relancer tout » ──────────────────────────────────────
+
+    public function test_admin_resend_all_requeues_every_failed_job(): void
+    {
+        $failed1 = $this->pendingJob(['status' => 'failed', 'attempts' => 6, 'last_error' => 'timeout']);
+        $failed2 = $this->pendingJob(['status' => 'failed', 'attempts' => 3, 'last_error' => 'timeout']);
+        $sent    = $this->pendingJob(['status' => 'sent']);
+
+        $this->actingAs($this->platformAdmin)
+            ->postJson('/api/v1/admin/whatsapp/logs/resend-all')
+            ->assertOk()
+            ->assertJsonPath('data.requeued', 2);
+
+        $this->assertSame('pending', $failed1->fresh()->status);
+        $this->assertSame('pending', $failed2->fresh()->status);
+        $this->assertSame('sent', $sent->fresh()->status);
+    }
 }

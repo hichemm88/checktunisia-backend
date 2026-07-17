@@ -17,7 +17,7 @@ class EmailTemplate extends Model
 <p>Un compte a été créé pour vous sur <strong>Qayed</strong> en tant que <strong>{{role_label}}</strong> de l'établissement <strong>{{hotel_name}}</strong>.</p>
 <p>Pour activer votre compte, définissez votre mot de passe en cliquant sur le bouton ci-dessous :</p>
 {{cta_button}}
-<div class="warning">⚠️&nbsp; Ce lien est valable 48 heures et à usage unique.</div>
+<div class="warning">Ce lien est valable 48 heures et à usage unique.</div>
 HTML,
         ],
         'password_reset' => [
@@ -27,7 +27,7 @@ HTML,
 <p>Vous avez demandé la réinitialisation de votre mot de passe sur <strong>Qayed</strong>.</p>
 <p>Cliquez sur le bouton ci-dessous pour en choisir un nouveau :</p>
 {{cta_button}}
-<div class="warning">⚠️&nbsp; Ce lien est valable 48 heures et à usage unique. Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail — votre mot de passe reste inchangé.</div>
+<div class="warning">Ce lien est valable 48 heures et à usage unique. Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail — votre mot de passe reste inchangé.</div>
 HTML,
         ],
         'account_suspended' => [
@@ -35,7 +35,7 @@ HTML,
             'body_html' => <<<'HTML'
 <p>Bonjour <strong>{{name}}</strong>,</p>
 <p>Votre compte hébergeur sur <strong>Qayed</strong> a été suspendu.</p>
-<div class="danger">🛑&nbsp; <strong>Motif :</strong> {{reason}}</div>
+<div class="danger"><strong>Motif :</strong> {{reason}}</div>
 <p style="margin-top:20px;">Pour toute question ou pour régulariser la situation, contactez <a href="mailto:support@qayed.tn" style="color:#5346A8;">support@qayed.tn</a>.</p>
 HTML,
         ],
@@ -63,6 +63,16 @@ HTML,
 <p>Bonjour <strong>{{name}}</strong>,</p>
 <p>{{trial_message}}</p>
 <p>Passez à un abonnement payant dès maintenant pour continuer à enregistrer vos voyageurs sans interruption.</p>
+{{cta_button}}
+HTML,
+        ],
+        'invoice_overdue' => [
+            'subject' => "Facture {{invoice_number}} en attente de règlement — Qayed",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>Sauf erreur de notre part, la facture <strong>{{invoice_number}}</strong> de votre abonnement <strong>{{plan_name}}</strong> est impayée depuis <strong>{{days_late}} jour(s)</strong>.</p>
+{{credentials_box}}
+<p>Pour éviter toute interruption de service, merci de la régler dès que possible. Si le paiement a déjà été effectué, vous pouvez ignorer ce message.</p>
 {{cta_button}}
 HTML,
         ],
