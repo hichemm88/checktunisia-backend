@@ -49,6 +49,9 @@ class SubscriptionController extends Controller
                 'expires_at'     => $sub->expires_at,
                 'auto_renew'     => $sub->auto_renew,
                 'days_remaining' => $sub->days_remaining,
+                // Fonctionnalités effectives (pack + overrides négociés) avec
+                // usage — même payload pour web et mobile.
+                'entitlements'   => $org ? \App\Services\Subscription\PlanEntitlements::summary($org) : null,
             ],
         ]);
     }

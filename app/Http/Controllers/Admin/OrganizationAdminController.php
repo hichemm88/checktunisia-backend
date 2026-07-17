@@ -92,6 +92,10 @@ class OrganizationAdminController extends Controller
                 'check_ins_this_month' => $checkInsThisMonth,
                 'mrr'                  => $mrr,
             ],
+            // Fonctionnalités effectives + usage réel + overrides bruts (pour
+            // l'édition « deal négocié » sur la fiche).
+            'entitlements'      => \App\Services\Subscription\PlanEntitlements::summary($org),
+            'feature_overrides' => (array) ($sub?->metadata['feature_overrides'] ?? []),
         ])]);
     }
 

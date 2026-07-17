@@ -19,7 +19,21 @@ class StorePlanRequest extends FormRequest {
             'features'      => ['sometimes', 'array'],
             'is_active'     => ['sometimes', 'boolean'],
             'sort_order'    => ['sometimes', 'integer'],
-        ], self::marketingRules());
+        ], self::featureRules(), self::marketingRules());
+    }
+
+    /**
+     * Features = limites RÉELLEMENT appliquées par l'app (PlanEntitlements).
+     * -1 ou null = illimité. Clés inconnues rejetées pour éviter les fautes
+     * de frappe silencieuses (une clé mal orthographiée ne gate rien).
+     */
+    public static function featureRules(): array {
+        return [
+            'features.max_properties'      => ['sometimes', 'nullable', 'integer', 'min:-1'],
+            'features.max_users'           => ['sometimes', 'nullable', 'integer', 'min:-1'],
+            'features.ocr_scans_per_month' => ['sometimes', 'nullable', 'integer', 'min:-1'],
+            'features.whatsapp_relay'      => ['sometimes', 'boolean'],
+        ];
     }
 
     /** Shared trilingual marketing validation — FR required when a field is present, EN/AR optional (fallback FR at render). */

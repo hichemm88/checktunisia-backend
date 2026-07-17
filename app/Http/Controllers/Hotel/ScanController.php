@@ -27,6 +27,11 @@ class ScanController extends Controller
             'passport_image' => ['required', 'file', 'mimes:jpeg,jpg,png,heic,pdf', 'max:10240'],
         ]);
 
+        // Quota de scans mensuel du pack (piloté dans Admin > Abonnements).
+        if ($org = app('tenant')->organization) {
+            \App\Services\Subscription\PlanEntitlements::assertWithinLimit($org, 'ocr_scans_per_month');
+        }
+
         $scan = $this->service->uploadScan($checkIn, $request->user(), $request->file('passport_image'));
 
         return response()->json([

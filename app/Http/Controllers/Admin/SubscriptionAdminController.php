@@ -66,7 +66,20 @@ class SubscriptionAdminController extends Controller {
             'plan_id'          => ['sometimes', 'exists:subscription_plans,id'],
             'suspended_reason' => ['nullable', 'string'],
             'custom_price'     => ['nullable', 'numeric', 'min:0'],
+            // Overrides négociés par client : priment sur les features du pack.
+            // Clé absente = valeur du pack ; -1 ou null = illimité.
+            'feature_overrides' => ['sometimes', 'array'],
         ]);
+
+        if (array_key_exists('feature_overrides', $v)) {
+            $allowed = array_keys(\App\Services\Subscription\PlanEntitlements::DEFAULTS);
+            $overrides = array_intersect_key($v['feature_overrides'], array_flip($allowed));
+            $metadata = $sub->metadata ?? [];
+            $metadata['feature_overrides'] = $overrides;
+            $v['metadata'] = $metadata;
+            unset($v['feature_overrides']);
+            AuditLogger::log('subscription.features_overridden', $sub, newValues: $overrides);
+        }
 
         if (isset($v['status'])) {
             if ($v['status'] === 'suspended' && !$sub->suspended_at) {
