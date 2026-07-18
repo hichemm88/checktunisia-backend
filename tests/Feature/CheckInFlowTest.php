@@ -86,6 +86,51 @@ class CheckInFlowTest extends TestCase
         $this->assertDatabaseHas('travel_documents', ['document_number' => 'TN12345678']);
     }
 
+    // Régression : corriger un champ d'identité d'un voyageur dont le document est
+    // en code pays alpha-3 (« GBR ») ne doit pas être rejeté. L'ancienne règle de
+    // l'update exigeait size:2 alors que la création accepte min:2/max:3 et que la
+    // colonne est char(3) — corriger un simple prénom échouait.
+    public function test_can_update_guest_identity_with_alpha3_document_country(): void
+    {
+        $checkIn = CheckIn::factory()->for($this->hotel)->draft()->create([
+            'created_by' => $this->receptionist->id,
+        ]);
+
+        $guestId = $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/guests", [
+                'first_name'       => 'Ammar Abdula',
+                'last_name'        => 'Shaif',
+                'date_of_birth'    => '1993-07-21',
+                'sex'              => 'M',
+                'nationality_code' => 'YEM',
+                'is_primary'       => true,
+                'document'         => [
+                    'type'                 => 'passport',
+                    'document_number'      => '600580899',
+                    'issuing_country_code' => 'GBR',
+                ],
+            ])
+            ->assertCreated()
+            ->json('data.id');
+
+        // Correction du prénom uniquement — aucun champ document envoyé.
+        $this->actingAs($this->receptionist)
+            ->patchJson("/api/v1/hotel/check-ins/{$checkIn->id}/guests/{$guestId}", [
+                'first_name' => 'Ammar Abdulla',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.first_name', 'Ammar Abdulla');
+
+        // Et modifier explicitement le pays de délivrance en alpha-3 doit passer.
+        $this->actingAs($this->receptionist)
+            ->patchJson("/api/v1/hotel/check-ins/{$checkIn->id}/guests/{$guestId}", [
+                'document' => ['issuing_country_code' => 'FRA'],
+            ])
+            ->assertOk();
+
+        $this->assertDatabaseHas('travel_documents', ['issuing_country_code' => 'FRA']);
+    }
+
     public function test_can_add_guest_to_active_checkin(): void
     {
         // A guest arriving hours after the primary — the stay is already active.

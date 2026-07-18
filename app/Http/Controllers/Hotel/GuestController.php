@@ -70,9 +70,14 @@ class GuestController extends Controller
             'email' => ['nullable', 'email'],
             'phone' => ['nullable', 'string', 'max:30'],
             'document' => ['sometimes', 'array'],
+            'document.type' => ['sometimes', 'string', 'in:passport,national_id,residence_permit,visa,travel_document'],
+            'document.document_number' => ['sometimes', 'string', 'max:100'],
+            // Aligné sur la création (store) : les codes pays sont en alpha-3 dans toute
+            // l'app (« GBR », « TUN »), et la colonne est char(3). L'ancienne règle size:2
+            // rejetait toute modification d'un voyageur au document déjà en alpha-3.
+            'document.issuing_country_code' => ['sometimes', 'string', 'min:2', 'max:3'],
+            'document.issue_date' => ['nullable', 'date'],
             'document.expiry_date' => ['nullable', 'date'],
-            'document.document_number' => ['sometimes', 'string'],
-            'document.issuing_country_code' => ['sometimes', 'string', 'size:2'],
         ]);
 
         $guest = $this->service->updateGuest($checkIn, $guest, $validated);
