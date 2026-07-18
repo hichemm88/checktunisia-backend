@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\CheckIn;
+use App\Models\Guest;
 use App\Models\Hotel;
 use App\Models\User;
 use App\Models\WhatsappSendLog;
@@ -84,6 +85,76 @@ class WhatsappRelayTest extends TestCase
         $this->assertSame($this->hotel->id, $row->hotel_id);
         $this->assertStringContainsString('FICHE DE POLICE — DAR TEST', $row->caption);
         $this->assertStringContainsString('TRABELSI Sara', $row->caption);
+    }
+
+    // ── Voyageur ajouté APRÈS finalisation du séjour ─────────────────────────
+
+    /** @return array<string,mixed> */
+    private function guestPayload(string $first, string $last): array
+    {
+        return [
+            'first_name' => $first,
+            'last_name' => $last,
+            'date_of_birth' => '1990-01-01',
+            'sex' => 'F',
+            'nationality_code' => 'ITA',
+            'document' => [
+                'type' => 'passport',
+                'document_number' => 'P'.strtoupper($last).'1',
+                'issuing_country_code' => 'ITA',
+            ],
+        ];
+    }
+
+    public function test_guest_added_to_finalized_checkin_gets_its_own_fiche(): void
+    {
+        $checkIn = CheckIn::factory()->for($this->hotel)->draft()->withGuest('Dennis', 'Forosetti')->create([
+            'created_by' => $this->receptionist->id,
+        ]);
+
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/complete")
+            ->assertOk();
+
+        $this->assertDatabaseCount('whatsapp_send_log', 1);
+
+        // Voyageur ajouté APRÈS coup : sa fiche doit être enfilée elle aussi.
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/guests", $this->guestPayload('Beatrice', 'Tani'))
+            ->assertSuccessful();
+
+        $this->assertDatabaseCount('whatsapp_send_log', 2);
+
+        // Ciblage par voyageur : les deux fiches partagent le même queued_at,
+        // un tri par date désignerait l'une ou l'autre au hasard.
+        // Les noms de famille sont stockés en majuscules (findOrCreateGuest).
+        $tani = Guest::where('last_name', 'TANI')->sole();
+        $added = WhatsappSendLog::where('guest_id', $tani->id)->sole();
+
+        $this->assertSame('pending', $added->status);
+        $this->assertStringContainsString('TANI Beatrice', $added->caption);
+        $this->assertStringContainsString('FICHE DE POLICE — DAR TEST', $added->caption);
+    }
+
+    public function test_guest_added_to_draft_checkin_is_enqueued_once_at_completion(): void
+    {
+        $checkIn = CheckIn::factory()->for($this->hotel)->draft()->withGuest('Dennis', 'Forosetti')->create([
+            'created_by' => $this->receptionist->id,
+        ]);
+
+        // Ajout pendant le brouillon : rien ne part encore…
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/guests", $this->guestPayload('Beatrice', 'Tani'))
+            ->assertSuccessful();
+
+        $this->assertDatabaseCount('whatsapp_send_log', 0);
+
+        // …et la finalisation enfile chacun une seule fois (pas de doublon).
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/complete")
+            ->assertOk();
+
+        $this->assertDatabaseCount('whatsapp_send_log', 2);
     }
 
     public function test_disabled_module_enqueues_nothing(): void

@@ -97,6 +97,16 @@ class CheckInService
                 hotelId: $checkIn->hotel_id,
             );
 
+            // ── MODULE PROVISOIRE — à retirer après homologation MI. ──────────
+            // Séjour DÉJÀ finalisé : enqueueForCheckIn() ne tourne qu'à la
+            // finalisation, donc la fiche d'un voyageur ajouté après coup ne
+            // partait jamais. On l'enfile ici, pour ce voyageur uniquement.
+            // Sur un check-in encore en draft on ne fait rien : la finalisation
+            // enfilera tout le monde (sinon doublon).
+            if ($checkIn->status !== 'draft') {
+                app(WhatsappOutboxService::class)->enqueueForGuest($checkIn, $guest);
+            }
+
             return $guest->load(['documents']);
         });
     }

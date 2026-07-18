@@ -68,24 +68,7 @@ class WhatsappOutboxService
 
             $count = 0;
             foreach ($guests as $guest) {
-                // Jamais de fiche police sans identité voyageur : on trace le
-                // blocage dans le journal (cause visible côté admin) au lieu
-                // d'envoyer une fiche « — » inutilisable.
-                $hasIdentity = trim((string) $guest->first_name.(string) $guest->last_name) !== '';
-
-                WhatsappSendLog::create([
-                    'hotel_id' => $checkIn->hotel_id,
-                    'check_in_id' => $checkIn->id,
-                    'guest_id' => $guest->id,
-                    'scan_id' => $this->photoScanId($checkIn, $guest),
-                    'recipient' => $recipient,
-                    'caption' => FicheFormatter::format($checkIn, $guest),
-                    'status' => $hasIdentity ? WhatsappSendLog::STATUS_PENDING : WhatsappSendLog::STATUS_CANCELLED,
-                    'last_error' => $hasIdentity ? null : 'Identité voyageur manquante (nom et prénom vides) — fiche bloquée avant envoi.',
-                    'next_attempt_at' => $hasIdentity ? now() : null,
-                    'queued_at' => now(),
-                ]);
-                if ($hasIdentity) {
+                if ($this->createJob($checkIn, $guest, $recipient)) {
                     $count++;
                 }
             }
@@ -96,6 +79,76 @@ class WhatsappOutboxService
 
             return 0;
         }
+    }
+
+    /**
+     * Enfile la fiche d'UN SEUL voyageur — cas d'un voyageur ajouté à un séjour
+     * DÉJÀ finalisé (enqueueForCheckIn ne tourne qu'à la finalisation, donc sa
+     * fiche ne partait jamais). Idempotent : ne fait rien si une fiche existe
+     * déjà pour ce couple check-in/voyageur. JAMAIS bloquant, comme le reste.
+     */
+    public function enqueueForGuest(CheckIn $checkIn, Guest $guest): bool
+    {
+        if (! $this->enabled()) {
+            return false;
+        }
+
+        try {
+            // Rechargement explicite (et non loadMissing) : l'appelant vient
+            // d'ajouter le voyageur, une relation déjà chargée serait périmée et
+            // fausserait le choix de la photo (photoScanId compte les voyageurs).
+            $checkIn->load(['hotel.organization', 'room', 'guests.documents']);
+
+            $org = $checkIn->hotel?->organization;
+            if ($org && ! \App\Services\Subscription\PlanEntitlements::allows($org, 'whatsapp_relay')) {
+                Log::info('[whatsapp] relais désactivé par le pack pour org '.$org->id.' — voyageur '.$guest->id.' non enfilé.');
+
+                return false;
+            }
+
+            // Garde-fou anti-doublon : ne jamais renvoyer une fiche déjà journalisée.
+            $already = WhatsappSendLog::where('check_in_id', $checkIn->id)
+                ->where('guest_id', $guest->id)
+                ->exists();
+
+            if ($already) {
+                return false;
+            }
+
+            return $this->createJob($checkIn, $guest, (string) config('whatsapp.recipient'));
+        } catch (\Throwable $e) {
+            Log::warning('[whatsapp] enqueue failed for guest '.$guest->id.' (check-in '.$checkIn->id.'): '.$e->getMessage());
+
+            return false;
+        }
+    }
+
+    /**
+     * Crée la ligne de journal/file pour un voyageur.
+     *
+     * @return bool true si la fiche est réellement enfilée (identité présente)
+     */
+    private function createJob(CheckIn $checkIn, Guest $guest, string $recipient): bool
+    {
+        // Jamais de fiche police sans identité voyageur : on trace le
+        // blocage dans le journal (cause visible côté admin) au lieu
+        // d'envoyer une fiche « — » inutilisable.
+        $hasIdentity = trim((string) $guest->first_name.(string) $guest->last_name) !== '';
+
+        WhatsappSendLog::create([
+            'hotel_id' => $checkIn->hotel_id,
+            'check_in_id' => $checkIn->id,
+            'guest_id' => $guest->id,
+            'scan_id' => $this->photoScanId($checkIn, $guest),
+            'recipient' => $recipient,
+            'caption' => FicheFormatter::format($checkIn, $guest),
+            'status' => $hasIdentity ? WhatsappSendLog::STATUS_PENDING : WhatsappSendLog::STATUS_CANCELLED,
+            'last_error' => $hasIdentity ? null : 'Identité voyageur manquante (nom et prénom vides) — fiche bloquée avant envoi.',
+            'next_attempt_at' => $hasIdentity ? now() : null,
+            'queued_at' => now(),
+        ]);
+
+        return $hasIdentity;
     }
 
     /** Enfile une fiche factice [TEST] pour le bouton « message test » admin. */
