@@ -108,20 +108,12 @@ const client = new Client({
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      // Contention mémoire : le conteneur est plafonné à 1 Go (plan Railway) et
-      // le renderer WhatsApp Web s'est fait OOM-kill (memory.events oom_kill=1,
-      // pic mesuré 885 Mo) → page « ready » mais morte, envois suspendus sans
-      // erreur. On borne le tas JS du renderer et on limite les process pour
-      // rester sous le plafond ; le vrai remède est d'augmenter la RAM du plan.
-      '--js-flags=--max-old-space-size=460',
-      '--renderer-process-limit=2',
-      '--disable-features=IsolateOrigins,site-per-process',
+      // NB : les bridages mémoire de l'époque « plan 1 Go » (max-old-space-size,
+      // renderer-process-limit, isolation désactivée, imagesEnabled=false) ont
+      // été retirés le 2026-07-17 après le passage à 8 Go. Un tas plafonné à
+      // 460 Mo pouvait étrangler le traitement d'une photo de passeport, et
+      // couper les images fausse le diagnostic des envois de médias.
       '--disable-extensions',
-      '--disable-background-networking',
-      // Ne pas charger les images de l'interface (avatars, aperçus) : gros gain
-      // mémoire. Sans impact sur l'ENVOI de médias, qui passe par MessageMedia
-      // (base64 → Store JS), pas par le rendu de la page.
-      '--blink-settings=imagesEnabled=false',
     ],
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
   },
