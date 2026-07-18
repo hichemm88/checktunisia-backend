@@ -32,6 +32,13 @@ class GuestController extends Controller
             'email' => ['nullable', 'email'],
             'phone' => ['nullable', 'string', 'max:30'],
             'is_primary' => ['boolean'],
+            // Champs arabes de la CIN tunisienne (préremplis par le scan).
+            'last_name_ar' => ['nullable', 'string', 'max:150'],
+            'first_name_ar' => ['nullable', 'string', 'max:150'],
+            'filiation_ar' => ['nullable', 'string', 'max:200'],
+            'spouse_ar' => ['nullable', 'string', 'max:150'],
+            'birth_place_ar' => ['nullable', 'string', 'max:150'],
+            'card_format' => ['nullable', 'in:legacy,biometric'],
             // MODULE PROVISOIRE — relais WhatsApp : scan à relier à ce voyageur
             // (téléversé à l'étape scan) pour joindre la bonne photo à sa fiche.
             'scan_id' => ['nullable', 'uuid'],
@@ -69,6 +76,12 @@ class GuestController extends Controller
             'place_of_birth' => ['nullable', 'string', 'max:150'],
             'email' => ['nullable', 'email'],
             'phone' => ['nullable', 'string', 'max:30'],
+            'last_name_ar' => ['nullable', 'string', 'max:150'],
+            'first_name_ar' => ['nullable', 'string', 'max:150'],
+            'filiation_ar' => ['nullable', 'string', 'max:200'],
+            'spouse_ar' => ['nullable', 'string', 'max:150'],
+            'birth_place_ar' => ['nullable', 'string', 'max:150'],
+            'card_format' => ['nullable', 'in:legacy,biometric'],
             'document' => ['sometimes', 'array'],
             'document.expiry_date' => ['nullable', 'date'],
             'document.document_number' => ['sometimes', 'string'],
@@ -136,6 +149,13 @@ class GuestController extends Controller
             'sex' => $guest->sex,
             'nationality_code' => $guest->nationality_code,
             'is_primary' => (bool) $guest->pivot?->is_primary,
+            // Champs arabes de la CIN tunisienne (null pour un passeport).
+            'last_name_ar' => $guest->last_name_ar,
+            'first_name_ar' => $guest->first_name_ar,
+            'filiation_ar' => $guest->filiation_ar,
+            'spouse_ar' => $guest->spouse_ar,
+            'birth_place_ar' => $guest->birth_place_ar,
+            'card_format' => $guest->card_format,
             'document' => $doc ? [
                 'id' => $doc->id,
                 'type' => $doc->type,
