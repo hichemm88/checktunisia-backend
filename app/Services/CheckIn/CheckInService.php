@@ -117,6 +117,12 @@ class CheckInService
                 'place_of_birth' => $data['place_of_birth'] ?? null,
                 'email' => $data['email'] ?? null,
                 'phone' => $data['phone'] ?? null,
+                'last_name_ar' => $data['last_name_ar'] ?? null,
+                'first_name_ar' => $data['first_name_ar'] ?? null,
+                'filiation_ar' => $data['filiation_ar'] ?? null,
+                'spouse_ar' => $data['spouse_ar'] ?? null,
+                'birth_place_ar' => $data['birth_place_ar'] ?? null,
+                'card_format' => $data['card_format'] ?? null,
             ], fn ($v) => ! is_null($v)));
 
             if (! empty($data['document'])) {
@@ -302,6 +308,13 @@ class CheckInService
             'place_of_birth' => $data['place_of_birth'] ?? null,
             'email' => $data['email'] ?? null,
             'phone' => $data['phone'] ?? null,
+            // Champs arabes de la CIN tunisienne (préremplis par le scan).
+            'last_name_ar' => $data['last_name_ar'] ?? null,
+            'first_name_ar' => $data['first_name_ar'] ?? null,
+            'filiation_ar' => $data['filiation_ar'] ?? null,
+            'spouse_ar' => $data['spouse_ar'] ?? null,
+            'birth_place_ar' => $data['birth_place_ar'] ?? null,
+            'card_format' => $data['card_format'] ?? null,
         ]);
     }
 
