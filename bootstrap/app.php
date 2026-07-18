@@ -6,6 +6,7 @@ use App\Http\Middleware\EnsureAuthorityCredentialValid;
 use App\Http\Middleware\Require2FA;
 use App\Http\Middleware\ResolveTenant;
 use App\Http\Middleware\SecurityHeaders;
+use App\Http\Middleware\VerifyAiTrackingSecret;
 use App\Http\Middleware\VerifyWhatsappWorker;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
@@ -43,6 +44,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'role_or_permission' => RoleOrPermissionMiddleware::class,
             // MODULE PROVISOIRE — relais WhatsApp (à retirer après homologation MI).
             'whatsapp.worker' => VerifyWhatsappWorker::class,
+            // Ingestion interne du tracking des coûts IA (fonction serverless Vercel).
+            'ai.tracking.secret' => VerifyAiTrackingSecret::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
