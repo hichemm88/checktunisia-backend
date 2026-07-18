@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\Admin\AiCostController;
+use App\Http\Controllers\Admin\AiPricingController;
 use App\Http\Controllers\Admin\AuditLogController;
 use App\Http\Controllers\Admin\AuthorityAdminController;
 use App\Http\Controllers\Admin\EmailTemplateAdminController;
@@ -32,6 +34,7 @@ use App\Http\Controllers\Hotel\RoomController;
 use App\Http\Controllers\Hotel\ScanController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Hotel\WatchlistHitController;
+use App\Http\Controllers\Internal\AiUsageIngestController;
 use App\Http\Controllers\Notifications\DeviceController;
 use App\Http\Controllers\Notifications\NotificationController;
 use App\Http\Controllers\Public\PublicCmsController;
@@ -92,6 +95,11 @@ Route::prefix('internal/whatsapp')
         Route::post('jobs/{id}/result', [WhatsappWorkerController::class, 'result']);
         Route::post('session', [WhatsappWorkerController::class, 'session']);
     });
+
+// Ingestion du tracking des coûts IA — consommée uniquement par la fonction
+// serverless Vercel (scan CIN / repli passeport), authentifiée par secret partagé.
+Route::post('internal/ai-usage', [AiUsageIngestController::class, 'store'])
+    ->middleware('ai.tracking.secret');
 
 /*
 |--------------------------------------------------------------------------
@@ -309,6 +317,13 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             Route::get('dashboard', [HotelAdminController::class, 'dashboard']);
             Route::get('search', [HotelAdminController::class, 'search']);
+
+            // Couts IA (Claude vision : scan CIN + repli passeport)
+            Route::get('ai-costs/summary', [AiCostController::class, 'summary']);
+            Route::get('ai-costs/by-establishment', [AiCostController::class, 'byEstablishment']);
+            Route::get('ai-costs/daily', [AiCostController::class, 'daily']);
+            Route::get('ai-pricing', [AiPricingController::class, 'index']);
+            Route::put('ai-pricing/{id}', [AiPricingController::class, 'update']);
 
             // Hébergeurs (Organization — société/particulier)
             Route::get('hosts', [OrganizationAdminController::class, 'index']);

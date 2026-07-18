@@ -14,6 +14,7 @@ class DatabaseSeeder extends Seeder
             RolesAndPermissionsSeeder::class,
             SubscriptionPlanSeeder::class,
             PlatformAdminSeeder::class,
+            AiPricingSeeder::class,
             DemoDataSeeder::class,
         ]);
     }
