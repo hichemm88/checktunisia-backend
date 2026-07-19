@@ -76,6 +76,21 @@ class AiCostTrackingTest extends TestCase
         $this->assertSame('4.500000', $event->cost_usd);
     }
 
+    public function test_dated_model_snapshot_resolves_to_the_alias_tariff(): void
+    {
+        // Tarif saisi sous l'alias ; l'API renvoie un snapshot daté.
+        config(['ai_tracking.secret' => 'right-secret']);
+        $this->tariff(); // model = claude-sonnet-5
+        $hotel = Hotel::factory()->create();
+
+        $this->withHeader('Authorization', 'Bearer right-secret')
+            ->postJson('/api/v1/internal/ai-usage', $this->payload($hotel, ['model' => 'claude-sonnet-5-20260101']))
+            ->assertCreated();
+
+        // Le coût doit être calculé via le préfixe, pas figé à 0.
+        $this->assertSame('4.500000', AiUsageEvent::first()->cost_usd);
+    }
+
     public function test_passport_fallback_records_a_distinct_feature(): void
     {
         config(['ai_tracking.secret' => 'right-secret']);

@@ -33,8 +33,25 @@ class AiPricing extends Model
     ];
 
     /** Tarif actif pour un modele donne, ou null. */
+    /**
+     * L'API Anthropic renvoie souvent un snapshot date (ex.
+     * "claude-sonnet-5-20260101") la ou le tarif est saisi sous l'alias
+     * ("claude-sonnet-5"). On tente donc : 1) correspondance exacte ; 2) a
+     * defaut, le tarif actif dont le `model` est le plus long prefixe du modele
+     * reel (l'alias couvre tous ses snapshots dates).
+     */
     public static function activeFor(string $model): ?self
     {
-        return static::where('model', $model)->where('active', true)->first();
+        $exact = static::query()->where('model', $model)->where('active', true)->first();
+        if ($exact) {
+            return $exact;
+        }
+
+        return static::query()
+            ->where('active', true)
+            ->get()
+            ->filter(fn (self $p) => $p->model !== '' && str_starts_with($model, $p->model))
+            ->sortByDesc(fn (self $p) => strlen($p->model))
+            ->first();
     }
 }
