@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\AiPricingController;
 use App\Http\Controllers\Admin\AuditLogController;
 use App\Http\Controllers\Admin\AuthorityAdminController;
 use App\Http\Controllers\Admin\EmailTemplateAdminController;
+use App\Http\Controllers\Admin\CouponController;
 use App\Http\Controllers\Admin\HotelAdminController;
 use App\Http\Controllers\Admin\KpiController;
 use App\Http\Controllers\Admin\MediaAdminController;
@@ -405,6 +406,12 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             // Payments (read-only ledger)
             Route::get('payments', [PlatformSettingController::class, 'payments']);
+
+            // Codes promo (remise sur facture)
+            Route::get('coupons', [CouponController::class, 'index']);
+            Route::post('coupons', [CouponController::class, 'store']);
+            Route::patch('coupons/{id}', [CouponController::class, 'update']);
+            Route::delete('coupons/{id}', [CouponController::class, 'destroy']);
 
             // Subscription plans management (pricing + trilingual marketing content)
             Route::get('plans', [PlanAdminController::class, 'index']);
