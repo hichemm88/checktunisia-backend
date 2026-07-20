@@ -222,6 +222,38 @@ class AiCostTrackingTest extends TestCase
         $this->assertDatabaseHas('audit_logs', ['action' => 'ai_pricing.updated']);
     }
 
+    public function test_seeder_configures_default_anthropic_pricing(): void
+    {
+        $this->seed(\Database\Seeders\AiPricingSeeder::class);
+
+        $p = AiPricing::activeFor('claude-sonnet-5');
+        $this->assertNotNull($p);
+        $this->assertEquals(3.0, (float) $p->input_price_per_mtok_usd);
+        $this->assertEquals(15.0, (float) $p->output_price_per_mtok_usd);
+
+        // Le résumé est donc "configuré" dès l'installation (pas de bandeau).
+        $admin = User::factory()->platformAdmin()->create();
+        $data = $this->actingAs($admin)->getJson('/api/v1/admin/ai-costs/summary')->assertOk()->json('data');
+        $this->assertTrue($data['pricing_configured']);
+    }
+
+    public function test_seeder_never_overwrites_admin_edited_pricing(): void
+    {
+        // L'admin a saisi ses propres tarifs.
+        AiPricing::create([
+            'model' => 'claude-sonnet-5', 'input_price_per_mtok_usd' => 2, 'output_price_per_mtok_usd' => 9,
+            'active' => true, 'updated_at' => now(),
+        ]);
+
+        // Le seeder rejoué à chaque déploiement ne doit rien réécrire.
+        $this->seed(\Database\Seeders\AiPricingSeeder::class);
+
+        $p = AiPricing::activeFor('claude-sonnet-5');
+        $this->assertEquals(2.0, (float) $p->input_price_per_mtok_usd);
+        $this->assertEquals(9.0, (float) $p->output_price_per_mtok_usd);
+        $this->assertSame(1, AiPricing::where('model', 'claude-sonnet-5')->count());
+    }
+
     public function test_mrz_local_beacon_records_a_free_metadata_only_event(): void
     {
         $hotel = Hotel::factory()->create();
