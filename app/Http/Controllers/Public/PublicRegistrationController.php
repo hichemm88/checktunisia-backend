@@ -48,13 +48,18 @@ class PublicRegistrationController extends Controller
             // Subscription plan
             'plan_slug'     => ['required', 'string', 'exists:subscription_plans,slug'],
             'billing_cycle' => ['sometimes', 'in:monthly,yearly'],
+
+            // Langue de communication (emails) — la langue de l'interface au moment
+            // de l'inscription. Repli francais si absente ou non supportee.
+            'locale'        => ['sometimes', 'in:fr,en,ar'],
         ]);
+        $locale = $validated['locale'] ?? 'fr';
 
         $plan = SubscriptionPlan::where('slug', $validated['plan_slug'])
             ->where('is_active', true)
             ->firstOrFail();
 
-        $result = DB::transaction(function () use ($validated, $plan) {
+        $result = DB::transaction(function () use ($validated, $plan, $locale) {
 
             // ── 1. Create Organization ────────────────────────────────────
             $org = Organization::create([
@@ -64,6 +69,7 @@ class PublicRegistrationController extends Controller
                 'contact_email'       => $validated['email'],
                 'contact_phone'       => $validated['org_phone'] ?? null,
                 'status'              => 'active',
+                'locale'              => $locale,
             ]);
 
             // ── 2. Create admin user ──────────────────────────────────────
@@ -75,6 +81,7 @@ class PublicRegistrationController extends Controller
                 'phone'             => $validated['phone'] ?? null,
                 'password'          => Hash::make($validated['password']),
                 'status'            => 'active',
+                'locale'            => $locale,
                 'email_verified_at' => now(),
             ]);
             $user->assignRole('hotel_admin');

@@ -89,13 +89,14 @@ class PlatformUserAdminController extends Controller
             return $u;
         });
 
+        $locale = $user->locale ?? 'fr';
         SystemMailer::send('welcome', $user->email, [
             'first_name' => $user->first_name,
             'last_name'  => $user->last_name,
             'hotel_name' => $hotel->name,
-            'role_label' => $v['role'] === 'hotel_admin' ? 'Administrateur' : 'Réceptionniste',
-            'cta_button' => SystemMailer::ctaButton(SystemMailer::issueSetPasswordLink($user), 'Définir mon mot de passe'),
-        ]);
+            'role_label' => SystemMailer::label($v['role'] === 'hotel_admin' ? 'role_admin' : 'role_receptionist', $locale),
+            'cta_button' => SystemMailer::ctaButton(SystemMailer::issueSetPasswordLink($user), SystemMailer::label('set_password', $locale)),
+        ], $locale);
 
         return response()->json(['data' => ['id' => $user->id, 'email' => $user->email, 'role' => $user->primary_role]], 201);
     }
@@ -152,13 +153,14 @@ class PlatformUserAdminController extends Controller
         $user->update(['password' => Hash::make(Str::random(40))]);
         AuditLogger::log('user.invite_resent', $user);
 
+        $locale = $user->locale ?? 'fr';
         $sent = SystemMailer::send('welcome', $user->email, [
             'first_name' => $user->first_name,
             'last_name'  => $user->last_name,
             'hotel_name' => $user->hotels->pluck('name')->implode(', ') ?: ($hotel->name ?? '—'),
-            'role_label' => $user->primary_role === 'hotel_admin' ? 'Administrateur' : 'Réceptionniste',
-            'cta_button' => SystemMailer::ctaButton(SystemMailer::issueSetPasswordLink($user), 'Définir mon mot de passe'),
-        ]);
+            'role_label' => SystemMailer::label($user->primary_role === 'hotel_admin' ? 'role_admin' : 'role_receptionist', $locale),
+            'cta_button' => SystemMailer::ctaButton(SystemMailer::issueSetPasswordLink($user), SystemMailer::label('set_password', $locale)),
+        ], $locale);
 
         return response()->json(['data' => ['id' => $user->id, 'email_sent' => $sent]]);
     }

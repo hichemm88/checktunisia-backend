@@ -31,6 +31,7 @@ class User extends Authenticatable
         'last_name',
         'phone',
         'status',
+        'locale',
         'email_verified_at',
         'last_login_at',
         'metadata',

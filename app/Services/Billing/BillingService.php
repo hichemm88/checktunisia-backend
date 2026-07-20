@@ -151,14 +151,15 @@ class BillingService
             'total_amount'   => (string) $invoice->total_amount,
         ]);
 
-        $org = $sub->organization;
+        $org    = $sub->organization;
+        $locale = $org?->locale ?? \App\Models\EmailTemplate::DEFAULT_LOCALE;
         SystemMailer::send('invoice_available', $org?->contact_email, [
             'name'            => $org?->name ?? $sub->hotel?->name ?? 'Client Qayed',
             'plan_name'       => $sub->plan?->name ?? '—',
             'invoice_number'  => $invoice->invoice_number,
-            'credentials_box' => SystemMailer::amountBox(Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number),
-            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), 'Voir la facture'),
-        ]);
+            'credentials_box' => SystemMailer::amountBox(Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number, $locale),
+            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), SystemMailer::label('view_invoice', $locale)),
+        ], $locale);
 
         return $invoice;
     }
@@ -225,15 +226,16 @@ class BillingService
         $org = $sub?->organization;
         $to  = $org?->contact_email
             ?? $invoice->hotel?->contacts()->where('type', 'email')->where('is_primary', true)->first()?->value;
+        $locale = $org?->locale ?? \App\Models\EmailTemplate::DEFAULT_LOCALE;
 
         SystemMailer::send('invoice_overdue', $to, [
             'name'            => $org?->name ?? $invoice->hotel?->name ?? 'Client Qayed',
             'invoice_number'  => $invoice->invoice_number,
             'days_late'       => (string) $daysLate,
             'plan_name'       => $sub?->plan?->name ?? '—',
-            'credentials_box' => SystemMailer::amountBox(Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number),
-            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), 'Régler la facture'),
-        ]);
+            'credentials_box' => SystemMailer::amountBox(Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number, $locale),
+            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), SystemMailer::label('pay_invoice', $locale)),
+        ], $locale);
 
         AuditLogger::log('invoice.reminder_sent', $invoice, newValues: ['days_late' => $daysLate]);
     }
@@ -256,11 +258,19 @@ class BillingService
         $org = $sub->organization;
         $to  = $org?->contact_email
             ?? $sub->hotel?->contacts()->where('type', 'email')->where('is_primary', true)->first()?->value;
+        $locale = $org?->locale ?? \App\Models\EmailTemplate::DEFAULT_LOCALE;
+
+        // Motif localise pour l'email (suspended_reason reste en francais pour l'admin).
+        $days   = self::DUNNING_SUSPEND_DAYS;
+        $reason = match ($locale) {
+            'en' => "Invoice {$invoice->invoice_number} unpaid for more than {$days} days. Service will be restored upon payment.",
+            'ar' => "الفاتورة {$invoice->invoice_number} غير مسددة منذ أكثر من {$days} يومًا. ستُستعاد الخدمة فور استلام الدفعة.",
+            default => "Facture {$invoice->invoice_number} impayée depuis plus de {$days} jours. Le service sera rétabli dès réception du paiement.",
+        };
         SystemMailer::send('account_suspended', $to, [
             'name'   => $org?->name ?? $sub->hotel?->name ?? 'Client Qayed',
-            'reason' => "Facture {$invoice->invoice_number} impayée depuis plus de ".self::DUNNING_SUSPEND_DAYS
-                .' jours. Le service sera rétabli dès réception du paiement.',
-        ]);
+            'reason' => $reason,
+        ], $locale);
     }
 
     // ─── Paiement confirmé (tous canaux) ─────────────────────────────────────
@@ -359,13 +369,14 @@ class BillingService
 
         $to = $org?->contact_email
             ?? $invoice->hotel?->contacts()->where('type', 'email')->where('is_primary', true)->first()?->value;
+        $locale = $org?->locale ?? \App\Models\EmailTemplate::DEFAULT_LOCALE;
 
         SystemMailer::send('payment_received', $to, [
             'name'            => $org?->name ?? $invoice->hotel?->name ?? 'Client Qayed',
             'plan_name'       => $sub?->plan?->name ?? '—',
             'expires_at'      => $sub?->fresh()?->expires_at?->format('d/m/Y') ?? '—',
-            'credentials_box' => SystemMailer::amountBox(Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number),
-        ]);
+            'credentials_box' => SystemMailer::amountBox(Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number, $locale),
+        ], $locale);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
