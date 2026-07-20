@@ -175,15 +175,16 @@ class HotelUserController extends Controller {
     }
 
     private function sendWelcomeEmail(User $user, string $hotelName, string $role): bool {
+        $locale = $user->locale ?? 'fr';
         return \App\Services\Email\SystemMailer::send('welcome', $user->email, [
             'first_name' => $user->first_name,
             'last_name'  => $user->last_name,
             'hotel_name' => $hotelName,
-            'role_label' => $role === 'hotel_admin' ? 'Administrateur' : 'Réceptionniste',
+            'role_label' => \App\Services\Email\SystemMailer::label($role === 'hotel_admin' ? 'role_admin' : 'role_receptionist', $locale),
             'cta_button' => \App\Services\Email\SystemMailer::ctaButton(
                 \App\Services\Email\SystemMailer::issueSetPasswordLink($user),
-                'Définir mon mot de passe',
+                \App\Services\Email\SystemMailer::label('set_password', $locale),
             ),
-        ]);
+        ], $locale);
     }
 }

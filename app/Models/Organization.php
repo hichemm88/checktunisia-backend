@@ -45,6 +45,7 @@ class Organization extends Model
         'contact_phone',
         'address',
         'status',
+        'locale',
     ];
 
     protected function casts(): array
