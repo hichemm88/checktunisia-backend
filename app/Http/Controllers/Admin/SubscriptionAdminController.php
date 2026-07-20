@@ -125,6 +125,7 @@ class SubscriptionAdminController extends Controller {
             'tax_amount'      => ['numeric', 'min:0'],
             'due_at'          => ['nullable', 'date'],
             'notes'           => ['nullable', 'string'],
+            'coupon_code'     => ['nullable', 'string', 'max:40'],
         ]);
 
         $sub = Subscription::where('organization_id', $hostId)->with('plan')->findOrFail($v['subscription_id']);
@@ -134,11 +135,33 @@ class SubscriptionAdminController extends Controller {
             $v['amount'] = \App\Services\Subscription\PlanPricing::cycleAmount($sub);
         }
         $v['tax_amount']     = $v['tax_amount'] ?? 0;
+
+        // Code promo optionnel : validé d'abord (422 explicite si invalide), puis
+        // appliqué à la facture juste après sa création.
+        $couponCode = $v['coupon_code'] ?? null;
+        unset($v['coupon_code']);
+        $coupon = null;
+        if ($couponCode) {
+            try {
+                $coupon = app(\App\Services\Billing\CouponService::class)->validate($couponCode, (float) $v['amount']);
+            } catch (\App\Services\Billing\CouponException $e) {
+                return response()->json([
+                    'errors' => [['code' => 'INVALID_COUPON', 'message' => $e->getMessage(), 'field' => 'coupon_code']],
+                ], 422);
+            }
+        }
+
         $v['total_amount']   = $v['amount'] + $v['tax_amount'];
         $v['hotel_id']       = null; // org-level invoice — no specific établissement
         $v['invoice_number'] = app(\App\Services\Billing\BillingService::class)->nextInvoiceNumber();
         $v['created_by']     = $request->user()->id;
         $invoice = Invoice::create($v);
+
+        if ($coupon) {
+            $invoice->setRelation('subscription', $sub);
+            app(\App\Services\Billing\CouponService::class)->apply($coupon, $invoice, $request->user()->id);
+            $invoice->refresh();
+        }
 
         $org = $sub->organization;
         if ($org?->contact_email) {
