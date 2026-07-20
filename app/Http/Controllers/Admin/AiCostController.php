@@ -81,11 +81,9 @@ class AiCostController extends Controller
         $q = AiUsageEvent::query()
             ->from('ai_usage_events as e')
             ->leftJoin('hotels as h', 'h.id', '=', 'e.hotel_id')
-            ->whereBetween('e.created_at', [$from, $to]);
-
-        if ($feature !== 'all') {
-            $q->where('e.feature', $feature);
-        }
+            ->whereBetween('e.created_at', [$from, $to])
+            // Vues de cout : uniquement les features Claude vision (exclut mrz_local).
+            ->whereIn('e.feature', $feature === 'all' ? self::FEATURES : [$feature]);
 
         $rows = $q->selectRaw("
                 e.hotel_id,
@@ -128,10 +126,9 @@ class AiCostController extends Controller
 
         $q = AiUsageEvent::query()
             ->whereBetween('created_at', [$from, $to])
-            ->where('status', 'success');
-        if ($feature !== 'all') {
-            $q->where('feature', $feature);
-        }
+            ->where('status', 'success')
+            // Graphe de cout : uniquement les features Claude vision (exclut mrz_local).
+            ->whereIn('feature', $feature === 'all' ? self::FEATURES : [$feature]);
 
         $rows = $q->selectRaw("
                 created_at::date as d,
@@ -159,6 +156,70 @@ class AiCostController extends Controller
         }
 
         return response()->json(['data' => $out]);
+    }
+
+    /**
+     * GET /admin/ai-costs/scan-comparison?days=30
+     *
+     * Serie journaliere comparant l'OCR MRZ local (tesseract, gratuit) au scan
+     * Claude vision (paye : cin_scan + passport_scan). Plus des totaux et le taux
+     * de repli passeport reel (part des passeports partis en Claude vision).
+     */
+    public function scanComparison(Request $request): JsonResponse
+    {
+        $days = max(1, min(90, (int) $request->query('days', 30)));
+        $from = now()->subDays($days - 1)->startOfDay();
+        $to = now()->endOfDay();
+
+        $rows = AiUsageEvent::query()
+            ->whereBetween('created_at', [$from, $to])
+            ->where('status', 'success')
+            ->whereIn('feature', array_merge(self::FEATURES, [AiUsageEvent::LOCAL_MRZ]))
+            ->selectRaw('created_at::date as d, feature, COUNT(*) as n')
+            ->groupByRaw('created_at::date, feature')
+            ->get();
+
+        $series = [];
+        $totalMrzLocal = 0;
+        $totalVision = 0;
+        $totalPassportVision = 0;
+        for ($i = 0; $i < $days; $i++) {
+            $date = now()->subDays($days - 1 - $i)->toDateString();
+            $slice = $rows->filter(fn ($r) => Carbon::parse($r->d)->toDateString() === $date);
+            $mrzLocal = (int) ($slice->firstWhere('feature', AiUsageEvent::LOCAL_MRZ)->n ?? 0);
+            $cin = (int) ($slice->firstWhere('feature', 'cin_scan')->n ?? 0);
+            $passport = (int) ($slice->firstWhere('feature', 'passport_scan')->n ?? 0);
+
+            $totalMrzLocal += $mrzLocal;
+            $totalVision += $cin + $passport;
+            $totalPassportVision += $passport;
+
+            $series[] = [
+                'date' => $date,
+                'mrz_local' => $mrzLocal,
+                'vision' => $cin + $passport,
+                'vision_cin' => $cin,
+                'vision_passport' => $passport,
+            ];
+        }
+
+        // Taux de repli passeport : part des passeports traites par Claude vision
+        // (= l'OCR MRZ local a echoue) sur le total des passeports scannes.
+        $totalPassports = $totalMrzLocal + $totalPassportVision;
+        $passportFallbackRate = $totalPassports > 0
+            ? round($totalPassportVision / $totalPassports * 100, 1)
+            : 0.0;
+
+        return response()->json([
+            'data' => [
+                'days' => $days,
+                'series' => $series,
+                'total_mrz_local' => $totalMrzLocal,
+                'total_vision' => $totalVision,
+                'total_passports' => $totalPassports,
+                'passport_fallback_rate' => $passportFallbackRate,
+            ],
+        ]);
     }
 
     private function period(Request $request): string

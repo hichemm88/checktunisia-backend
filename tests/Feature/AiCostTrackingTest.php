@@ -221,4 +221,87 @@ class AiCostTrackingTest extends TestCase
         // L'edition du tarif est tracée dans l'audit.
         $this->assertDatabaseHas('audit_logs', ['action' => 'ai_pricing.updated']);
     }
+
+    public function test_mrz_local_beacon_records_a_free_metadata_only_event(): void
+    {
+        $hotel = Hotel::factory()->create();
+        $receptionist = User::factory()->receptionist($hotel)->create();
+
+        $this->actingAs($receptionist)
+            ->postJson('/api/v1/hotel/scan-events/mrz-local', ['latency_ms' => 320])
+            ->assertCreated()
+            ->assertJsonPath('data.recorded', true);
+
+        $event = AiUsageEvent::first();
+        $this->assertSame('mrz_local', $event->feature);
+        $this->assertSame($hotel->id, $event->hotel_id);
+        $this->assertSame($receptionist->id, $event->user_id);
+        $this->assertSame('0.000000', $event->cost_usd);
+        $this->assertSame(0, $event->input_tokens);
+    }
+
+    public function test_mrz_local_is_excluded_from_cost_summary(): void
+    {
+        $this->tariff();
+        $hotel = Hotel::factory()->create();
+        $admin = User::factory()->platformAdmin()->create();
+
+        // Un scan CIN payant (4.50) + un OCR MRZ local gratuit.
+        AiUsageEvent::create([
+            'hotel_id' => $hotel->id, 'feature' => 'cin_scan', 'model' => 'claude-sonnet-5',
+            'input_tokens' => 1_000_000, 'output_tokens' => 100_000, 'cost_usd' => 4.5,
+            'status' => 'success', 'latency_ms' => 1000, 'created_at' => now(),
+        ]);
+        AiUsageEvent::create([
+            'hotel_id' => $hotel->id, 'feature' => 'mrz_local', 'model' => 'local_ocr',
+            'input_tokens' => 0, 'output_tokens' => 0, 'cost_usd' => 0,
+            'status' => 'success', 'latency_ms' => 300, 'created_at' => now(),
+        ]);
+
+        $data = $this->actingAs($admin)->getJson('/api/v1/admin/ai-costs/summary')->assertOk()->json('data');
+
+        // mrz_local n'apparait pas et ne gonfle pas le total ni le nombre de features.
+        $this->assertSame('4.500000', $data['total_cost_usd']);
+        $this->assertCount(2, $data['features']);
+        $this->assertEqualsCanonicalizing(['cin_scan', 'passport_scan'], array_column($data['features'], 'feature'));
+    }
+
+    public function test_scan_comparison_counts_local_vs_vision_with_fallback_rate(): void
+    {
+        $hotel = Hotel::factory()->create();
+        $admin = User::factory()->platformAdmin()->create();
+
+        $make = fn (string $feature) => AiUsageEvent::create([
+            'hotel_id' => $hotel->id, 'feature' => $feature,
+            'model' => $feature === 'mrz_local' ? 'local_ocr' : 'claude-sonnet-5',
+            'input_tokens' => 0, 'output_tokens' => 0, 'cost_usd' => 0,
+            'status' => 'success', 'latency_ms' => 100, 'created_at' => now(),
+        ]);
+
+        // 8 passeports lus en OCR local, 2 passeports partis en vision, 3 CIN vision.
+        foreach (range(1, 8) as $i) {
+            $make('mrz_local');
+        }
+        foreach (range(1, 2) as $i) {
+            $make('passport_scan');
+        }
+        foreach (range(1, 3) as $i) {
+            $make('cin_scan');
+        }
+
+        $data = $this->actingAs($admin)->getJson('/api/v1/admin/ai-costs/scan-comparison?days=30')
+            ->assertOk()->json('data');
+
+        $this->assertSame(8, $data['total_mrz_local']);
+        $this->assertSame(5, $data['total_vision']); // 2 passeport + 3 cin
+        $this->assertSame(10, $data['total_passports']); // 8 local + 2 vision
+        // Taux de repli passeport : 2 / (8 + 2) = 20 %.
+        $this->assertEquals(20.0, $data['passport_fallback_rate']);
+
+        // La serie couvre 30 jours ; aujourd'hui porte les compteurs.
+        $this->assertCount(30, $data['series']);
+        $today = end($data['series']);
+        $this->assertSame(8, $today['mrz_local']);
+        $this->assertSame(5, $today['vision']);
+    }
 }
