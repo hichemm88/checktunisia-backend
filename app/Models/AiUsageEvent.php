@@ -39,6 +39,15 @@ class AiUsageEvent extends Model
         'created_at' => 'datetime',
     ];
 
+    /** Features qui passent par Claude vision (payantes, trackees a l'appel API). */
     public const FEATURES = ['cin_scan', 'passport_scan'];
+
+    /**
+     * OCR MRZ local (tesseract cote navigateur) : gratuit, hors-ligne, remonte
+     * par un beacon client metadata-only. Sert uniquement au graphe comparatif ;
+     * exclu de toutes les metriques de cout (cout et tokens toujours a 0).
+     */
+    public const LOCAL_MRZ = 'mrz_local';
+
     public const STATUSES = ['success', 'api_error', 'parse_error'];
 }

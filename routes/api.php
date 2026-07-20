@@ -32,6 +32,7 @@ use App\Http\Controllers\Hotel\OrganizationController;
 use App\Http\Controllers\Hotel\PaymentController;
 use App\Http\Controllers\Hotel\RoomController;
 use App\Http\Controllers\Hotel\ScanController;
+use App\Http\Controllers\Hotel\ScanEventController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Hotel\WatchlistHitController;
 use App\Http\Controllers\Internal\AiUsageIngestController;
@@ -184,6 +185,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             // OCR scan status
             Route::get('scans/{scan_id}/status', [ScanController::class, 'status']);
 
+            // Telemetrie OCR MRZ local (beacon metadata-only, pour le graphe comparatif).
+            Route::post('scan-events/mrz-local', [ScanEventController::class, 'mrzLocal']);
+
             // ── Subscription-gated: write operations ──────────────────────
             Route::middleware('subscription.active')->group(function () {
                 Route::post('check-ins', [CheckInController::class, 'store']);
@@ -322,6 +326,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('ai-costs/summary', [AiCostController::class, 'summary']);
             Route::get('ai-costs/by-establishment', [AiCostController::class, 'byEstablishment']);
             Route::get('ai-costs/daily', [AiCostController::class, 'daily']);
+            Route::get('ai-costs/scan-comparison', [AiCostController::class, 'scanComparison']);
             Route::get('ai-pricing', [AiPricingController::class, 'index']);
             Route::put('ai-pricing/{id}', [AiPricingController::class, 'update']);
 
