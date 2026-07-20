@@ -6,6 +6,7 @@ use App\Http\Controllers\Admin\AuditLogController;
 use App\Http\Controllers\Admin\AuthorityAdminController;
 use App\Http\Controllers\Admin\EmailTemplateAdminController;
 use App\Http\Controllers\Admin\HotelAdminController;
+use App\Http\Controllers\Admin\KpiController;
 use App\Http\Controllers\Admin\MediaAdminController;
 use App\Http\Controllers\Admin\MenuItemAdminController;
 use App\Http\Controllers\Admin\OrganizationAdminController;
@@ -321,6 +322,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             Route::get('dashboard', [HotelAdminController::class, 'dashboard']);
             Route::get('search', [HotelAdminController::class, 'search']);
+
+            // KPIs business (MRR, ARPU, churn, activation, conversion d'essai)
+            Route::get('metrics/kpis', [KpiController::class, 'index']);
 
             // Couts IA (Claude vision : scan CIN + repli passeport)
             Route::get('ai-costs/summary', [AiCostController::class, 'summary']);
