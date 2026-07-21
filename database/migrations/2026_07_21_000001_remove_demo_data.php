@@ -1,65 +1,62 @@
 <?php
 
-use App\Models\AuthorityOrganization;
-use App\Models\AuthorityUserProfile;
-use App\Models\Hotel;
-use App\Models\Invoice;
-use App\Models\Payment;
-use App\Models\Subscription;
-use App\Models\User;
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Support\Facades\DB;
 
 /**
- * Retire les donnees de demonstration (DemoDataSeeder) qui polluaient les
- * chiffres du tableau de bord — notamment un abonnement actif fictif sur
- * « Hotel Sousse Azur » qui gonflait le MRR alors qu'il n'y a qu'un vrai client.
+ * Neutralise les donnees de demonstration (DemoDataSeeder) qui gonflaient le
+ * tableau de bord — notamment un abonnement actif fictif sur « Hotel Sousse
+ * Azur » compte dans le MRR alors qu'il n'y a qu'un vrai client.
  *
- * Suppression chirurgicale : uniquement les enregistrements aux identifiants
- * exacts du seeder de demo (slug, e-mails, code). Aucun autre client n'est
- * touche. Le seeder est par ailleurs retire du cycle de deploiement (Dockerfile
- * + DatabaseSeeder) pour qu'il ne reinjecte plus rien.
+ * IMPORTANT : cette migration n'utilise que des UPDATE surs et idempotents
+ * (annulation d'abonnement + soft-delete), JAMAIS de suppression physique. En
+ * production, l'etablissement de demo peut porter des enregistrements lies
+ * (check-ins, factures...) dont les cles etrangeres feraient echouer un delete —
+ * ce qui casserait le deploiement (la commande `migrate` est chainee en `&&`
+ * dans le Dockerfile, sans `|| true`). Des UPDATE ne peuvent pas violer de FK.
+ *
+ * Ciblage strict par slug / e-mails / code du seeder de demo : aucun autre
+ * client n'est touche. Reversible (deleted_at / is_active).
  */
 return new class extends Migration
 {
     public function up(): void
     {
-        // 1. Etablissement de demo (withTrashed : meme s'il a ete masque depuis
-        //    l'admin, son abonnement peut rester actif et gonfler le MRR).
-        $hotel = Hotel::withTrashed()->where('slug', 'hotel-sousse-azur')->first();
-        if ($hotel) {
-            // L'abonnement fictif est le vrai coupable du revenu affiche.
-            // (aucune facture/paiement de demo, mais on nettoie par securite avant
-            //  de forcer la suppression de l'etablissement.)
-            $subIds = Subscription::where('hotel_id', $hotel->id)->pluck('id');
-            Payment::whereIn('hotel_id', [$hotel->id])->delete();
-            Invoice::whereIn('subscription_id', $subIds)->orWhere('hotel_id', $hotel->id)->delete();
-            Subscription::whereIn('id', $subIds)->delete(); // cascade -> subscription_events
+        // 1. Abonnement(s) de l'etablissement de demo -> annule(s). withTrashed
+        //    implicite : on cible par hotel_id, meme si l'hotel est deja masque.
+        //    Sortis du MRR (le dashboard ne compte que status = 'active'). Le
+        //    churn n'est pas affecte : ces abonnements ont organization_id NULL,
+        //    exclus du calcul d'attrition.
+        $demoHotelIds = DB::table('hotels')->where('slug', 'hotel-sousse-azur')->pluck('id');
+        if ($demoHotelIds->isNotEmpty()) {
+            DB::table('subscriptions')
+                ->whereIn('hotel_id', $demoHotelIds)
+                ->where('status', 'active')
+                ->update(['status' => 'cancelled', 'cancelled_at' => now(), 'updated_at' => now()]);
 
-            // forceDelete : suppression reelle (cascade rooms / adresses / contacts /
-            // parametres / user_hotels / notifications / ai_usage / whatsapp).
-            $hotel->forceDelete();
+            // 2. Etablissement de demo -> soft-delete (sort des compteurs/listes).
+            DB::table('hotels')
+                ->whereIn('id', $demoHotelIds)
+                ->whereNull('deleted_at')
+                ->update(['deleted_at' => now(), 'updated_at' => now()]);
         }
 
-        // 2. Comptes de demonstration (soft delete : reversible, sortis des
-        //    listes et compteurs). Le vrai admin plateforme (admin@qayed.tn)
-        //    n'est pas concerne.
-        User::whereIn('email', [
-            'hotelier@hotel-azur.tn',
-            'reception@hotel-azur.tn',
-            'agent@police.tn',
-        ])->delete();
+        // 3. Comptes de demonstration -> soft-delete (le vrai admin plateforme
+        //    admin@qayed.tn n'est pas concerne).
+        DB::table('users')
+            ->whereIn('email', ['hotelier@hotel-azur.tn', 'reception@hotel-azur.tn', 'agent@police.tn'])
+            ->whereNull('deleted_at')
+            ->update(['deleted_at' => now(), 'updated_at' => now()]);
 
-        // 3. Organisation d'autorite de demo + son profil agent.
-        $org = AuthorityOrganization::where('code', 'DGSN')->first();
-        if ($org) {
-            AuthorityUserProfile::where('organization_id', $org->id)->delete();
-            $org->delete();
-        }
+        // 4. Organisation d'autorite de demo -> desactivee (pas de suppression :
+        //    des profils/journaux peuvent y referer).
+        DB::table('authority_organizations')
+            ->where('code', 'DGSN')
+            ->update(['is_active' => false, 'updated_at' => now()]);
     }
 
     public function down(): void
     {
-        // Donnees de demo : pas de restauration (elles seront regenerees par le
-        // seeder si on le relance manuellement en local).
+        // Donnees de demo : pas de restauration automatique.
     }
 };
