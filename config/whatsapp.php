@@ -30,6 +30,13 @@ return [
     // Secret de configuration — jamais en dur dans le code.
     'recipient' => env('WHATSAPP_RECIPIENT'),
 
+    // Envoi direct aux agents assignés à l'établissement (Phase 3). Interrupteur
+    // de secours : si false, TOUT retombe sur le numéro global ci-dessus, quel
+    // que soit le rattachement établissement→agents. À true, un établissement
+    // AVEC des destinataires assignés envoie directement ; sans, il garde le
+    // numéro global. Défaut true (le rattachement par établissement fait la bascule).
+    'direct_routing' => (bool) env('WHATSAPP_DIRECT_ROUTING', true),
+
     // Secret partagé entre Laravel et le service Node. Le worker s'authentifie
     // avec ce jeton sur les routes /api/v1/internal/whatsapp/*.
     'worker_secret' => env('WHATSAPP_WORKER_SECRET'),

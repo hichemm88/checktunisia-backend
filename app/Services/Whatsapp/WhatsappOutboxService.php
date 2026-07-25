@@ -5,6 +5,7 @@ namespace App\Services\Whatsapp;
 use App\Models\CheckIn;
 use App\Models\DocumentScan;
 use App\Models\Guest;
+use App\Models\Hotel;
 use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
 use Illuminate\Support\Carbon;
@@ -50,7 +51,6 @@ class WhatsappOutboxService
         }
 
         try {
-            $recipient = (string) config('whatsapp.recipient');
             $checkIn->loadMissing(['hotel.organization', 'hotel.address', 'room', 'guests.documents']);
 
             // Le relais peut être coupé par pack ou par client (Admin > Abonnements).
@@ -61,6 +61,9 @@ class WhatsappOutboxService
                 return 0;
             }
 
+            // Destinataires : agents assignés à l'établissement, sinon numéro global.
+            $recipients = $this->recipientsForHotel($checkIn->hotel);
+
             // Voyageur principal d'abord, puis les accompagnants.
             $guests = $checkIn->guests
                 ->sortByDesc(fn ($g) => (bool) ($g->pivot->is_primary ?? false))
@@ -68,8 +71,11 @@ class WhatsappOutboxService
 
             $count = 0;
             foreach ($guests as $guest) {
-                if ($this->createJob($checkIn, $guest, $recipient)) {
-                    $count++;
+                // Une fiche par (voyageur × destinataire).
+                foreach ($recipients as $recipient) {
+                    if ($this->createJob($checkIn, $guest, $recipient)) {
+                        $count++;
+                    }
                 }
             }
 
@@ -106,16 +112,26 @@ class WhatsappOutboxService
                 return false;
             }
 
-            // Garde-fou anti-doublon : ne jamais renvoyer une fiche déjà journalisée.
-            $already = WhatsappSendLog::where('check_in_id', $checkIn->id)
-                ->where('guest_id', $guest->id)
-                ->exists();
+            $recipients = $this->recipientsForHotel($checkIn->hotel);
+            $any = false;
+            foreach ($recipients as $recipient) {
+                // Garde-fou anti-doublon PAR destinataire : ne jamais renvoyer une
+                // fiche déjà journalisée pour ce couple (voyageur, destinataire).
+                $already = WhatsappSendLog::where('check_in_id', $checkIn->id)
+                    ->where('guest_id', $guest->id)
+                    ->where('recipient', $recipient)
+                    ->exists();
 
-            if ($already) {
-                return false;
+                if ($already) {
+                    continue;
+                }
+
+                if ($this->createJob($checkIn, $guest, $recipient)) {
+                    $any = true;
+                }
             }
 
-            return $this->createJob($checkIn, $guest, (string) config('whatsapp.recipient'));
+            return $any;
         } catch (\Throwable $e) {
             Log::warning('[whatsapp] enqueue failed for guest '.$guest->id.' (check-in '.$checkIn->id.'): '.$e->getMessage());
 
@@ -149,6 +165,47 @@ class WhatsappOutboxService
         ]);
 
         return $hasIdentity;
+    }
+
+    /**
+     * Destinataires WhatsApp (JID …@c.us) d'un établissement.
+     *
+     * Envoi direct : si le routage direct est actif ET que l'établissement a des
+     * agents assignés qui reçoivent les fiches → on renvoie leurs numéros. Sinon
+     * REPLI sur le numéro global (comportement historique). Ainsi un établissement
+     * non configuré ne change pas, et on bascule établissement par établissement.
+     *
+     * @return array<int,string> liste de JID (jamais vide : au pire le global)
+     */
+    public function recipientsForHotel(?Hotel $hotel): array
+    {
+        $global = (string) config('whatsapp.recipient');
+
+        if ($hotel && config('whatsapp.direct_routing', true)) {
+            $jids = $hotel->whatsappRecipientProfiles()
+                ->where('receives_whatsapp_fiches', true)
+                ->whereNotNull('whatsapp_number')
+                ->pluck('whatsapp_number')
+                ->map(fn ($n) => $this->toJid($n))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if (! empty($jids)) {
+                return $jids;
+            }
+        }
+
+        return $global !== '' ? [$global] : [];
+    }
+
+    /** Numéro (chiffres internationaux) → JID WhatsApp individuel. */
+    private function toJid(?string $number): ?string
+    {
+        $digits = preg_replace('/\D+/', '', (string) $number);
+
+        return $digits === '' ? null : $digits.'@c.us';
     }
 
     /** Enfile une fiche factice [TEST] pour le bouton « message test » admin. */

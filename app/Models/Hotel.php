@@ -71,6 +71,20 @@ class Hotel extends Model
         return $this->hasOne(HotelAddress::class)->where('is_primary', true);
     }
 
+    /**
+     * Agents destinataires WhatsApp de cet établissement (envoi direct des fiches).
+     * Vide → l'établissement retombe sur le numéro global (config whatsapp.recipient).
+     */
+    public function whatsappRecipientProfiles(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            AuthorityUserProfile::class,
+            'hotel_whatsapp_recipients',
+            'hotel_id',
+            'authority_user_profile_id',
+        )->withTimestamps();
+    }
+
     public function addresses(): HasMany
     {
         return $this->hasMany(HotelAddress::class);

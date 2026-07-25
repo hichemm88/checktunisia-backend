@@ -211,6 +211,10 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
                 // Hotel profile (write)
                 Route::patch('profile', [HotelProfileController::class, 'update']);
 
+                // Envoi direct des fiches : voir/cocher les agents destinataires (Phase 2).
+                Route::get('whatsapp-recipients', [\App\Http\Controllers\Hotel\HotelWhatsappRecipientController::class, 'index']);
+                Route::put('whatsapp-recipients', [\App\Http\Controllers\Hotel\HotelWhatsappRecipientController::class, 'sync']);
+
                 // Staff management
                 Route::get('users', [HotelUserController::class, 'index']);
                 Route::post('users', [HotelUserController::class, 'store']);
