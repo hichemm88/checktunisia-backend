@@ -4,8 +4,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class AuthorityUserProfile extends Model {
-    protected $fillable = ['user_id','organization_id','badge_number','rank','authorized_by','authorized_at','expires_at','metadata'];
-    protected function casts(): array { return ['authorized_at'=>'datetime','expires_at'=>'datetime','metadata'=>'array']; }
+    protected $fillable = ['user_id','organization_id','badge_number','rank','whatsapp_number','receives_whatsapp_fiches','authorized_by','authorized_at','expires_at','metadata'];
+    protected function casts(): array { return ['authorized_at'=>'datetime','expires_at'=>'datetime','metadata'=>'array','receives_whatsapp_fiches'=>'boolean']; }
     public function user(): BelongsTo         { return $this->belongsTo(User::class); }
     public function organization(): BelongsTo { return $this->belongsTo(AuthorityOrganization::class, 'organization_id'); }
     public function authorizer(): BelongsTo   { return $this->belongsTo(User::class, 'authorized_by'); }
