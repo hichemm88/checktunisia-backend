@@ -224,6 +224,10 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
                 // Check-in deletion — admin only, any status (soft delete)
                 Route::delete('check-ins/{id}', [CheckInController::class, 'destroy']);
 
+                // Manager établissement : annuler un départ enregistré par erreur
+                // (Terminé → Actif). Correction réservée au manager.
+                Route::post('check-ins/{id}/revert-checkout', [CheckInController::class, 'revertCheckout']);
+
                 // Room CRUD (write)
                 Route::post('rooms', [RoomController::class, 'store']);
                 Route::patch('rooms/{id}', [RoomController::class, 'update']);

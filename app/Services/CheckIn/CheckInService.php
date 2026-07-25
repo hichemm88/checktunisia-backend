@@ -228,6 +228,39 @@ class CheckInService
     }
 
     /**
+     * Annule un départ enregistré par erreur : un séjour « Terminé » repasse en
+     * « Actif » (le client est en réalité toujours présent). Réservé au manager
+     * établissement (voir route). N'a AUCUN effet WhatsApp : les fiches de police
+     * sont enfilées à la finalisation (draft → active), jamais au check-out —
+     * revenir sur le départ ne réenfile donc rien.
+     */
+    public function revertCheckout(CheckIn $checkIn, ?User $actor = null): CheckIn
+    {
+        if ($checkIn->status !== 'completed') {
+            throw new \DomainException('Only a completed (checked-out) check-in can be reverted to active.');
+        }
+
+        return DB::transaction(function () use ($checkIn, $actor) {
+            $old = ['status' => $checkIn->status, 'actual_check_out_date' => $checkIn->actual_check_out_date];
+
+            $checkIn->update([
+                'status' => 'active',
+                'actual_check_out_date' => null,
+            ]);
+
+            AuditLogger::log(
+                'check_in.checkout_reverted',
+                $checkIn,
+                $old,
+                $checkIn->fresh()->only(['status', 'actual_check_out_date', 'reference']),
+                hotelId: $checkIn->hotel_id,
+            );
+
+            return $checkIn->fresh();
+        });
+    }
+
+    /**
      * Cancel a check-in.
      */
     public function cancel(CheckIn $checkIn, string $reason, ?User $actor = null): CheckIn

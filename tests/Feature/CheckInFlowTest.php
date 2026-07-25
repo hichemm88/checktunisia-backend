@@ -275,6 +275,53 @@ class CheckInFlowTest extends TestCase
         $this->assertEquals('completed', $response->json('data.status'));
     }
 
+    // ── Manager : annuler un départ enregistré par erreur (Terminé → Actif) ───
+
+    public function test_manager_can_revert_checkout_to_active(): void
+    {
+        $checkIn = CheckIn::factory()->for($this->hotel)->completed()->create([
+            'created_by' => $this->receptionist->id,
+            'actual_check_out_date' => now()->toDateString(),
+        ]);
+
+        $response = $this->actingAs($this->admin)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/revert-checkout")
+            ->assertOk();
+
+        $this->assertEquals('active', $response->json('data.status'));
+        $this->assertDatabaseHas('check_ins', [
+            'id' => $checkIn->id, 'status' => 'active', 'actual_check_out_date' => null,
+        ]);
+        $this->assertDatabaseHas('audit_logs', ['action' => 'check_in.checkout_reverted']);
+    }
+
+    public function test_receptionist_cannot_revert_checkout(): void
+    {
+        $checkIn = CheckIn::factory()->for($this->hotel)->completed()->create([
+            'created_by' => $this->receptionist->id,
+            'actual_check_out_date' => now()->toDateString(),
+        ]);
+
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/revert-checkout")
+            ->assertForbidden();
+
+        $this->assertDatabaseHas('check_ins', ['id' => $checkIn->id, 'status' => 'completed']);
+    }
+
+    public function test_revert_checkout_rejects_non_completed_checkin(): void
+    {
+        $checkIn = CheckIn::factory()->for($this->hotel)->active()->create([
+            'created_by' => $this->receptionist->id,
+        ]);
+
+        $this->actingAs($this->admin)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/revert-checkout")
+            ->assertStatus(409);
+
+        $this->assertDatabaseHas('check_ins', ['id' => $checkIn->id, 'status' => 'active']);
+    }
+
     // ── 5. Cancellation ───────────────────────────────────────────────────────
 
     public function test_can_cancel_draft_checkin(): void

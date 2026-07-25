@@ -197,6 +197,31 @@ class CheckInController extends Controller
         return response()->json(['data' => ['id' => $result->id, 'status' => $result->status]]);
     }
 
+    /**
+     * Manager établissement : annule un départ enregistré par erreur
+     * (Terminé → Actif). Réservé à hotel_admin via la route. Renvoie 409 si le
+     * séjour n'est pas dans l'état « Terminé ».
+     */
+    public function revertCheckout(Request $request, string $id): JsonResponse
+    {
+        $checkIn = $this->findForTenant($id);
+
+        try {
+            $result = $this->service->revertCheckout($checkIn, $request->user());
+        } catch (\DomainException $e) {
+            return response()->json([
+                'data' => null,
+                'errors' => [['code' => 'INVALID_STATUS', 'message' => $e->getMessage(), 'field' => 'status']],
+            ], 409);
+        }
+
+        return response()->json(['data' => [
+            'id' => $result->id,
+            'status' => $result->status,
+            'actual_check_out_date' => $result->actual_check_out_date,
+        ]]);
+    }
+
     /** Admin-only: delete any check-in regardless of status (soft delete — recoverable, kept for audit/compliance). */
     public function destroy(string $id): JsonResponse
     {
