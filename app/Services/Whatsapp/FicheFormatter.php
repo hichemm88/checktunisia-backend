@@ -37,6 +37,9 @@ class FicheFormatter
 
         $lines = [];
         $lines[] = 'FICHE DE POLICE — '.mb_strtoupper($propertyName);
+        if ($address = self::address($checkIn)) {
+            $lines[] = 'Adresse : '.$address;
+        }
         $lines[] = 'Nom : '.self::fullName($guest);
         $lines[] = 'Nationalité : '.self::nationality($guest->nationality_code);
         $lines[] = 'Document : '.self::document($guest);
@@ -61,6 +64,7 @@ class FicheFormatter
 
         return implode("\n", [
             '[TEST] FICHE DE POLICE — '.mb_strtoupper($propertyName ?? 'QAYED DÉMO'),
+            'Adresse : 12 rue de l\'Exemple, Tunis',
             'Nom : EXEMPLE Voyageur',
             'Nationalité : Tunisie',
             'Document : Passeport n° X0000000',
@@ -76,6 +80,29 @@ class FicheFormatter
     private static function fullName(Guest $guest): string
     {
         return trim(mb_strtoupper((string) $guest->last_name).' '.$guest->first_name);
+    }
+
+    /**
+     * Adresse de l'établissement, sur une ligne, pour l'en-tête de la fiche.
+     * Renvoie null si aucune adresse n'est renseignée (ligne omise).
+     * Format : "line1[, line2] - ville[, gouvernorat][ code postal]".
+     */
+    private static function address(CheckIn $checkIn): ?string
+    {
+        $addr = $checkIn->hotel?->address;
+        if (! $addr) {
+            return null;
+        }
+
+        $street = trim(implode(', ', array_filter([$addr->line1, $addr->line2])));
+        $locality = trim(implode(', ', array_filter([$addr->city, $addr->governorate])));
+        if ($addr->postal_code) {
+            $locality = trim($locality.' '.$addr->postal_code);
+        }
+
+        $full = trim(implode(' - ', array_filter([$street, $locality])), " -\t\n");
+
+        return $full !== '' ? $full : null;
     }
 
     private static function nationality(?string $alpha3): string

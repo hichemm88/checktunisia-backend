@@ -51,7 +51,7 @@ class WhatsappOutboxService
 
         try {
             $recipient = (string) config('whatsapp.recipient');
-            $checkIn->loadMissing(['hotel.organization', 'room', 'guests.documents']);
+            $checkIn->loadMissing(['hotel.organization', 'hotel.address', 'room', 'guests.documents']);
 
             // Le relais peut être coupé par pack ou par client (Admin > Abonnements).
             $org = $checkIn->hotel?->organization;
@@ -97,7 +97,7 @@ class WhatsappOutboxService
             // Rechargement explicite (et non loadMissing) : l'appelant vient
             // d'ajouter le voyageur, une relation déjà chargée serait périmée et
             // fausserait le choix de la photo (photoScanId compte les voyageurs).
-            $checkIn->load(['hotel.organization', 'room', 'guests.documents']);
+            $checkIn->load(['hotel.organization', 'hotel.address', 'room', 'guests.documents']);
 
             $org = $checkIn->hotel?->organization;
             if ($org && ! \App\Services\Subscription\PlanEntitlements::allows($org, 'whatsapp_relay')) {
@@ -262,7 +262,7 @@ class WhatsappOutboxService
         ];
 
         if ($job->check_in_id && $job->guest_id) {
-            $checkIn = CheckIn::with(['hotel', 'room', 'guests.documents'])->find($job->check_in_id);
+            $checkIn = CheckIn::with(['hotel.address', 'room', 'guests.documents'])->find($job->check_in_id);
             $guest = $checkIn?->guests->firstWhere('id', $job->guest_id);
 
             if ($checkIn && $guest) {

@@ -87,6 +87,30 @@ class WhatsappRelayTest extends TestCase
         $this->assertStringContainsString('TRABELSI Sara', $row->caption);
     }
 
+    public function test_fiche_includes_establishment_address_when_set(): void
+    {
+        $this->hotel->addresses()->create([
+            'line1' => '11 rue du trésor',
+            'city' => 'Tunis Medina',
+            'governorate' => 'Tunis',
+            'country_code' => 'TN',
+            'is_primary' => true,
+        ]);
+
+        $checkIn = CheckIn::factory()->for($this->hotel)->draft()->withGuest('Sara', 'Trabelsi')->create([
+            'created_by' => $this->receptionist->id,
+        ]);
+
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/complete")
+            ->assertOk();
+
+        $caption = WhatsappSendLog::first()->caption;
+        // L'adresse apparaît juste sous l'en-tête, avant le nom du voyageur.
+        $this->assertStringContainsString('Adresse : 11 rue du trésor - Tunis Medina, Tunis', $caption);
+        $this->assertStringContainsString("DAR TEST\nAdresse :", $caption);
+    }
+
     // ── Voyageur ajouté APRÈS finalisation du séjour ─────────────────────────
 
     /** @return array<string,mixed> */
