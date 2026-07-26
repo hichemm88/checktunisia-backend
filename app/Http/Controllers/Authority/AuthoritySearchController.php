@@ -493,7 +493,11 @@ class AuthoritySearchController extends Controller
     private function summarizeHotel(Hotel $h): array
     {
         $sub             = $h->activeSubscription;
-        $activeGuests    = CheckIn::where('hotel_id', $h->id)->where('status', 'active')->count();
+        // « Voyageurs présents » = le nombre de VOYAGEURS des check-ins actifs
+        // (accompagnants inclus), pas le nombre de check-ins. pluck respecte les
+        // soft-deletes (check-ins supprimés exclus).
+        $activeCheckInIds = CheckIn::where('hotel_id', $h->id)->where('status', 'active')->pluck('id');
+        $activeGuests    = CheckInGuest::whereIn('check_in_id', $activeCheckInIds)->count();
         $totalCheckIns   = CheckIn::where('hotel_id', $h->id)->count();
 
         return [
