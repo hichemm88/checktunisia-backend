@@ -10,8 +10,9 @@ use App\Services\Whatsapp\WhatsappAlertService;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
-use Symfony\Component\HttpFoundation\StreamedResponse;
+use Intervention\Image\ImageManager;
 
 /**
  * MODULE PROVISOIRE — à retirer après homologation MI.
@@ -60,7 +61,7 @@ class WhatsappWorkerController extends Controller
     }
 
     /** GET internal/whatsapp/scan/{scanId} — flux binaire de la photo (jamais dupliquée). */
-    public function scan(string $scanId): StreamedResponse|JsonResponse
+    public function scan(string $scanId): Response|JsonResponse
     {
         $scan = DocumentScan::find($scanId);
         $disk = config('filesystems.passport_scan_disk', 'local');
@@ -72,11 +73,26 @@ class WhatsappWorkerController extends Controller
             ], 404);
         }
 
-        return Storage::disk($disk)->response(
-            $scan->file_path,
-            'document',
-            ['Content-Type' => $scan->mime_type ?: 'application/octet-stream'],
-        );
+        // Compression à la volée : les photos brutes de téléphone (5-12 Mo) font
+        // planter l'envoi média côté whatsapp-web.js (« Runtime.callFunctionOn
+        // timed out » — le base64 traverse le protocole Chromium). 1600 px / JPEG
+        // reste parfaitement lisible pour une pièce d'identité et rend l'envoi
+        // quasi instantané. En cas d'échec (format exotique), on sert l'original.
+        $binary = Storage::disk($disk)->get($scan->file_path);
+        $mime = $scan->mime_type ?: 'application/octet-stream';
+
+        try {
+            $image = ImageManager::gd()->read($binary);
+            if (max($image->width(), $image->height()) > 1600 || strlen($binary) > 1_000_000) {
+                $image->scaleDown(1600, 1600);
+                $binary = (string) $image->toJpeg(80);
+                $mime = 'image/jpeg';
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('[whatsapp] compression scan '.$scan->id.' impossible, envoi original : '.$e->getMessage());
+        }
+
+        return response($binary, 200, ['Content-Type' => $mime]);
     }
 
     /** POST internal/whatsapp/jobs/{id}/result — le worker rend le verdict d'envoi. */
