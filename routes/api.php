@@ -168,6 +168,8 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             // Dashboard
             Route::get('dashboard', [DashboardController::class, 'index']);
+            // Occupation navigable (semaine par semaine vers le passé)
+            Route::get('dashboard/occupancy', [DashboardController::class, 'occupancy']);
 
             // Properties this account is attached to (switcher) — for both roles
             Route::get('my-properties', [MyPropertiesController::class, 'index']);

@@ -49,6 +49,11 @@ class CheckInController extends Controller
             });
         }
 
+        // Compteur de brouillons pour le badge « Brouillon » — indépendant du filtre
+        // de statut actif (mais respecte le tenant) : une fiche en brouillon est une
+        // fiche non transmise, ça doit se voir sans changer de filtre.
+        $draftCount = CheckIn::where('hotel_id', $hotel->id)->where('status', 'draft')->count();
+
         $results = $query->orderByDesc('created_at')
             ->paginate($request->integer('per_page', 20));
 
@@ -58,6 +63,7 @@ class CheckInController extends Controller
                 'total'        => $results->total(),
                 'current_page' => $results->currentPage(),
                 'per_page'     => $results->perPage(),
+                'draft_count'  => $draftCount,
             ],
         ]);
     }
