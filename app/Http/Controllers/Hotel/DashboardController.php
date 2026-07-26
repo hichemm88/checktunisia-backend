@@ -222,6 +222,48 @@ class DashboardController extends Controller
                 'check_in_date' => $c->check_in_date,
             ]);
 
+        // ── Aperçu du mois (analytique, Manager) ──────────────────────────────
+        // Non actionnable : reste discret sous le graphe, jamais dans la grille
+        // de stats de conformité.
+        $monthStart = $today->copy()->startOfMonth();
+        $monthEnd   = $today->copy()->endOfMonth();
+
+        // Top nationalité — parmi les séjours arrivant ce mois (hors annulé/no-show).
+        $topNat = DB::table('check_in_guests')
+            ->join('check_ins', 'check_in_guests.check_in_id', '=', 'check_ins.id')
+            ->join('guests', 'check_in_guests.guest_id', '=', 'guests.id')
+            ->where('check_ins.hotel_id', $hotel->id)
+            ->whereNull('check_ins.deleted_at')
+            ->whereNull('guests.deleted_at')
+            ->whereNotIn('check_ins.status', ['cancelled', 'no_show'])
+            ->whereBetween('check_ins.check_in_date', [$monthStart->toDateString(), $monthEnd->toDateString()])
+            ->select('guests.nationality_code', DB::raw('COUNT(*) as c'))
+            ->groupBy('guests.nationality_code')
+            ->orderByDesc('c')
+            ->first();
+
+        // Délai moyen arrivée → soumission de la fiche. La soumission = passage
+        // draft → active (CheckInService::complete), qui horodate completed_at :
+        // c'est l'instant où la fiche de police est réellement transmise (contrôle
+        // watchlist + notification + mise en file WhatsApp). Le délai est donc
+        // completed_at − check_in_date (00:00). Calculé en PHP pour rester en
+        // heure locale Africa/Tunis (check_in_date est une date pure). On borne
+        // l'échantillon aux fiches soumises ce mois-ci.
+        $submitted = CheckIn::where('hotel_id', $hotel->id)
+            ->whereNotNull('completed_at')
+            ->whereBetween('completed_at', [$monthStart->copy()->startOfDay(), $monthEnd->copy()->endOfDay()])
+            ->get(['check_in_date', 'completed_at']);
+
+        $avgDelayHours = null;
+        if ($submitted->isNotEmpty()) {
+            $sumHours = $submitted->sum(function ($c) {
+                $arrival     = Carbon::parse($c->check_in_date)->startOfDay();
+                $submittedAt = Carbon::parse($c->completed_at);
+                return ($submittedAt->getTimestamp() - $arrival->getTimestamp()) / 3600;
+            });
+            $avgDelayHours = round($sumHours / $submitted->count(), 1);
+        }
+
         // ── Watchlist hits pending acknowledgement ────────────────────────────
         $pendingWatchlistHits = WatchlistHit::where('hotel_id', $hotel->id)
             ->whereNull('acknowledged_at')
@@ -263,6 +305,13 @@ class DashboardController extends Controller
                 ] : ['status' => 'none'],
                 'recent_check_ins'         => $recentCheckIns,
                 'pending_watchlist_hits'   => $pendingWatchlistHits,
+                'month_insights' => [
+                    'top_nationality' => $topNat
+                        ? ['code' => $topNat->nationality_code, 'count' => (int) $topNat->c]
+                        : null,
+                    'avg_submission_delay_hours' => $avgDelayHours,
+                    'submission_sample'          => $submitted->count(),
+                ],
             ],
         ]);
     }
