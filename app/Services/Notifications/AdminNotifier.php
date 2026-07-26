@@ -26,9 +26,8 @@ class AdminNotifier
                 ->unique()
                 ->values();
 
-            $html = '<div style="font-family:system-ui,Arial,sans-serif;max-width:600px;margin:0 auto;color:#222">'
-                .$bodyHtml
-                .'<p style="color:#999;font-size:12px;margin-top:24px">Alerte automatique Qayed — administration plateforme.</p></div>';
+            $html = \App\Services\Email\EmailBrand::wrap('', $bodyHtml
+                .'<p style="color:#9ca3af;font-size:12px;margin-top:20px">Alerte administration plateforme.</p>');
 
             foreach ($emails as $to) {
                 Mail::to($to)->send(new SystemMail('[Qayed Admin] '.$subject, $html));

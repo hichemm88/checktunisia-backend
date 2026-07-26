@@ -119,9 +119,7 @@ class ReportNextCheckin extends Command
 
         $room = $ci->room?->number ?? $ci->room?->name ?? '—';
 
-        return '<div style="font-family:system-ui,Arial,sans-serif;max-width:640px;margin:0 auto;color:#222">'
-            .'<h2 style="margin:0 0 4px">Rapport de check-in</h2>'
-            .'<p style="color:#666;margin:0 0 16px">'.e($ci->hotel?->name ?? '—').' · Chambre '.e($room)
+        $body = '<p style="color:#666;margin:0 0 16px">'.e($ci->hotel?->name ?? '—').' · Chambre '.e($room)
             .' · '.e((string) $ci->check_in_date).' → '.e((string) ($ci->expected_check_out_date ?? '?')).'</p>'
             .$banner
             .'<p style="margin:16px 0 6px"><strong>'.$jobs->count().'</strong> fiche(s) — '
@@ -131,7 +129,8 @@ class ReportNextCheckin extends Command
             .'<th style="padding:6px 10px">Voyageur</th><th style="padding:6px 10px">Destinataire</th>'
             .'<th style="padding:6px 10px">Statut</th><th style="padding:6px 10px">Photo</th><th style="padding:6px 10px">Détail</th>'
             .'</tr></thead><tbody>'.$rows.'</tbody></table>'
-            .'<p style="color:#999;font-size:12px;margin-top:20px">Rapport automatique Qayed — envoyé une seule fois pour le prochain check-in suivant votre demande.</p>'
-            .'</div>';
+            .'<p style="color:#9ca3af;font-size:12px;margin-top:20px">Rapport envoyé une seule fois pour le prochain check-in suivant votre demande.</p>';
+
+        return \App\Services\Email\EmailBrand::wrap('Rapport de check-in', $body);
     }
 }

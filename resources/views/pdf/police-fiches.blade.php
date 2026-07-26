@@ -4,49 +4,64 @@
 <meta charset="utf-8">
 <style>
   * { box-sizing: border-box; }
-  body { font-family: DejaVu Sans, sans-serif; color: #1a1a1a; font-size: 12px; margin: 0; }
-  .fiche { border: 1px solid #333; padding: 14px 16px; margin: 0 0 14px; page-break-inside: avoid; }
-  .fiche h2 { margin: 0 0 2px; font-size: 13px; text-transform: uppercase; letter-spacing: .3px; }
-  .fiche .sub { color: #555; font-size: 10px; margin: 0 0 10px; }
+  @page { margin: 22px 26px; }
+  body { font-family: DejaVu Sans, sans-serif; color: #1f2937; font-size: 11px; margin: 0; }
+
+  .brandbar { background: #10222E; color: #fff; padding: 16px 20px; border-radius: 8px; }
+  .brandbar h1 { margin: 0; font-size: 18px; letter-spacing: .5px; }
+  .brandbar .tag { margin: 2px 0 0; font-size: 10px; color: #8B7FE0; }
+  .meta { padding: 10px 2px 4px; color: #6b7280; font-size: 10px; }
+  .meta strong { color: #111827; }
+
+  .fiche { border: 1px solid #e5e7eb; border-left: 3px solid #5346A8; border-radius: 6px;
+           padding: 12px 14px; margin: 0 0 12px; page-break-inside: avoid; }
+  .fiche .head { border-bottom: 1px solid #f0eefb; padding-bottom: 6px; margin-bottom: 8px; }
+  .fiche .title { font-size: 9px; text-transform: uppercase; letter-spacing: .6px; color: #5346A8; font-weight: bold; }
+  .fiche .name { font-size: 14px; font-weight: bold; color: #10222E; margin-top: 1px; }
+  .fiche .sub { font-size: 9px; color: #9ca3af; margin-top: 1px; }
+
   table.f { width: 100%; border-collapse: collapse; }
-  table.f td { padding: 3px 6px; vertical-align: top; }
-  table.f td.k { color: #555; width: 32%; }
-  table.f td.v { font-weight: bold; }
-  .row2 td { width: 50%; }
-  .foot { margin-top: 8px; font-size: 9px; color: #888; border-top: 1px solid #ddd; padding-top: 5px; }
-  .cover { margin: 0 0 16px; }
-  .cover h1 { font-size: 16px; margin: 0 0 2px; }
-  .cover p { margin: 0; color: #555; font-size: 11px; }
+  table.f td { padding: 2px 6px; vertical-align: top; }
+  table.f td.k { color: #6b7280; width: 30%; font-size: 10px; }
+  table.f td.v { font-weight: bold; color: #111827; }
+  .half { width: 50%; }
+
+  .foot { margin-top: 7px; font-size: 8px; color: #b6b6b6; }
 </style>
 </head>
 <body>
-  <div class="cover">
-    <h1>Fiches de police — {{ $hotelName }}</h1>
-    <p>{{ $hotelAddress }}</p>
-    <p>Période : {{ $rangeLabel }} · {{ $count }} fiche(s) · Édité le {{ $generatedAt }}</p>
+  <div class="brandbar">
+    <h1>QAYED</h1>
+    <p class="tag">Fiches de police — {{ $hotelName }}</p>
+  </div>
+  <div class="meta">
+    <strong>{{ $hotelAddress }}</strong><br>
+    Période : {{ $rangeLabel }} &nbsp;·&nbsp; {{ $count }} fiche(s) &nbsp;·&nbsp; Édité le {{ $generatedAt }}
   </div>
 
   @foreach ($fiches as $f)
     <div class="fiche">
-      <h2>Fiche de police</h2>
-      <p class="sub">{{ $hotelName }} @if($f['room']) · Chambre {{ $f['room'] }} @endif · Réf. {{ $f['reference'] }}</p>
+      <div class="head">
+        <div class="title">Fiche de police</div>
+        <div class="name">{{ $f['last_name'] }} {{ $f['first_name'] }}</div>
+        <div class="sub">{{ $hotelName }}@if($f['room']) · Chambre {{ $f['room'] }}@endif · Réf. {{ $f['reference'] }}</div>
+      </div>
       <table class="f">
-        <tr><td class="k">Nom / Prénom</td><td class="v">{{ $f['last_name'] }} {{ $f['first_name'] }}</td></tr>
-        <tr class="row2">
-          <td><table class="f"><tr><td class="k">Nationalité</td><td class="v">{{ $f['nationality'] }}</td></tr></table></td>
-          <td><table class="f"><tr><td class="k">Sexe</td><td class="v">{{ $f['sex'] }}</td></tr></table></td>
+        <tr>
+          <td class="half"><table class="f"><tr><td class="k">Nationalité</td><td class="v">{{ $f['nationality'] }}</td></tr></table></td>
+          <td class="half"><table class="f"><tr><td class="k">Sexe</td><td class="v">{{ $f['sex'] }}</td></tr></table></td>
         </tr>
-        <tr class="row2">
-          <td><table class="f"><tr><td class="k">Naissance</td><td class="v">{{ $f['dob'] }}</td></tr></table></td>
-          <td><table class="f"><tr><td class="k">Lieu</td><td class="v">{{ $f['birth_place'] }}</td></tr></table></td>
+        <tr>
+          <td class="half"><table class="f"><tr><td class="k">Naissance</td><td class="v">{{ $f['dob'] }}</td></tr></table></td>
+          <td class="half"><table class="f"><tr><td class="k">Lieu</td><td class="v">{{ $f['birth_place'] }}</td></tr></table></td>
         </tr>
-        <tr><td class="k">Document</td><td class="v">{{ $f['document'] }}</td></tr>
-        <tr class="row2">
-          <td><table class="f"><tr><td class="k">Arrivée</td><td class="v">{{ $f['arrival'] }}</td></tr></table></td>
-          <td><table class="f"><tr><td class="k">Départ prévu</td><td class="v">{{ $f['departure'] }}</td></tr></table></td>
+        <tr><td colspan="2"><table class="f"><tr><td class="k" style="width:15%">Document</td><td class="v">{{ $f['document'] }}</td></tr></table></td></tr>
+        <tr>
+          <td class="half"><table class="f"><tr><td class="k">Arrivée</td><td class="v">{{ $f['arrival'] }}</td></tr></table></td>
+          <td class="half"><table class="f"><tr><td class="k">Départ prévu</td><td class="v">{{ $f['departure'] }}</td></tr></table></td>
         </tr>
         @if($f['companions'])
-        <tr><td class="k">Accompagnants</td><td class="v">{{ $f['companions'] }}</td></tr>
+        <tr><td colspan="2"><table class="f"><tr><td class="k" style="width:15%">Accompagnants</td><td class="v">{{ $f['companions'] }}</td></tr></table></td></tr>
         @endif
       </table>
       <div class="foot">Établi via Qayed — {{ $generatedAt }}</div>

@@ -29,13 +29,11 @@ class PoliceFichesExport extends Mailable
 
     public function content(): Content
     {
-        $html = '<div style="font-family:system-ui,Arial,sans-serif;color:#222">'
-            .'<p>Bonjour,</p>'
+        $body = '<p>Bonjour,</p>'
             .'<p>Veuillez trouver ci-joint le PDF des <strong>'.$this->count.' fiche(s) de police</strong> de <strong>'
-            .e($this->hotelName).'</strong> pour la période <strong>'.e($this->rangeLabel).'</strong>.</p>'
-            .'<p style="color:#888;font-size:12px;margin-top:20px">Export automatique Qayed.</p></div>';
+            .e($this->hotelName).'</strong> pour la période <strong>'.e($this->rangeLabel).'</strong>.</p>';
 
-        return new Content(htmlString: $html);
+        return new Content(htmlString: \App\Services\Email\EmailBrand::wrap('Export des fiches de police', $body));
     }
 
     public function attachments(): array
