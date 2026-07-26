@@ -32,6 +32,14 @@ Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
 // (Cache 'checkin_report.watch'), s'auto-désarme après envoi.
 Schedule::command('checkins:report-next')->everyMinute()->withoutOverlapping();
 
+// Pas de worker de file dédié en prod (le conteneur ne lance que serve +
+// scheduler) : on draine la file Redis chaque minute. --stop-when-empty pour
+// sortir dès qu'il n'y a plus rien ; --max-time borne la durée sous la minute.
+// Corrige aussi les push notifications (jobs qui s'accumulaient sans worker).
+Schedule::command('queue:work --stop-when-empty --max-time=55 --tries=3')
+    ->everyMinute()
+    ->withoutOverlapping();
+
 // MODULE PROVISOIRE — relais WhatsApp : alerte admin si le worker est
 // silencieux (heartbeat périmé > 10 min) — chantier B3.
 Schedule::command('whatsapp:check-health')->everyTenMinutes();
