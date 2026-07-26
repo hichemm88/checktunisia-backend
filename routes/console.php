@@ -28,6 +28,10 @@ Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone(
 // au-delà de la rétention (24 h). Minimisation des données.
 Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
 
+// Rapport « prochain check-in » à la demande : inerte tant que non armé
+// (Cache 'checkin_report.watch'), s'auto-désarme après envoi.
+Schedule::command('checkins:report-next')->everyMinute()->withoutOverlapping();
+
 // MODULE PROVISOIRE — relais WhatsApp : alerte admin si le worker est
 // silencieux (heartbeat périmé > 10 min) — chantier B3.
 Schedule::command('whatsapp:check-health')->everyTenMinutes();
