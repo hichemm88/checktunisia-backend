@@ -215,6 +215,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
                 Route::get('whatsapp-recipients', [\App\Http\Controllers\Hotel\HotelWhatsappRecipientController::class, 'index']);
                 Route::put('whatsapp-recipients', [\App\Http\Controllers\Hotel\HotelWhatsappRecipientController::class, 'sync']);
 
+                // Export des fiches de police (PDF par email) sur une plage de dates.
+                Route::post('exports/police-fiches', [\App\Http\Controllers\Hotel\HotelExportController::class, 'policeFiches']);
+
                 // Staff management
                 Route::get('users', [HotelUserController::class, 'index']);
                 Route::post('users', [HotelUserController::class, 'store']);

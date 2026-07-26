@@ -77,6 +77,35 @@ class FicheFormatter
         ]);
     }
 
+    /**
+     * Champs structurés d'une fiche (pour un rendu PDF/HTML par exemple).
+     * Réutilise les mêmes helpers que la fiche texte WhatsApp → cohérence.
+     *
+     * @return array<string,string>
+     */
+    public static function fields(CheckIn $checkIn, Guest $guest): array
+    {
+        $companions = $checkIn->guests
+            ->reject(fn ($g) => $g->id === $guest->id)
+            ->map(fn ($g) => self::fullName($g))
+            ->implode(', ');
+
+        return [
+            'last_name'   => mb_strtoupper((string) $guest->last_name),
+            'first_name'  => (string) $guest->first_name,
+            'nationality' => self::nationality($guest->nationality_code),
+            'sex'         => $guest->sex ?: '—',
+            'dob'         => self::date($guest->date_of_birth),
+            'birth_place' => $guest->place_of_birth ?: '—',
+            'document'    => self::document($guest),
+            'arrival'     => self::date($checkIn->check_in_date),
+            'departure'   => self::date($checkIn->expected_check_out_date),
+            'room'        => self::room($checkIn),
+            'reference'   => (string) $checkIn->reference,
+            'companions'  => $companions,
+        ];
+    }
+
     private static function fullName(Guest $guest): string
     {
         return trim(mb_strtoupper((string) $guest->last_name).' '.$guest->first_name);
