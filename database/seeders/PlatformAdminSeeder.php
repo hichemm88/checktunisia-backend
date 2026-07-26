@@ -6,11 +6,21 @@ use Illuminate\Support\Facades\Hash;
 
 class PlatformAdminSeeder extends Seeder {
     public function run(): void {
-        $admin = User::updateOrCreate(
-            ['email' => 'admin@qayed.tn'],
-            ['first_name'=>'Admin','last_name'=>'Qayed','password'=>Hash::make('Admin@123!'),'status'=>'active','email_verified_at'=>now()]
-        );
+        // Email admin réel (reçoit les alertes plateforme). Surchargable par env ;
+        // défaut = boîte de l'exploitant. NE PAS réécraser le mot de passe s'il
+        // existe déjà (le seeder tourne à chaque déploiement).
+        $email = env('PLATFORM_ADMIN_EMAIL', 'hichemmathlouthi+admin@gmail.com');
+
+        $admin = User::firstOrNew(['email' => $email]);
+        if (! $admin->exists) {
+            $admin->fill([
+                'first_name' => 'Admin', 'last_name' => 'Qayed',
+                'password' => Hash::make('Admin@123!'), 'email_verified_at' => now(),
+            ]);
+        }
+        $admin->status = 'active';
+        $admin->save();
         $admin->assignRole('platform_admin');
-        $this->command->info('Platform admin created: admin@qayed.tn / Admin@123!');
+        $this->command->info("Platform admin: {$email}");
     }
 }

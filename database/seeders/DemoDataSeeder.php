@@ -61,7 +61,7 @@ class DemoDataSeeder extends Seeder {
             ['Hotel Admin','hotelier@hotel-azur.tn','Hotel@123!'],
             ['Receptionist','reception@hotel-azur.tn','Recept@123!'],
             ['Authority','agent@police.tn','Agent@123!'],
-            ['Platform Admin','admin@qayed.tn','Admin@123!'],
+            ['Platform Admin',env('PLATFORM_ADMIN_EMAIL','hichemmathlouthi+admin@gmail.com'),'Admin@123!'],
         ]);
     }
 }
