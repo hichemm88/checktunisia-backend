@@ -340,41 +340,57 @@ class AuthoritySearchController extends Controller
             ->orderBy('check_in_date', 'desc')
             ->paginate($request->integer('per_page', 25));
 
-        return response()->json([
-            'data' => $checkIns->map(function (CheckIn $ci) {
-                $primary = $ci->guests->firstWhere('is_primary', true) ?? $ci->guests->first();
+        // UNE FICHE PAR VOYAGEUR (et non par check-in) : côté autorité, l'objet
+        // est la fiche de police, qui est par personne. Chaque fiche garde le
+        // contexte du séjour (chambre, dates, statut) et la liste des
+        // accompagnants, pour ne pas perdre « qui voyage ensemble ».
+        $fiches = $checkIns->getCollection()->flatMap(function (CheckIn $ci) {
+            $guests = $ci->guests->sortByDesc(fn ($g) => (bool) $g->is_primary)->values();
+
+            return $guests->map(function ($g) use ($ci, $guests) {
+                $companions = $guests
+                    ->reject(fn ($o) => $o->id === $g->id)
+                    ->map(fn ($o) => trim(strtoupper((string) $o->last_name).' '.$o->first_name))
+                    ->values()->toArray();
+
                 return [
-                    'id'                      => $ci->id,
+                    'id'                      => $ci->id.'-'.$g->id, // clé de ligne unique
+                    'check_in_id'             => $ci->id,
                     'reference'               => $ci->reference,
                     'status'                  => $ci->status,
                     'check_in_date'           => $ci->check_in_date,
                     'expected_check_out_date' => $ci->expected_check_out_date,
                     'actual_check_out_date'   => $ci->actual_check_out_date,
-                    'adults_count'            => $ci->adults_count,
-                    'children_count'          => $ci->children_count,
                     'room_number'             => $ci->room?->number,
-                    'primary_guest' => $primary ? [
-                        'id'               => $primary->id,
-                        'first_name'       => $primary->first_name,
-                        'last_name'        => $primary->last_name,
-                        'nationality_code' => $primary->nationality_code,
-                        'date_of_birth'    => $primary->date_of_birth,
-                    ] : null,
-                    'guests' => $ci->guests->map(fn($g) => [
+                    'guest' => [
                         'id'               => $g->id,
                         'first_name'       => $g->first_name,
                         'last_name'        => $g->last_name,
                         'nationality_code' => $g->nationality_code,
+                        'date_of_birth'    => $g->date_of_birth,
                         'is_primary'       => (bool) $g->is_primary,
-                    ])->values()->toArray(),
-                    'guests_count' => $ci->guests->count(),
+                        'document_number'  => $g->documents->first()?->document_number,
+                    ],
+                    'companions'       => $companions,
+                    'companions_count' => count($companions),
                 ];
-            }),
+            });
+        })->values();
+
+        // Total au niveau VOYAGEUR (pour l'en-tête « X fiches ») ; la pagination
+        // reste au niveau check-in (meta.total_check_ins) — sans filtre de statut
+        // c'est le total établissement.
+        $activeIds = CheckIn::where('hotel_id', $hotel->id)->pluck('id');
+        $totalTravelers = CheckInGuest::whereIn('check_in_id', $activeIds)->count();
+
+        return response()->json([
+            'data' => $fiches,
             'meta' => [
-                'total'        => $checkIns->total(),
-                'current_page' => $checkIns->currentPage(),
-                'per_page'     => $checkIns->perPage(),
-                'last_page'    => $checkIns->lastPage(),
+                'total'           => $totalTravelers,          // voyageurs (fiches) total
+                'total_check_ins' => $checkIns->total(),
+                'current_page'    => $checkIns->currentPage(),
+                'per_page'        => $checkIns->perPage(),
+                'last_page'       => $checkIns->lastPage(),
             ],
         ]);
     }
