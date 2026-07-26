@@ -206,6 +206,21 @@ class PaymentController extends Controller
 
         AuditLogger::log('payment.virement_declared', $invoice, newValues: ['reference' => $v['reference']], actor: $user);
 
+        // Alerte admin plateforme : virement à valider (non bloquant).
+        $invoice->loadMissing('hotel');
+        \App\Services\Notifications\AdminNotifier::notify(
+            'Virement déclaré à valider — '.($invoice->hotel?->name ?? 'facture '.$invoice->invoice_number),
+            '<h2 style="margin:0 0 12px">Paiement par virement déclaré</h2>'
+            .'<p style="color:#b7791f;font-weight:600">À valider dans Admin → Paiements.</p>'
+            .'<table style="font-size:14px;border-collapse:collapse">'
+            .\App\Services\Notifications\AdminNotifier::row('Établissement', $invoice->hotel?->name)
+            .\App\Services\Notifications\AdminNotifier::row('Facture', $invoice->invoice_number)
+            .\App\Services\Notifications\AdminNotifier::row('Montant', number_format((float) $payment->amount, 3, ',', ' ').' '.$payment->currency)
+            .\App\Services\Notifications\AdminNotifier::row('Référence déclarée', $v['reference'])
+            .\App\Services\Notifications\AdminNotifier::row('Date déclarée', (string) $v['date'])
+            .'</table>',
+        );
+
         return response()->json(['data' => ['id' => $payment->id, 'status' => $payment->status]], 201);
     }
 

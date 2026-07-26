@@ -123,6 +123,19 @@ class PublicRegistrationController extends Controller
             return compact('org', 'user', 'sub', 'trialEnds');
         });
 
+        // Alerte admin plateforme (non bloquant).
+        \App\Services\Notifications\AdminNotifier::notify(
+            'Nouvelle inscription : '.$result['org']->name,
+            '<h2 style="margin:0 0 12px">Nouvelle inscription</h2><table style="font-size:14px;border-collapse:collapse">'
+            .\App\Services\Notifications\AdminNotifier::row('Hébergeur', $result['org']->name)
+            .\App\Services\Notifications\AdminNotifier::row('Type', $result['org']->entity_type)
+            .\App\Services\Notifications\AdminNotifier::row('Contact', $result['user']->email)
+            .\App\Services\Notifications\AdminNotifier::row('Nom', $result['user']->first_name.' '.$result['user']->last_name)
+            .\App\Services\Notifications\AdminNotifier::row('Pack', $plan->name)
+            .\App\Services\Notifications\AdminNotifier::row('Essai jusqu\'au', $result['trialEnds']->format('d/m/Y'))
+            .'</table>',
+        );
+
         return response()->json([
             'data' => [
                 'organization' => [
