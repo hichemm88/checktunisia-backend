@@ -242,26 +242,23 @@ class DashboardController extends Controller
             ->orderByDesc('c')
             ->first();
 
-        // Délai moyen arrivée → soumission de la fiche. La soumission = passage
-        // draft → active (CheckInService::complete), qui horodate completed_at :
-        // c'est l'instant où la fiche de police est réellement transmise (contrôle
-        // watchlist + notification + mise en file WhatsApp). Le délai est donc
-        // completed_at − check_in_date (00:00). Calculé en PHP pour rester en
-        // heure locale Africa/Tunis (check_in_date est une date pure). On borne
-        // l'échantillon aux fiches soumises ce mois-ci.
-        $submitted = CheckIn::where('hotel_id', $hotel->id)
-            ->whereNotNull('completed_at')
-            ->whereBetween('completed_at', [$monthStart->copy()->startOfDay(), $monthEnd->copy()->endOfDay()])
-            ->get(['check_in_date', 'completed_at']);
+        // Durée moyenne de séjour (nuits) — séjours arrivant ce mois (hors annulé/
+        // no-show). Nuits = départ − arrivée, en utilisant le départ réel s'il est
+        // connu, sinon le départ prévu. Calcul en PHP sur des dates locales pures
+        // (Africa/Tunis, pas de DST en Tunisie → écart = multiple exact de 86400 s).
+        $stays = CheckIn::where('hotel_id', $hotel->id)
+            ->whereNotIn('status', ['cancelled', 'no_show'])
+            ->whereBetween('check_in_date', [$monthStart->toDateString(), $monthEnd->toDateString()])
+            ->get(['check_in_date', 'expected_check_out_date', 'actual_check_out_date']);
 
-        $avgDelayHours = null;
-        if ($submitted->isNotEmpty()) {
-            $sumHours = $submitted->sum(function ($c) {
-                $arrival     = Carbon::parse($c->check_in_date)->startOfDay();
-                $submittedAt = Carbon::parse($c->completed_at);
-                return ($submittedAt->getTimestamp() - $arrival->getTimestamp()) / 3600;
+        $avgStayNights = null;
+        if ($stays->isNotEmpty()) {
+            $sumNights = $stays->sum(function ($c) {
+                $in  = Carbon::parse($c->check_in_date)->startOfDay();
+                $out = Carbon::parse($c->actual_check_out_date ?? $c->expected_check_out_date)->startOfDay();
+                return max(0, (int) round(($out->getTimestamp() - $in->getTimestamp()) / 86400));
             });
-            $avgDelayHours = round($sumHours / $submitted->count(), 1);
+            $avgStayNights = round($sumNights / $stays->count(), 1);
         }
 
         // ── Watchlist hits pending acknowledgement ────────────────────────────
@@ -309,8 +306,8 @@ class DashboardController extends Controller
                     'top_nationality' => $topNat
                         ? ['code' => $topNat->nationality_code, 'count' => (int) $topNat->c]
                         : null,
-                    'avg_submission_delay_hours' => $avgDelayHours,
-                    'submission_sample'          => $submitted->count(),
+                    'avg_stay_nights' => $avgStayNights,
+                    'stay_sample'     => $stays->count(),
                 ],
             ],
         ]);
