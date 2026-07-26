@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 
 class AuthorityAdminController extends Controller {
@@ -56,7 +57,16 @@ class AuthorityAdminController extends Controller {
     }
     public function update(Request $request, string $id): JsonResponse {
         $user = User::role('authority_user')->with('authorityProfile')->findOrFail($id);
-        $v = $request->validate(['status'=>['sometimes','in:active,suspended,inactive'],'badge_number'=>['sometimes','nullable','string','max:50'],'rank'=>['sometimes','nullable','string','max:100'],'whatsapp_number'=>['sometimes','nullable','string','max:25'],'receives_whatsapp_fiches'=>['sometimes','boolean'],'expires_at'=>['nullable','date']]);
+        $v = $request->validate(['first_name'=>['sometimes','string','max:100'],'last_name'=>['sometimes','string','max:100'],'email'=>['sometimes','email','max:190',\Illuminate\Validation\Rule::unique('users','email')->ignore($user->id)],'organization_id'=>['sometimes','exists:authority_organizations,id'],'status'=>['sometimes','in:active,suspended,inactive'],'badge_number'=>['sometimes','nullable','string','max:50'],'rank'=>['sometimes','nullable','string','max:100'],'whatsapp_number'=>['sometimes','nullable','string','max:25'],'receives_whatsapp_fiches'=>['sometimes','boolean'],'expires_at'=>['nullable','date']]);
+
+        // Identité / email (permet de renseigner le vrai email plus tard → le
+        // compte devient utilisable via « envoyer l'invitation »).
+        $userUpdates = [];
+        foreach (['first_name','last_name','email'] as $f) {
+            if (array_key_exists($f, $v)) $userUpdates[$f] = $v[$f];
+        }
+        if ($userUpdates) $user->update($userUpdates);
+
         if (isset($v['status'])) {
             $user->update(['status'=>$v['status']]);
             // A suspended/deactivated authority account (police/ministry — the
@@ -67,6 +77,7 @@ class AuthorityAdminController extends Controller {
         $profile = $user->authorityProfile;
         if ($profile) {
             $updates = [];
+            if (array_key_exists('organization_id', $v)) $updates['organization_id'] = $v['organization_id'];
             if (array_key_exists('badge_number', $v)) $updates['badge_number'] = $v['badge_number'];
             if (array_key_exists('rank', $v)) $updates['rank'] = $v['rank'];
             if (array_key_exists('expires_at', $v)) $updates['expires_at'] = $v['expires_at'];
@@ -87,8 +98,28 @@ class AuthorityAdminController extends Controller {
             if ($updates) $profile->update($updates);
         }
         AuditLogger::log('authority_user.updated', $user);
-        return response()->json(['data'=>['id'=>$user->id,'status'=>$user->status]]);
+        return response()->json(['data'=>['id'=>$user->id,'status'=>$user->status,'email'=>$user->email]]);
     }
+
+    /**
+     * POST admin/authority-users/{id}/invite — (re)crée l'accès plateforme :
+     * invalide l'ancien mot de passe et envoie un lien « définir mon mot de
+     * passe ». Sert à activer un agent une fois son vrai email renseigné (les
+     * destinataires WhatsApp sont créés avec un email interne factice).
+     */
+    public function invite(string $id): JsonResponse {
+        $user = User::role('authority_user')->findOrFail($id);
+        if (str_ends_with((string) $user->email, '@wa-recipient.qayed.local')) {
+            return response()->json(['errors'=>[['code'=>'FAKE_EMAIL','message'=>'Renseignez d\'abord un email réel pour cet agent avant de l\'inviter.','field'=>'email']]], 422);
+        }
+        $user->update(['password'=>Hash::make(Str::random(48))]); // invalide tout ancien accès
+        $sent = false;
+        try { \App\Services\Email\SystemMailer::sendPasswordReset($user); $sent = true; }
+        catch (\Throwable $e) { /* email best-effort : l'agent peut aussi passer par « mot de passe oublié » */ }
+        AuditLogger::log('authority_user.invited', $user);
+        return response()->json(['data'=>['email'=>$user->email,'email_sent'=>$sent]]);
+    }
+
     public function destroy(string $id): JsonResponse {
         $user = User::role('authority_user')->findOrFail($id);
         $user->update(['status'=>'inactive']);

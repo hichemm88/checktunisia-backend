@@ -393,6 +393,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('authority-users', [AuthorityAdminController::class, 'index']);
             Route::post('authority-users', [AuthorityAdminController::class, 'store']);
             Route::patch('authority-users/{id}', [AuthorityAdminController::class, 'update']);
+            Route::post('authority-users/{id}/invite', [AuthorityAdminController::class, 'invite']);
             Route::delete('authority-users/{id}', [AuthorityAdminController::class, 'destroy']);
 
             // Authority organizations (police / immigration / ministère...)

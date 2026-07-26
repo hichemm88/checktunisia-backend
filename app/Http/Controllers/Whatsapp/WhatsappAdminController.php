@@ -68,23 +68,43 @@ class WhatsappAdminController extends Controller
             ->latest('queued_at')
             ->paginate($filters['per_page'] ?? 25);
 
+        // Résolution destinataire (JID → nom d'agent) : la plupart des envois
+        // vont désormais à un agent précis, l'admin doit voir lequel.
+        $profilesByNumber = \App\Models\AuthorityUserProfile::whereNotNull('whatsapp_number')
+            ->with(['user:id,first_name,last_name', 'organization:id,name'])
+            ->get()
+            ->keyBy(fn ($p) => preg_replace('/\D+/', '', (string) $p->whatsapp_number));
+
+        $globalNumber = preg_replace('/\D+/', '', (string) config('whatsapp.recipient'));
+
         return response()->json([
-            'data' => $logs->map(fn (WhatsappSendLog $l) => [
-                'id' => $l->id,
-                'hotel' => $l->hotel?->name,
-                'hotel_id' => $l->hotel_id,
-                'guest' => $l->guest ? trim(strtoupper((string) $l->guest->last_name).' '.$l->guest->first_name) : null,
-                'check_in_id' => $l->check_in_id,
-                'status' => $l->status,
-                'attempts' => $l->attempts,
-                'last_error' => $l->last_error,
-                'is_test' => $l->is_test,
-                'has_photo' => (bool) $l->scan_id,
-                'message_id_whatsapp' => $l->message_id_whatsapp,
-                'queued_at' => $l->queued_at,
-                'sent_at' => $l->sent_at,
-                'next_attempt_at' => $l->next_attempt_at,
-            ]),
+            'data' => $logs->map(function (WhatsappSendLog $l) use ($profilesByNumber, $globalNumber) {
+                $digits = preg_replace('/\D+/', '', (string) str_replace('@c.us', '', (string) $l->recipient));
+                $prof = $profilesByNumber[$digits] ?? null;
+                $recipientName = $prof
+                    ? trim(((string) $prof->user?->first_name).' '.((string) $prof->user?->last_name))
+                    : ($digits !== '' && $digits === $globalNumber ? 'Numéro global' : null);
+
+                return [
+                    'id' => $l->id,
+                    'hotel' => $l->hotel?->name,
+                    'hotel_id' => $l->hotel_id,
+                    'guest' => $l->guest ? trim(strtoupper((string) $l->guest->last_name).' '.$l->guest->first_name) : null,
+                    'check_in_id' => $l->check_in_id,
+                    'status' => $l->status,
+                    'attempts' => $l->attempts,
+                    'last_error' => $l->last_error,
+                    'is_test' => $l->is_test,
+                    'has_photo' => (bool) $l->scan_id,
+                    'message_id_whatsapp' => $l->message_id_whatsapp,
+                    'recipient_number' => $digits ?: null,
+                    'recipient_name' => $recipientName,
+                    'recipient_org' => $prof?->organization?->name,
+                    'queued_at' => $l->queued_at,
+                    'sent_at' => $l->sent_at,
+                    'next_attempt_at' => $l->next_attempt_at,
+                ];
+            }),
             'meta' => [
                 'current_page' => $logs->currentPage(),
                 'last_page' => $logs->lastPage(),
