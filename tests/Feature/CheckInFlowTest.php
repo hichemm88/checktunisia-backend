@@ -209,6 +209,37 @@ class CheckInFlowTest extends TestCase
         $this->assertEquals(2, $guest->checkIns()->count());
     }
 
+    public function test_deleting_a_checkin_keeps_a_shared_guest_on_other_checkins(): void
+    {
+        // Même voyageur (même document) sur DEUX check-ins.
+        $doc = ['type' => 'passport', 'document_number' => 'DE9PZYR3J', 'issuing_country_code' => 'DEU'];
+        $guestData = [
+            'first_name' => 'Martin', 'last_name' => 'Ostermeier',
+            'date_of_birth' => '1984-02-25', 'sex' => 'M', 'nationality_code' => 'DEU',
+            'document' => $doc,
+        ];
+        $keep   = CheckIn::factory()->for($this->hotel)->active()->create(['created_by' => $this->receptionist->id]);
+        $delete = CheckIn::factory()->for($this->hotel)->draft()->create(['created_by' => $this->receptionist->id]);
+
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$keep->id}/guests", $guestData)->assertCreated();
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$delete->id}/guests", $guestData)->assertCreated();
+
+        $guest = \App\Models\TravelDocument::where('document_number', 'DE9PZYR3J')->first()->guest;
+
+        // Suppression d'UN check-in…
+        $this->actingAs($this->admin)
+            ->deleteJson("/api/v1/hotel/check-ins/{$delete->id}")->assertNoContent();
+
+        // …le voyageur partagé N'EST PAS supprimé et reste sur l'autre fiche.
+        $this->assertNull($guest->fresh()->deleted_at, 'Le voyageur partagé ne doit pas être supprimé.');
+        $this->assertTrue(
+            $keep->fresh()->guests()->where('guests.id', $guest->id)->exists(),
+            'Le voyageur doit rester sur le check-in conservé.',
+        );
+    }
+
     public function test_same_document_number_from_different_country_are_distinct_people(): void
     {
         $ci1 = CheckIn::factory()->for($this->hotel)->active()->create(['created_by' => $this->receptionist->id]);

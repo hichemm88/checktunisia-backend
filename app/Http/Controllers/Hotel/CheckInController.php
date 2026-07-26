@@ -235,7 +235,11 @@ class CheckInController extends Controller
             hotelId: $checkIn->hotel_id,
         );
 
-        $checkIn->guests()->delete();
+        // Les voyageurs sont des entités PARTAGÉES (réutilisées par numéro de
+        // document entre plusieurs check-ins/établissements). On ne détache donc
+        // QUE le lien de CE check-in — un ->delete() soft-supprimait le voyageur
+        // lui-même, le faisant disparaître de ses autres fiches.
+        $checkIn->guests()->detach();
         $checkIn->delete();
 
         return response()->json(null, 204);
