@@ -17,6 +17,13 @@ RUN docker-php-ext-configure gd --with-jpeg --with-webp --with-freetype \
 # Install Redis extension
 RUN pecl install redis && docker-php-ext-enable redis
 
+# Limites d'upload : le défaut PHP (upload_max_filesize=2M) rejetait les photos
+# de documents (3-12 Mo) AVANT la validation Laravel (qui accepte 10 Mo) → la
+# fiche WhatsApp partait sans photo, sans erreur visible. Le frontend réduit
+# désormais l'image avant envoi, mais l'app mobile et tout autre client
+# passent par ici.
+RUN { echo "upload_max_filesize=20M"; echo "post_max_size=25M"; } > /usr/local/etc/php/conf.d/uploads.ini
+
 # Install Composer
 COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
 
