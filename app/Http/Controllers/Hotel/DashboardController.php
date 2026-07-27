@@ -218,7 +218,11 @@ class DashboardController extends Controller
                 'reference'     => $c->reference,
                 'room'          => $c->room?->number,
                 'status'        => $c->status,
-                'primary_guest' => $c->guests->where('pivot.is_primary', true)->first()?->full_name,
+                // Préférer le voyageur marqué principal, sinon retomber sur le premier
+                // (même logique que l'Historique). Sans ce fallback, une fiche dont
+                // aucun voyageur n'a is_primary=true s'affichait « Sans nom » à
+                // l'Accueil alors que l'Historique montrait bien le nom.
+                'primary_guest' => ($c->guests->firstWhere('pivot.is_primary', true) ?? $c->guests->first())?->full_name,
                 'check_in_date' => $c->check_in_date,
             ]);
 
