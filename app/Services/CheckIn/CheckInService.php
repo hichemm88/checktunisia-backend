@@ -67,13 +67,32 @@ class CheckInService
                 $this->upsertDocument($guest, $data['document']);
             }
 
-            // Link to check-in
-            $isPrimary = $data['is_primary'] ?? ($checkIn->guests()->count() === 0);
+            // Link to check-in — invariant : une fiche avec ≥1 voyageur a toujours
+            // exactement UN principal.
+            //  • is_primary=true explicite → promotion (les autres sont rétrogradés).
+            //  • sinon → principal par défaut s'il n'existe aucun AUTRE principal.
+            // On exclut le voyageur courant du test (ré-enregistrement / édition) :
+            // sans ça, `updateOrCreate` rétrogradait l'unique principal à false quand
+            // la même fiche était ré-enregistrée (count ≥ 1), d'où des fiches « sans
+            // voyageur principal » → « Sans nom ».
+            $hasOtherPrimary = $checkIn->guests()
+                ->wherePivot('is_primary', true)
+                ->where('guests.id', '!=', $guest->id)
+                ->exists();
+            $isPrimary = ! empty($data['is_primary']) ? true : ! $hasOtherPrimary;
 
             CheckInGuest::updateOrCreate(
                 ['check_in_id' => $checkIn->id, 'guest_id' => $guest->id],
                 ['is_primary' => $isPrimary, 'added_by' => $addedBy->id, 'added_at' => now()],
             );
+
+            // Un seul principal : si ce voyageur le devient, rétrograder les autres.
+            if ($isPrimary) {
+                CheckInGuest::where('check_in_id', $checkIn->id)
+                    ->where('guest_id', '!=', $guest->id)
+                    ->where('is_primary', true)
+                    ->update(['is_primary' => false]);
+            }
 
             // MODULE PROVISOIRE — relais WhatsApp : relie le scan de ce voyageur
             // (téléversé à l'étape scan, guest_id null) à son voyageur, pour que
@@ -157,7 +176,18 @@ class CheckInService
                 throw new \DomainException('Cannot remove the only primary guest.');
             }
 
+            $wasPrimary = (bool) $link->is_primary;
             $link->delete();
+
+            // Invariant « un principal » : si on vient de retirer le principal et
+            // qu'il reste des voyageurs, promouvoir le plus ancien restant.
+            if ($wasPrimary) {
+                $next = CheckInGuest::where('check_in_id', $checkIn->id)
+                    ->orderBy('added_at')
+                    ->orderBy('id')
+                    ->first();
+                $next?->update(['is_primary' => true]);
+            }
 
             AuditLogger::log('guest.removed', $guest, [
                 'check_in_id' => $checkIn->id,
