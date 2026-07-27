@@ -39,14 +39,19 @@ class WhatsappWorkerController extends Controller
             return response()->json(['data' => ['job' => null]]);
         }
 
-        // La photo n'est proposée au worker que si le fichier existe encore :
-        // un scan purgé ou perdu (disque éphémère redéployé) ne doit jamais
-        // bloquer la fiche en boucle de 404 — elle part alors sans photo.
+        // La photo n'est proposée au worker que si elle est encore disponible :
+        // copie compressée en base (survit aux redéploiements — disque Railway
+        // éphémère) OU fichier disque encore présent. Un scan purgé ne doit
+        // jamais bloquer la fiche en boucle de 404 — elle part alors sans photo.
         $hasPhoto = false;
         if ($job->scan_id) {
-            $scan = DocumentScan::find($job->scan_id);
+            $scan = DocumentScan::query()
+                ->select('id', 'file_path')
+                ->selectRaw('(image_data IS NOT NULL) as has_image_data')
+                ->find($job->scan_id);
             $disk = config('filesystems.passport_scan_disk', 'local');
-            $hasPhoto = $scan !== null && Storage::disk($disk)->exists($scan->file_path);
+            $hasPhoto = $scan !== null
+                && ($scan->has_image_data || Storage::disk($disk)->exists($scan->file_path));
         }
 
         return response()->json(['data' => ['job' => [
@@ -66,21 +71,28 @@ class WhatsappWorkerController extends Controller
         $scan = DocumentScan::find($scanId);
         $disk = config('filesystems.passport_scan_disk', 'local');
 
-        if (! $scan || ! Storage::disk($disk)->exists($scan->file_path)) {
-            return response()->json([
-                'data' => null,
-                'errors' => [['code' => 'RESOURCE_NOT_FOUND', 'message' => 'Scan not found.', 'field' => null]],
-            ], 404);
+        // Source privilégiée : la copie compressée en base (déjà en 1600 px JPEG,
+        // survit aux redéploiements — disque Railway éphémère). Repli : le
+        // fichier disque, s'il existe encore.
+        $binary = $scan?->imageBytes();
+        $mime = 'image/jpeg';
+
+        if ($binary === null) {
+            if (! $scan || ! Storage::disk($disk)->exists($scan->file_path)) {
+                return response()->json([
+                    'data' => null,
+                    'errors' => [['code' => 'RESOURCE_NOT_FOUND', 'message' => 'Scan not found.', 'field' => null]],
+                ], 404);
+            }
+            $binary = Storage::disk($disk)->get($scan->file_path);
+            $mime = $scan->mime_type ?: 'application/octet-stream';
         }
 
-        // Compression à la volée : les photos brutes de téléphone (5-12 Mo) font
-        // planter l'envoi média côté whatsapp-web.js (« Runtime.callFunctionOn
-        // timed out » — le base64 traverse le protocole Chromium). 1600 px / JPEG
-        // reste parfaitement lisible pour une pièce d'identité et rend l'envoi
-        // quasi instantané. En cas d'échec (format exotique), on sert l'original.
-        $binary = Storage::disk($disk)->get($scan->file_path);
-        $mime = $scan->mime_type ?: 'application/octet-stream';
-
+        // Compression à la volée (filet de sécurité) : les photos brutes de
+        // téléphone (5-12 Mo) font planter l'envoi média côté whatsapp-web.js
+        // (« Runtime.callFunctionOn timed out » — le base64 traverse le protocole
+        // Chromium). 1600 px / JPEG reste parfaitement lisible pour une pièce
+        // d'identité. En cas d'échec (format exotique), on sert l'original.
         try {
             $image = ImageManager::gd()->read($binary);
             if (max($image->width(), $image->height()) > 1600 || strlen($binary) > 1_000_000) {

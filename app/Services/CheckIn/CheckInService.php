@@ -16,6 +16,7 @@ use App\Services\Watchlist\WatchlistService;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Intervention\Image\ImageManager;
 
 class CheckInService
 {
@@ -240,7 +241,7 @@ class CheckInService
             throw new \DomainException('Only a completed (checked-out) check-in can be reverted to active.');
         }
 
-        return DB::transaction(function () use ($checkIn, $actor) {
+        return DB::transaction(function () use ($checkIn) {
             $old = ['status' => $checkIn->status, 'actual_check_out_date' => $checkIn->actual_check_out_date];
 
             $checkIn->update([
@@ -288,6 +289,20 @@ class CheckInService
         $hash = hash_file('sha256', $file->getRealPath());
         $path = $file->store("scans/{$checkIn->hotel_id}/{$checkIn->id}", config('filesystems.passport_scan_disk', 'local'));
 
+        // MODULE PROVISOIRE — relais WhatsApp : copie compressée en base (base64).
+        // Le disque Railway est éphémère (effacé à chaque redéploiement) : sans
+        // cette copie, une fiche envoyée après un redéploiement partait sans
+        // photo. 1600 px / JPEG q80 ≈ 300 Ko, purgé après 24 h. Best-effort :
+        // un format illisible ne bloque jamais le scan.
+        $imageData = null;
+        try {
+            $image = ImageManager::gd()->read($file->getRealPath());
+            $image->scaleDown(1600, 1600);
+            $imageData = base64_encode((string) $image->toJpeg(80));
+        } catch (\Throwable $e) {
+            \Log::warning('[whatsapp] compression du scan à l\'upload impossible : '.$e->getMessage());
+        }
+
         $scan = DocumentScan::create([
             'check_in_id' => $checkIn->id,
             'file_path' => $path,
@@ -296,6 +311,7 @@ class CheckInService
             'mime_type' => $file->getMimeType(),
             'ocr_status' => 'pending',
             'uploaded_by' => $uploader->id,
+            'image_data' => $imageData,
         ]);
 
         AuditLogger::log('scan.uploaded', $scan, [], ['check_in_id' => $checkIn->id], hotelId: $checkIn->hotel_id);
