@@ -136,7 +136,7 @@ class SystemMailer
 
     public static function frontendUrl(string $path = ''): string
     {
-        return rtrim(env('FRONTEND_URL', 'https://checktunisia.vercel.app'), '/').$path;
+        return rtrim(env('FRONTEND_URL', 'https://qayed.tn'), '/').$path;
     }
 
     public static function loginUrl(): string

@@ -18,13 +18,18 @@ class WatchlistHit extends Model
     protected $fillable = [
         'watchlist_entry_id', 'guest_id', 'check_in_id', 'hotel_id',
         'hit_type', 'notified_hotel_at', 'acknowledged_at', 'acknowledged_by',
+        // Suivi côté autorité (indépendant de l'accusé de réception hôtel)
+        'authority_status', 'authority_seen_at', 'authority_seen_by',
+        'authority_acknowledged_at', 'authority_acknowledged_by',
     ];
 
     protected function casts(): array
     {
         return [
-            'notified_hotel_at' => 'datetime',
-            'acknowledged_at'   => 'datetime',
+            'notified_hotel_at'         => 'datetime',
+            'acknowledged_at'           => 'datetime',
+            'authority_seen_at'         => 'datetime',
+            'authority_acknowledged_at' => 'datetime',
         ];
     }
 
@@ -51,5 +56,15 @@ class WatchlistHit extends Model
     public function acknowledgedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'acknowledged_by');
+    }
+
+    public function authoritySeenBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'authority_seen_by');
+    }
+
+    public function authorityAcknowledgedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'authority_acknowledged_by');
     }
 }

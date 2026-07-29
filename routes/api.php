@@ -21,6 +21,7 @@ use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Authority\AuthorityDashboardController;
 use App\Http\Controllers\Authority\AuthoritySearchController;
 use App\Http\Controllers\Authority\ExportController;
+use App\Http\Controllers\Authority\SecurityAlertController;
 use App\Http\Controllers\Authority\WatchlistController;
 use App\Http\Controllers\Hotel\ActivityLogController;
 use App\Http\Controllers\Hotel\CheckInController;
@@ -321,6 +322,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::delete('watchlist/{id}', [WatchlistController::class, 'destroy']);
             Route::post('watchlist/import', [WatchlistController::class, 'import']);
             Route::get('watchlist/template', [WatchlistController::class, 'template']);
+            Route::get('security-alerts', [SecurityAlertController::class, 'index']);
+            Route::post('security-alerts/{id}/seen', [SecurityAlertController::class, 'seen']);
+            Route::post('security-alerts/{id}/acknowledge', [SecurityAlertController::class, 'acknowledge']);
             Route::get('guests/{id}/export/pdf', [ExportController::class, 'guestPdf']);
             Route::get('export/stays', [ExportController::class, 'staysCsv']);
         });

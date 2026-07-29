@@ -2,13 +2,14 @@
 
 namespace App\Services\Watchlist;
 
+use App\Mail\WatchlistAlertMail;
 use App\Models\CheckIn;
 use App\Models\Guest;
 use App\Models\User;
 use App\Models\WatchlistEntry;
 use App\Models\WatchlistHit;
-use App\Notifications\WatchlistHitNotification;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Mail;
 
 class WatchlistService
 {
@@ -162,7 +163,8 @@ class WatchlistService
                 ]
             );
 
-            // Notify hotel admin(s) by email
+            // Notify hotel admin(s) by email — information volontairement limitée
+            // (pas de nom de voyageur, aligné sur l'écran d'alerte de l'app).
             $entry = WatchlistEntry::find($match['entry_id']);
             if ($entry) {
                 $hotel    = $checkIn->hotel;
@@ -170,12 +172,18 @@ class WatchlistService
                     ->whereHas('roles', fn($q) => $q->where('name', 'hotel_admin'))
                     ->get();
 
+                $severityLabel = $this->severityLabel($entry->severity);
+                $occurredAt    = now()->timezone('Africa/Tunis')->format('d/m/Y à H:i');
+
                 foreach ($admins as $admin) {
-                    $admin->notify(new WatchlistHitNotification(
-                        hotel:      $hotel,
-                        guest:      $guest,
-                        entry:      $entry,
-                        checkInId:  $checkIn->id,
+                    if (!$admin->email) {
+                        continue;
+                    }
+                    Mail::to($admin->email)->queue(new WatchlistAlertMail(
+                        hotelName:        $hotel->name,
+                        checkInReference: $checkIn->reference ?: $checkIn->id,
+                        severityLabel:    $severityLabel,
+                        occurredAt:       $occurredAt,
                     ));
                 }
             }
@@ -194,6 +202,16 @@ class WatchlistService
         return WatchlistHit::where('hotel_id', $hotelId)
             ->whereNull('acknowledged_at')
             ->count();
+    }
+
+    /** Libellé français institutionnel du niveau d'alerte (repli « Moyen »). */
+    private function severityLabel(?string $severity): string
+    {
+        return match ($severity) {
+            'critique' => 'Critique',
+            'eleve'    => 'Élevé',
+            default    => 'Moyen',
+        };
     }
 
     private function entryToPayload(WatchlistEntry $entry, string $hitType): array

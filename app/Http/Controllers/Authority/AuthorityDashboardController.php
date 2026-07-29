@@ -8,6 +8,8 @@ use App\Models\CheckIn;
 use App\Models\Guest;
 use App\Models\Hotel;
 use App\Models\TravelDocument;
+use App\Models\WatchlistEntry;
+use App\Models\WatchlistHit;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -30,7 +32,7 @@ class AuthorityDashboardController extends Controller
             return response()->json(['data' => $this->nationalStats()]);
         }
 
-        return response()->json(['data' => $this->zoneStats($governorate)]);
+        return response()->json(['data' => $this->zoneStats($governorate, $profile['organization_id'] ?? null)]);
     }
 
     /**
@@ -156,8 +158,9 @@ class AuthorityDashboardController extends Controller
         $user    = $request->user();
         $profile = $user->authorityProfile()->with('organization')->first();
         return [
-            'org_type'    => $profile?->organization?->type,
-            'governorate' => $profile?->organization?->governorate,
+            'org_type'        => $profile?->organization?->type,
+            'governorate'     => $profile?->organization?->governorate,
+            'organization_id' => $profile?->organization_id,
         ];
     }
 
@@ -168,10 +171,23 @@ class AuthorityDashboardController extends Controller
     {
         $today = now()->toDateString();
 
-        $activeGuests   = CheckIn::where('status', 'active')->whereHas('hotel')->count();
+        // « Séjours actifs » = check-ins en cours. « Personnes présentes » =
+        // voyageurs distincts (un séjour peut compter plusieurs personnes).
+        $activeStays    = CheckIn::where('status', 'active')->whereHas('hotel')->count();
         $checkInsToday  = CheckIn::whereDate('check_in_date', $today)->whereHas('hotel')->count();
         $checkOutsToday = CheckIn::whereDate('actual_check_out_date', $today)->whereHas('hotel')->count();
         $activeHotels   = Hotel::where('status', 'active')->count();
+
+        $guestsPresent = DB::table('check_in_guests')
+            ->join('check_ins', 'check_in_guests.check_in_id', '=', 'check_ins.id')
+            ->join('hotels', 'check_ins.hotel_id', '=', 'hotels.id')
+            ->where('check_ins.status', 'active')
+            ->whereNull('hotels.deleted_at')
+            ->distinct()
+            ->count('check_in_guests.guest_id');
+
+        // Taille de la liste de surveillance active (national).
+        $watchlistActive = WatchlistEntry::active()->count();
 
         // Guests present by governorate. Raw query-builder joins bypass Eloquent's
         // SoftDeletingScope, so a deleted hotel must be excluded explicitly here —
@@ -227,13 +243,20 @@ class AuthorityDashboardController extends Controller
                 ->count()
             : 0;
 
+        // Alertes de sécurité actives (correspondances liste de surveillance
+        // non encore prises en charge) — périmètre national.
+        $securityAlertsActive = WatchlistHit::where('authority_status', '!=', 'acknowledged')->count();
+
         return [
             'type'              => 'ministry',
-            'active_guests'     => $activeGuests,
+            'active_guests'     => $activeStays,
+            'guests_present'    => $guestsPresent,
             'check_ins_today'   => $checkInsToday,
             'check_outs_today'  => $checkOutsToday,
             'active_hotels'     => $activeHotels,
             'expiring_docs_30d' => $expiringCount,
+            'watchlist_active_entries' => $watchlistActive,
+            'security_alerts_active'   => $securityAlertsActive,
             'by_governorate'    => $byGovernorat,
             'top_nationalities' => $topNationalities,
             'weekly_trend'      => $trend,
@@ -243,7 +266,7 @@ class AuthorityDashboardController extends Controller
     /**
      * Zone statistics for a police station in a specific governorate.
      */
-    private function zoneStats(?string $governorate): array
+    private function zoneStats(?string $governorate, ?string $organizationId = null): array
     {
         $today = now()->toDateString();
 
@@ -258,9 +281,24 @@ class AuthorityDashboardController extends Controller
             });
         };
 
-        $activeGuests   = CheckIn::where('status', 'active')->tap($scope)->count();
+        $activeStays    = CheckIn::where('status', 'active')->tap($scope)->count();
         $checkInsToday  = CheckIn::whereDate('check_in_date', $today)->tap($scope)->count();
         $checkOutsToday = CheckIn::whereDate('actual_check_out_date', $today)->tap($scope)->count();
+
+        $guestsPresent = DB::table('check_in_guests')
+            ->join('check_ins', 'check_in_guests.check_in_id', '=', 'check_ins.id')
+            ->join('hotels', 'check_ins.hotel_id', '=', 'hotels.id')
+            ->join('hotel_addresses', 'hotels.id', '=', 'hotel_addresses.hotel_id')
+            ->where('check_ins.status', 'active')
+            ->whereNull('hotels.deleted_at')
+            ->when($governorate, fn($q) => $q->where('hotel_addresses.governorate', $governorate))
+            ->distinct()
+            ->count('check_in_guests.guest_id');
+
+        // Liste de surveillance active du poste (son organisation).
+        $watchlistActive = WatchlistEntry::active()
+            ->when($organizationId, fn($q) => $q->where('organization_id', $organizationId))
+            ->count();
 
         $hotelsInZone = Hotel::where('status', 'active')
             ->when($governorate, fn($q) =>
@@ -320,14 +358,23 @@ class AuthorityDashboardController extends Controller
                 ];
             });
 
+        // Alertes de sécurité actives dans le gouvernorat du poste.
+        $securityAlertsActive = WatchlistHit::where('authority_status', '!=', 'acknowledged')
+            ->when($governorate, fn ($q) => $q->whereHas('hotel.address',
+                fn ($a) => $a->where('governorate', $governorate)))
+            ->count();
+
         return [
             'type'              => 'police',
             'governorate'       => $governorate,
-            'active_guests'     => $activeGuests,
+            'active_guests'     => $activeStays,
+            'guests_present'    => $guestsPresent,
             'check_ins_today'   => $checkInsToday,
             'check_outs_today'  => $checkOutsToday,
             'hotels_in_zone'    => $hotelsInZone,
             'expiring_docs_30d' => $expiringCount,
+            'watchlist_active_entries' => $watchlistActive,
+            'security_alerts_active'   => $securityAlertsActive,
             'nationalities'     => $nationalities,
             'recent_arrivals'   => $recentArrivals,
         ];
