@@ -201,8 +201,10 @@ class SecurityAlertController extends Controller
             'room_number'         => $h->checkIn?->room?->number,
             'check_in_id'         => $h->check_in_id,
             'check_in_reference'  => $h->checkIn?->reference,
-            'check_in_date'       => $h->checkIn?->check_in_date,
-            'check_out_date'      => $h->checkIn?->expected_check_out_date,
+            // Format Y-m-d (comme date_of_birth) : le front attend une date nue,
+            // pas un ISO datetime — sinon « Invalid Date » à l'affichage.
+            'check_in_date'       => $h->checkIn?->check_in_date?->toDateString(),
+            'check_out_date'      => $h->checkIn?->expected_check_out_date?->toDateString(),
 
             // Signalement
             'severity'    => $h->entry?->severity,
