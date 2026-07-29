@@ -31,7 +31,7 @@ class CleanupDarElKenzDemoFiches extends Command
 
     protected $description = 'Supprime les fiches de démo SEED-DEMO-2026 de Dar El Kenz uniquement';
 
-    private const HOTEL_NAME = 'Dar El Kenz';
+    private const HOTEL_NAME = 'Dar el Kenz';
     private const MARKER     = 'SEED-DEMO-2026';
 
     public function handle(): int

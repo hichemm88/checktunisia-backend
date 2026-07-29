@@ -40,7 +40,7 @@ class SeedDarElKenzDemoFiches extends Command
 
     protected $description = 'Insère ~40 fiches de police fictives (marquées SEED-DEMO-2026) dans Dar El Kenz uniquement';
 
-    private const HOTEL_NAME = 'Dar El Kenz';
+    private const HOTEL_NAME = 'Dar el Kenz';
     private const MARKER     = 'SEED-DEMO-2026';
     private const RNG_SEED   = 20260729;
 
