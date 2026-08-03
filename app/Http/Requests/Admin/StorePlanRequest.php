@@ -17,9 +17,16 @@ class StorePlanRequest extends FormRequest {
             'price_yearly'  => ['nullable', 'numeric', 'min:0'],
             'included_properties'  => ['sometimes', 'integer', 'min:1'],
             'extra_property_price' => ['sometimes', 'nullable', 'numeric', 'min:0'],
+            // Dépassement de quota check-ins : prix par tranche entamée +
+            // taille de tranche. null = pas de facturation de dépassement.
+            'overage_price'        => ['sometimes', 'nullable', 'numeric', 'min:0'],
+            'overage_bundle_size'  => ['sometimes', 'nullable', 'integer', 'min:1'],
             'currency'      => ['sometimes', 'string', 'max:10'],
             'features'      => ['sometimes', 'array'],
             'is_active'     => ['sometimes', 'boolean'],
+            // Visible/souscriptible sur la grille publique. Un plan legacy
+            // (Multi-sites) reste actif pour ses abonnés mais non public.
+            'is_public'     => ['sometimes', 'boolean'],
             'sort_order'    => ['sometimes', 'integer'],
         ], self::featureRules(), self::marketingRules());
     }
@@ -34,6 +41,7 @@ class StorePlanRequest extends FormRequest {
             'features.max_properties'      => ['sometimes', 'nullable', 'integer', 'min:-1'],
             'features.max_users'           => ['sometimes', 'nullable', 'integer', 'min:-1'],
             'features.ocr_scans_per_month' => ['sometimes', 'nullable', 'integer', 'min:-1'],
+            'features.checkins_per_month'  => ['sometimes', 'nullable', 'integer', 'min:-1'],
             'features.whatsapp_relay'      => ['sometimes', 'boolean'],
         ];
     }

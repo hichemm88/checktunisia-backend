@@ -24,6 +24,11 @@ use Illuminate\Http\Exceptions\HttpResponseException;
  *                           historique — exposée ici pour l'UI, appliquée
  *                           dans OrganizationController)
  *  - ocr_scans_per_month  : scans de documents par mois calendaire
+ *  - checkins_per_month   : quota de check-ins par mois calendaire.
+ *                           JAMAIS bloquant (obligation légale de déclarer) —
+ *                           ne pas utiliser avec assertWithinLimit. Sert aux
+ *                           alertes et à la facturation des dépassements
+ *                           (voir CheckinQuota).
  *  - whatsapp_relay       : relais des fiches police vers WhatsApp (bool)
  *
  * Web et mobile passent par les mêmes endpoints : l'application côté serveur
@@ -37,6 +42,7 @@ class PlanEntitlements
         'max_users'           => null,
         'max_rooms'           => null,
         'ocr_scans_per_month' => null,
+        'checkins_per_month'  => null,
         'whatsapp_relay'      => true,
     ];
 
@@ -46,10 +52,11 @@ class PlanEntitlements
         'max_users'           => 'Utilisateurs',
         'max_rooms'           => 'Chambres (total)',
         'ocr_scans_per_month' => 'Scans OCR / mois',
+        'checkins_per_month'  => 'Check-ins / mois',
         'whatsapp_relay'      => 'Relais WhatsApp police',
     ];
 
-    private const LIMIT_KEYS = ['max_properties', 'max_users', 'max_rooms', 'ocr_scans_per_month'];
+    private const LIMIT_KEYS = ['max_properties', 'max_users', 'max_rooms', 'ocr_scans_per_month', 'checkins_per_month'];
     private const TOGGLE_KEYS = ['whatsapp_relay'];
 
     // ─── Résolution ──────────────────────────────────────────────────────────
@@ -126,6 +133,7 @@ class PlanEntitlements
                 ->count(),
             'max_rooms'           => $org->totalRooms(),
             'ocr_scans_per_month' => self::scansThisMonth($org),
+            'checkins_per_month'  => CheckinQuota::usedInMonth($org),
         ];
     }
 
@@ -161,6 +169,13 @@ class PlanEntitlements
      */
     public static function assertWithinLimit(Organization $org, string $key, ?int $used = null, int $adding = 1): void
     {
+        // Garde-fou légal : le quota de check-ins n'est JAMAIS bloquant — un
+        // établissement doit toujours pouvoir déclarer un voyageur. Le
+        // dépassement est facturé (CheckinQuota), pas empêché.
+        if ($key === 'checkins_per_month') {
+            return;
+        }
+
         $limit = self::limit($org, $key);
         if ($limit === null) {
             return;

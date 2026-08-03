@@ -17,7 +17,7 @@ class Subscription extends Model
     protected $keyType = 'string';
 
     protected $fillable = [
-        'hotel_id', 'organization_id', 'plan_id', 'custom_price', 'status', 'billing_cycle',
+        'hotel_id', 'organization_id', 'plan_id', 'custom_price', 'is_legacy_plan', 'status', 'billing_cycle',
         'started_at', 'expires_at', 'cancelled_at', 'suspended_at',
         'suspended_reason', 'auto_renew', 'metadata', 'created_by',
     ];
@@ -29,8 +29,9 @@ class Subscription extends Model
             'expires_at'    => 'datetime',
             'cancelled_at'  => 'datetime',
             'suspended_at'  => 'datetime',
-            'auto_renew'    => 'boolean',
-            'metadata'      => 'array',
+            'auto_renew'     => 'boolean',
+            'is_legacy_plan' => 'boolean',
+            'metadata'       => 'array',
         ];
     }
 
