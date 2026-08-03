@@ -262,6 +262,15 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('subscription', [SubscriptionController::class, 'current']);
         });
 
+    // Grille V2 : demande d'upgrade vers un plan supérieur — notifie l'admin
+    // plateforme (le billing en place ne gère pas le self-service ni le
+    // prorata ; effet appliqué par l'admin, au cycle suivant par défaut).
+    Route::prefix('hotel')
+        ->middleware(['role:hotel_admin', 'throttle:5,10'])
+        ->group(function () {
+            Route::post('subscription/upgrade-request', [SubscriptionController::class, 'requestUpgrade']);
+        });
+
     // Invoice history + payment (Flouci/virement) — hotel_admin only, matching
     // the billing-tab access level elsewhere. Org-scoped, not tenant-scoped:
     // admin-created invoices are org-level and must be reachable before any
@@ -386,6 +395,8 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('hosts/{host_id}/subscriptions', [SubscriptionAdminController::class, 'indexForHost']);
             Route::post('hosts/{host_id}/subscriptions', [SubscriptionAdminController::class, 'storeForHost']);
             Route::patch('hosts/{host_id}/subscriptions/{id}', [SubscriptionAdminController::class, 'updateForHost']);
+            // Grille V2 : migration manuelle d'un compte legacy (action explicite, jamais automatique).
+            Route::post('hosts/{host_id}/subscriptions/{id}/migrate-to-v2', [SubscriptionAdminController::class, 'migrateToV2']);
             Route::get('hosts/{host_id}/invoices', [SubscriptionAdminController::class, 'invoicesForHost']);
             Route::post('hosts/{host_id}/invoices', [SubscriptionAdminController::class, 'createInvoiceForHost']);
             Route::patch('hosts/{host_id}/invoices/{id}', [SubscriptionAdminController::class, 'updateInvoiceForHost']);
@@ -424,6 +435,13 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             // Payments (read-only ledger)
             Route::get('payments', [PlatformSettingController::class, 'payments']);
+
+            // Grille V2 — pilotage des quotas de check-ins (outil d'upsell) :
+            // comptes à ≥80 % / en dépassement ce mois-ci, dépassements
+            // clôturés + export CSV.
+            Route::get('quotas', [\App\Http\Controllers\Admin\QuotaAdminController::class, 'index']);
+            Route::get('quotas/overages', [\App\Http\Controllers\Admin\QuotaAdminController::class, 'overages']);
+            Route::get('quotas/export', [\App\Http\Controllers\Admin\QuotaAdminController::class, 'export']);
 
             // Codes promo (remise sur facture)
             Route::get('coupons', [CouponController::class, 'index']);
