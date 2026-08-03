@@ -24,6 +24,8 @@ class PushNotificationService
     public const TYPE_FICHE_PENDING   = 'fiche_pending';
     public const TYPE_MANAGER_MESSAGE = 'manager_message';
     public const TYPE_DEPARTURE_DUE   = 'departure_due';
+    public const TYPE_QUOTA_WARNING   = 'quota_warning';
+    public const TYPE_QUOTA_REACHED   = 'quota_reached';
 
     /**
      * A manager broadcasts a free-text message to the receptionists of a property (or, if no
@@ -97,6 +99,59 @@ class PushNotificationService
         } catch (\Throwable $e) {
             Log::warning('notifyReceptionists failed', ['error' => $e->getMessage()]);
             return 0;
+        }
+    }
+
+    /**
+     * Alerte quota de check-ins vers les MANAGERS de l'organisation (80 % /
+     * 100 % du plafond mensuel). Une ligne persistée par manager + push.
+     * Jamais bloquant pour l'enregistrement d'un voyageur. Never throws.
+     */
+    public function notifyQuota(\App\Models\Organization $org, string $type, string $title, string $body, array $quotaStatus = []): void
+    {
+        try {
+            // hotel_id est obligatoire sur app_notifications : on attache la
+            // notification au premier établissement (les plans à quota n'en
+            // ont qu'un ; un compte multi-établissements est illimité).
+            $hotel = $org->properties()->orderBy('created_at')->first();
+            if (!$hotel) {
+                return;
+            }
+
+            $recipients = User::where('organization_id', $org->id)
+                ->whereHas('roles', fn ($q) => $q->where('name', 'hotel_admin'))
+                ->get();
+            if ($recipients->isEmpty()) {
+                return;
+            }
+
+            $payload = [
+                'property_name' => $hotel->name,
+                'quota'         => $quotaStatus['quota'] ?? null,
+                'used'          => $quotaStatus['used'] ?? null,
+            ];
+
+            foreach ($recipients as $recipient) {
+                AppNotification::create([
+                    'user_id'  => $recipient->id,
+                    'hotel_id' => $hotel->id,
+                    'type'     => $type,
+                    'title'    => $title,
+                    'body'     => $body,
+                    'data'     => $payload,
+                ]);
+            }
+
+            $tokens = DeviceToken::whereIn('user_id', $recipients->pluck('id'))->pluck('token')->all();
+            if (!empty($tokens)) {
+                dispatch(new SendExpoPushJob(array_values(array_unique($tokens)), $title, $body, [
+                    'type'          => $type,
+                    'property_id'   => $hotel->id,
+                    'property_name' => $hotel->name,
+                ]))->afterResponse();
+            }
+        } catch (\Throwable $e) {
+            Log::warning('notifyQuota failed', ['organization_id' => $org->id ?? null, 'type' => $type, 'error' => $e->getMessage()]);
         }
     }
 
