@@ -40,7 +40,7 @@ HTML,
 <p>Bonjour <strong>{{name}}</strong>,</p>
 <p>Votre compte hébergeur sur <strong>Qayed</strong> a été suspendu.</p>
 <div class="danger"><strong>Motif :</strong> {{reason}}</div>
-<p style="margin-top:20px;">Pour toute question ou pour régulariser la situation, contactez <a href="mailto:support@qayed.tn" style="color:#5346A8;">support@qayed.tn</a>.</p>
+<p style="margin-top:20px;">Pour toute question ou pour régulariser la situation, contactez <a href="mailto:contact@qayed.tn" style="color:#5346A8;">contact@qayed.tn</a>.</p>
 HTML,
         ],
         'payment_received' => [
@@ -153,7 +153,7 @@ HTML,
 <p>Hello <strong>{{name}}</strong>,</p>
 <p>Your host account on <strong>Qayed</strong> has been suspended.</p>
 <div class="danger"><strong>Reason:</strong> {{reason}}</div>
-<p style="margin-top:20px;">For any question or to resolve the situation, contact <a href="mailto:support@qayed.tn" style="color:#5346A8;">support@qayed.tn</a>.</p>
+<p style="margin-top:20px;">For any question or to resolve the situation, contact <a href="mailto:contact@qayed.tn" style="color:#5346A8;">contact@qayed.tn</a>.</p>
 HTML,
             ],
             'payment_received' => [
@@ -259,7 +259,7 @@ HTML,
 <p>مرحبًا <strong>{{name}}</strong>،</p>
 <p>تم تعليق حساب المضيف الخاص بك على <strong>قيد</strong>.</p>
 <div class="danger"><strong>السبب:</strong> {{reason}}</div>
-<p style="margin-top:20px;">لأي استفسار أو لتسوية الوضع، تواصل مع <a href="mailto:support@qayed.tn" style="color:#5346A8;">support@qayed.tn</a>.</p>
+<p style="margin-top:20px;">لأي استفسار أو لتسوية الوضع، تواصل مع <a href="mailto:contact@qayed.tn" style="color:#5346A8;">contact@qayed.tn</a>.</p>
 HTML,
             ],
             'payment_received' => [
