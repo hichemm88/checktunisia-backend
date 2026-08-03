@@ -84,6 +84,37 @@ class OrganizationAdminController extends Controller
             $pricing = \App\Services\Subscription\PlanPricing::detail($sub, $org->properties->count());
         }
 
+        // ── Quota check-ins (grille V2) : conso du mois vs quota, dépassements
+        // facturés et historique 12 mois — la vue 360° de l'upsell.
+        $quota = \App\Services\Subscription\CheckinQuota::status($org);
+
+        $monthlyCounts = \App\Models\CheckIn::whereIn('hotel_id', $hotelIds)
+            ->where('status', '!=', 'cancelled')
+            ->where('created_at', '>=', now()->startOfMonth()->subMonths(11))
+            ->selectRaw("to_char(date_trunc('month', created_at), 'YYYY-MM') as month, COUNT(*) as count")
+            ->groupBy('month')
+            ->pluck('count', 'month');
+
+        $charges = \App\Models\OverageCharge::with('invoice')
+            ->where('organization_id', $org->id)
+            ->where('period', '>=', now()->startOfMonth()->subMonths(11)->toDateString())
+            ->get()
+            ->keyBy(fn ($c) => $c->period->format('Y-m'));
+
+        $quotaHistory = [];
+        for ($i = 11; $i >= 0; $i--) {
+            $month  = now()->startOfMonth()->subMonths($i)->format('Y-m');
+            $charge = $charges->get($month);
+            $quotaHistory[] = [
+                'month'          => $month,
+                'count'          => (int) ($monthlyCounts[$month] ?? 0),
+                'overage_count'  => $charge?->overage_count,
+                'overage_amount' => $charge?->amount,
+                'overage_status' => $charge?->status,
+                'invoice_number' => $charge?->invoice?->invoice_number,
+            ];
+        }
+
         return response()->json(['data' => array_merge($org->toArray(), [
             'users' => $users,
             'metrics' => [
@@ -96,6 +127,9 @@ class OrganizationAdminController extends Controller
             'entitlements'      => \App\Services\Subscription\PlanEntitlements::summary($org),
             'feature_overrides' => (array) ($sub?->metadata['feature_overrides'] ?? []),
             'pricing'           => $pricing,
+            'quota'             => $quota,
+            'quota_history'     => $quotaHistory,
+            'is_legacy_plan'    => (bool) ($sub?->is_legacy_plan),
         ])]);
     }
 

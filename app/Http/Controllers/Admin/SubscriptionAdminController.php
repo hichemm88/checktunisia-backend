@@ -107,6 +107,59 @@ class SubscriptionAdminController extends Controller {
         return response()->json(['data' => $sub->fresh()->load('plan')]);
     }
 
+    /**
+     * Migration MANUELLE d'un compte legacy vers la grille V2 — action
+     * explicite de l'admin, jamais automatique (grandfathering). Retire le
+     * flag legacy, l'override de quota figé et (sauf demande contraire) le
+     * prix négocié, et applique le plan cible de la nouvelle grille.
+     */
+    public function migrateToV2(Request $request, string $hostId, string $id): JsonResponse {
+        $sub = Subscription::with('plan')->where('organization_id', $hostId)->findOrFail($id);
+
+        $v = $request->validate([
+            'plan_id'           => ['required', 'exists:subscription_plans,id'],
+            'keep_custom_price' => ['sometimes', 'boolean'],
+        ]);
+
+        $target = \App\Models\SubscriptionPlan::findOrFail($v['plan_id']);
+        if (!$target->is_active || !$target->is_public) {
+            return response()->json([
+                'errors' => [['code' => 'PLAN_NOT_AVAILABLE', 'message' => 'Le plan cible doit être un plan actif de la grille publique.']],
+            ], 422);
+        }
+
+        $old = $sub->only(['plan_id', 'custom_price', 'is_legacy_plan']);
+
+        $metadata  = $sub->metadata ?? [];
+        $overrides = (array) ($metadata['feature_overrides'] ?? []);
+        unset($overrides['checkins_per_month']); // le quota redevient celui du plan V2
+        $metadata['feature_overrides'] = $overrides;
+
+        $sub->update([
+            'plan_id'        => $target->id,
+            'is_legacy_plan' => false,
+            'custom_price'   => ($v['keep_custom_price'] ?? false) ? $sub->custom_price : null,
+            'metadata'       => $metadata,
+        ]);
+
+        SubscriptionEvent::create([
+            'subscription_id' => $sub->id,
+            'event_type'      => 'migrated_to_v2',
+            'previous_status' => $sub->status,
+            'new_status'      => $sub->status,
+            'previous_plan_id'=> $old['plan_id'],
+            'new_plan_id'     => $target->id,
+            'notes'           => "Migration manuelle vers la grille V2 ({$target->name}).",
+            'performed_by'    => $request->user()->id,
+            'created_at'      => now(),
+        ]);
+
+        Cache::forget("org_subscription_active:{$hostId}");
+        AuditLogger::log('subscription.migrated_to_v2', $sub, $old, $sub->fresh()->only(['plan_id', 'custom_price', 'is_legacy_plan']));
+
+        return response()->json(['data' => $sub->fresh()->load('plan')]);
+    }
+
     public function invoicesForHost(Request $request, string $hostId): JsonResponse {
         Organization::findOrFail($hostId);
         $invoices = Invoice::whereHas('subscription', fn($q) => $q->where('organization_id', $hostId))
