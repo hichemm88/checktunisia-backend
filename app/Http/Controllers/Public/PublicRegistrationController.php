@@ -55,8 +55,11 @@ class PublicRegistrationController extends Controller
         ]);
         $locale = $validated['locale'] ?? 'fr';
 
+        // is_public : un plan legacy (Multi-sites) n'est plus souscriptible
+        // pour les nouveaux comptes, même s'il reste actif pour les anciens.
         $plan = SubscriptionPlan::where('slug', $validated['plan_slug'])
             ->where('is_active', true)
+            ->where('is_public', true)
             ->firstOrFail();
 
         $result = DB::transaction(function () use ($validated, $plan, $locale) {

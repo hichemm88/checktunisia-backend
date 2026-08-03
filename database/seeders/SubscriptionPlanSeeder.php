@@ -9,6 +9,10 @@ class SubscriptionPlanSeeder extends Seeder {
      * Trilingual marketing/display content per plan slug — the single source
      * used both here (fresh installs) and by the data migration that
      * backfills existing rows. Mirrors the public pricing cards.
+     *
+     * Grille V2 (2026-08) : Essentiel 100 check-ins/mois, Pro 600, nouveau
+     * plan Hôtel « Grand Flux » illimité avec option multi-établissements.
+     * Multi-sites est legacy : conservé pour ses abonnés, plus souscriptible.
      */
     public static function marketingDefaults(): array {
         $cta = ['fr' => 'Essayer 7 jours gratuit', 'en' => 'Try 7 days free', 'ar' => 'جرّب 7 أيام مجانًا'];
@@ -24,9 +28,9 @@ class SubscriptionPlanSeeder extends Seeder {
                 'tier'         => ['fr' => 'Starter', 'en' => 'Starter', 'ar' => 'البداية'],
                 'display_name' => ['fr' => 'Essentiel', 'en' => 'Essential', 'ar' => 'الأساسي'],
                 'tagline'      => [
-                    'fr' => "Pour démarrer — petits hébergements avec un volume modéré d'arrivées.",
-                    'en' => 'To get started — small properties with a moderate flow of arrivals.',
-                    'ar' => 'للانطلاق — مؤسسات إقامة صغيرة بعدد وافدين معتدل.',
+                    'fr' => "Pour les petites maisons d'hôtes avec un volume modéré d'arrivées.",
+                    'en' => 'For small guest houses with a moderate volume of arrivals.',
+                    'ar' => 'لدور الضيافة الصغيرة ذات عدد وافدين معتدل.',
                 ],
                 'price_note'        => $perProperty,
                 'price_note_yearly' => $perPropertyYearly,
@@ -40,17 +44,17 @@ class SubscriptionPlanSeeder extends Seeder {
                     ['included' => true,  'text' => ['fr' => 'Fiche de police imprimable', 'en' => 'Printable police form', 'ar' => 'بطاقة شرطة قابلة للطباعة']],
                     ['included' => true,  'text' => ['fr' => '2 comptes utilisateurs', 'en' => '2 user accounts', 'ar' => 'حسابان للمستخدمين']],
                     ['included' => true,  'text' => ['fr' => 'Historique 12 mois', 'en' => '12-month history', 'ar' => 'سجل 12 شهرًا']],
-                    ['included' => false, 'text' => ['fr' => 'Multi-établissements', 'en' => 'Multi-property', 'ar' => 'تعدد المؤسسات']],
                     ['included' => false, 'text' => ['fr' => 'Export CSV nuitées', 'en' => 'Overnight stays CSV export', 'ar' => 'تصدير CSV لليالي المبيت']],
+                    ['included' => false, 'text' => ['fr' => 'Multi-établissements', 'en' => 'Multi-property', 'ar' => 'تعدد المؤسسات']],
                 ],
             ],
             'pro' => [
                 'tier'         => ['fr' => 'Pro', 'en' => 'Pro', 'ar' => 'احترافي'],
                 'display_name' => ['fr' => 'Professionnel', 'en' => 'Professional', 'ar' => 'المحترف'],
                 'tagline'      => [
-                    'fr' => "Pour les hôtels et maisons d'hôtes avec un flux régulier d'arrivées.",
-                    'en' => 'For hotels and guest houses with a steady flow of arrivals.',
-                    'ar' => 'للفنادق ودور الضيافة ذات تدفق منتظم من الوافدين.',
+                    'fr' => "Pour les maisons d'hôtes et petits hôtels avec un flux régulier d'arrivées.",
+                    'en' => 'For guest houses and small hotels with a steady flow of arrivals.',
+                    'ar' => 'لدور الضيافة والفنادق الصغيرة ذات تدفق منتظم من الوافدين.',
                 ],
                 'price_note'        => $perProperty,
                 'price_note_yearly' => $perPropertyYearly,
@@ -59,13 +63,41 @@ class SubscriptionPlanSeeder extends Seeder {
                 'cta_label'    => $cta,
                 'bullets'      => [
                     ['included' => true,  'text' => ['fr' => '1 établissement', 'en' => '1 property', 'ar' => 'مؤسسة واحدة']],
-                    ['included' => true,  'text' => ['fr' => 'Check-ins illimités', 'en' => 'Unlimited check-ins', 'ar' => 'تسجيلات وصول غير محدودة']],
+                    ['included' => true,  'text' => ['fr' => '600 check-ins / mois', 'en' => '600 check-ins / month', 'ar' => '600 تسجيل وصول / شهريًا']],
                     ['included' => true,  'text' => ['fr' => 'Scan MRZ passeport & CIN', 'en' => 'Passport & ID MRZ scan', 'ar' => 'مسح MRZ لجواز السفر وبطاقة التعريف']],
                     ['included' => true,  'text' => ['fr' => 'Fiche de police imprimable', 'en' => 'Printable police form', 'ar' => 'بطاقة شرطة قابلة للطباعة']],
                     ['included' => true,  'text' => ['fr' => '5 comptes utilisateurs', 'en' => '5 user accounts', 'ar' => '5 حسابات للمستخدمين']],
                     ['included' => true,  'text' => ['fr' => 'Historique illimité', 'en' => 'Unlimited history', 'ar' => 'سجل غير محدود']],
                     ['included' => true,  'text' => ['fr' => 'Export CSV nuitées', 'en' => 'Overnight stays CSV export', 'ar' => 'تصدير CSV لليالي المبيت']],
                     ['included' => false, 'text' => ['fr' => 'Multi-établissements', 'en' => 'Multi-property', 'ar' => 'تعدد المؤسسات']],
+                ],
+            ],
+            'hotel' => [
+                'tier'         => ['fr' => 'Hôtel', 'en' => 'Hotel', 'ar' => 'فندق'],
+                'display_name' => ['fr' => 'Grand Flux', 'en' => 'High Volume', 'ar' => 'التدفق الكبير'],
+                'tagline'      => [
+                    'fr' => "Pour les hôtels à fort volume d'arrivées et les groupes.",
+                    'en' => 'For high-volume hotels and groups.',
+                    'ar' => 'للفنادق ذات حجم وصول مرتفع وللمجموعات.',
+                ],
+                'price_note'        => $perProperty,
+                'price_note_yearly' => $perPropertyYearly,
+                'badge'        => null,
+                'featured'     => false,
+                'cta_label'    => $cta,
+                // L'option multi-établissements (+99 TND/mois par établissement)
+                // est rendue automatiquement par la carte publique depuis
+                // extra_property_price — pas de bullet dédié pour éviter le doublon.
+                'bullets'      => [
+                    ['included' => true,  'text' => ['fr' => '1 établissement', 'en' => '1 property', 'ar' => 'مؤسسة واحدة']],
+                    ['included' => true,  'text' => ['fr' => 'Check-ins illimités', 'en' => 'Unlimited check-ins', 'ar' => 'تسجيلات وصول غير محدودة']],
+                    ['included' => true,  'text' => ['fr' => 'Scan MRZ passeport & CIN', 'en' => 'Passport & ID MRZ scan', 'ar' => 'مسح MRZ لجواز السفر وبطاقة التعريف']],
+                    ['included' => true,  'text' => ['fr' => 'Fiche de police imprimable', 'en' => 'Printable police form', 'ar' => 'بطاقة شرطة قابلة للطباعة']],
+                    ['included' => true,  'text' => ['fr' => 'Comptes utilisateurs illimités', 'en' => 'Unlimited user accounts', 'ar' => 'حسابات مستخدمين غير محدودة']],
+                    ['included' => true,  'text' => ['fr' => 'Historique illimité', 'en' => 'Unlimited history', 'ar' => 'سجل غير محدود']],
+                    ['included' => true,  'text' => ['fr' => 'Export CSV nuitées', 'en' => 'Overnight stays CSV export', 'ar' => 'تصدير CSV لليالي المبيت']],
+                    ['included' => true,  'text' => ['fr' => "Journal d'activité", 'en' => 'Activity log', 'ar' => 'سجل النشاط']],
+                    ['included' => true,  'text' => ['fr' => 'Support prioritaire', 'en' => 'Priority support', 'ar' => 'دعم ذو أولوية']],
                 ],
             ],
             'multi-sites' => [
@@ -102,22 +134,28 @@ class SubscriptionPlanSeeder extends Seeder {
         ];
     }
 
+    /** Colonnes/paramètres par slug — même source pour les installs neuves et la migration de données V2. */
+    public static function planDefaults(): array {
+        return [
+            // price_yearly null = règle "1 mois offert" (11 × mensuel) via effective_price_yearly.
+            // checkins_per_month : quota mensuel de check-ins (-1 = illimité) — alertes +
+            // facturation des dépassements via overage_price/overage_bundle_size
+            // (+10 TND par tranche de 50 entamée). JAMAIS bloquant.
+            // Multi-sites : legacy, non souscriptible (is_public=false), conservé
+            // pour ses abonnés existants.
+            ['name'=>'Essentiel','slug'=>'essentiel','scope'=>'hotel','min_rooms'=>1,'max_rooms'=>5,'price_monthly'=>59.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>2,'ocr_scans_per_month'=>100,'checkins_per_month'=>100],'included_properties'=>1,'extra_property_price'=>null,'overage_price'=>10.000,'overage_bundle_size'=>50,'is_public'=>true,'sort_order'=>1],
+            ['name'=>'Pro','slug'=>'pro','scope'=>'hotel','min_rooms'=>6,'max_rooms'=>20,'price_monthly'=>119.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>5,'ocr_scans_per_month'=>-1,'checkins_per_month'=>600],'included_properties'=>1,'extra_property_price'=>null,'overage_price'=>10.000,'overage_bundle_size'=>50,'is_public'=>true,'sort_order'=>2],
+            ['name'=>'Hôtel','slug'=>'hotel','scope'=>'organization','min_rooms'=>1,'max_rooms'=>null,'price_monthly'=>299.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>-1,'ocr_scans_per_month'=>-1,'checkins_per_month'=>-1],'included_properties'=>1,'extra_property_price'=>99.000,'overage_price'=>null,'overage_bundle_size'=>null,'is_public'=>true,'sort_order'=>3],
+            ['name'=>'Multi-sites','slug'=>'multi-sites','scope'=>'organization','min_rooms'=>1,'max_rooms'=>null,'price_monthly'=>199.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>-1,'ocr_scans_per_month'=>-1,'checkins_per_month'=>-1],'included_properties'=>3,'extra_property_price'=>39.000,'overage_price'=>null,'overage_bundle_size'=>null,'is_public'=>false,'sort_order'=>4],
+        ];
+    }
+
     public function run(): void {
         $marketing = self::marketingDefaults();
-        $plans = [
-            // price_yearly null = règle "1 mois offert" (11 × mensuel) via effective_price_yearly
-            // included_properties / extra_property_price : grille tarifaire par
-            // établissement. Essentiel & Pro plafonnés à 1 établissement (pas
-            // d'extension) ; Multi-sites inclut 3 établissements puis +39 TND/mois
-            // par établissement supplémentaire (pas de plafond).
-            ['name'=>'Essentiel','slug'=>'essentiel','scope'=>'hotel','min_rooms'=>1,'max_rooms'=>5,'price_monthly'=>59.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>2,'ocr_scans_per_month'=>100],'included_properties'=>1,'extra_property_price'=>null,'sort_order'=>1],
-            ['name'=>'Pro','slug'=>'pro','scope'=>'hotel','min_rooms'=>6,'max_rooms'=>20,'price_monthly'=>119.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>5,'ocr_scans_per_month'=>-1],'included_properties'=>1,'extra_property_price'=>null,'sort_order'=>2],
-            ['name'=>'Multi-sites','slug'=>'multi-sites','scope'=>'organization','min_rooms'=>1,'max_rooms'=>null,'price_monthly'=>199.000,'price_yearly'=>null,'currency'=>'TND','features'=>['max_users'=>-1,'ocr_scans_per_month'=>-1],'included_properties'=>3,'extra_property_price'=>39.000,'sort_order'=>3],
-        ];
-        foreach ($plans as $plan) {
+        foreach (self::planDefaults() as $plan) {
             $plan['marketing'] = $marketing[$plan['slug']] ?? null;
             SubscriptionPlan::updateOrCreate(['slug'=>$plan['slug']], $plan);
         }
-        $this->command->info('Subscription plans seeded.');
+        $this->command?->info('Subscription plans seeded.');
     }
 }
