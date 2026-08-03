@@ -18,6 +18,12 @@ Schedule::command('subscriptions:expire-overdue')->dailyAt('03:00');
 Schedule::command('invoices:generate-due')->dailyAt('07:00');
 Schedule::command('invoices:dunning')->dailyAt('07:30');
 
+// Grille V2 — clôture mensuelle des quotas de check-ins : calcul des tranches
+// de dépassement du mois écoulé, facturation automatique (comptes non-legacy
+// uniquement) et détection des candidats upsell (2 mois consécutifs).
+// Idempotente — relançable manuellement : php artisan quota:close-month --month=YYYY-MM
+Schedule::command('quota:close-month')->monthlyOn(1, '04:00');
+
 // Notify managers of check-ins left unvalidated for >30 min (scan done, not finalised)
 Schedule::command('checkins:notify-pending')->everyTenMinutes()->withoutOverlapping();
 

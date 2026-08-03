@@ -89,6 +89,35 @@ HTML,
 {{cta_button}}
 HTML,
         ],
+        'quota_warning' => [
+            'subject' => "Vous approchez de votre quota mensuel de check-ins — Qayed",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>Vous avez utilisé <strong>{{used}}</strong> de vos <strong>{{quota}}</strong> check-ins ce mois-ci.</p>
+<p>Votre service continue de fonctionner normalement. Si votre volume d'arrivées augmente régulièrement, le plan supérieur peut être plus adapté à votre activité.</p>
+{{cta_button}}
+HTML,
+        ],
+        'quota_reached' => [
+            'subject' => "Quota mensuel de check-ins atteint — Qayed",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>Vous avez atteint votre quota mensuel de <strong>{{quota}}</strong> check-ins.</p>
+<p><strong>Vos check-ins continuent de fonctionner normalement</strong> — l'enregistrement de vos voyageurs n'est jamais bloqué.</p>
+{{overage_notice}}
+{{cta_button}}
+HTML,
+        ],
+        'quota_upsell' => [
+            'subject' => "Un plan plus adapté à votre volume d'arrivées — Qayed",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>Votre établissement a dépassé son quota de check-ins deux mois consécutifs. Voici ce que cela représente par rapport au plan supérieur :</p>
+{{comparison_box}}
+<p>En passant au plan <strong>{{suggested_plan}}</strong>, vous n'auriez plus de dépassements à régler et vous bénéficieriez des fonctionnalités supplémentaires du plan.</p>
+{{cta_button}}
+HTML,
+        ],
     ];
 
     /**
@@ -173,6 +202,35 @@ HTML,
 {{cta_button}}
 HTML,
             ],
+            'quota_warning' => [
+                'subject' => 'You are approaching your monthly check-in quota — Qayed',
+                'body_html' => <<<'HTML'
+<p>Hello <strong>{{name}}</strong>,</p>
+<p>You have used <strong>{{used}}</strong> of your <strong>{{quota}}</strong> check-ins this month.</p>
+<p>Your service keeps working normally. If your arrival volume is growing steadily, the next plan up may be a better fit for your activity.</p>
+{{cta_button}}
+HTML,
+            ],
+            'quota_reached' => [
+                'subject' => 'Monthly check-in quota reached — Qayed',
+                'body_html' => <<<'HTML'
+<p>Hello <strong>{{name}}</strong>,</p>
+<p>You have reached your monthly quota of <strong>{{quota}}</strong> check-ins.</p>
+<p><strong>Your check-ins keep working normally</strong> — registering your travelers is never blocked.</p>
+{{overage_notice}}
+{{cta_button}}
+HTML,
+            ],
+            'quota_upsell' => [
+                'subject' => 'A plan better suited to your arrival volume — Qayed',
+                'body_html' => <<<'HTML'
+<p>Hello <strong>{{name}}</strong>,</p>
+<p>Your property exceeded its check-in quota two months in a row. Here is what that represents compared to the next plan up:</p>
+{{comparison_box}}
+<p>By moving to the <strong>{{suggested_plan}}</strong> plan, you would have no more overage charges and would benefit from the plan's additional features.</p>
+{{cta_button}}
+HTML,
+            ],
         ],
         'ar' => [
             'welcome' => [
@@ -247,6 +305,35 @@ HTML,
 <p>مرحبًا <strong>{{name}}</strong>،</p>
 <p>تتوفر فاتورة جديدة لاشتراكك <strong>{{plan_name}}</strong>.</p>
 {{credentials_box}}
+{{cta_button}}
+HTML,
+            ],
+            'quota_warning' => [
+                'subject' => 'تقتربون من حصتكم الشهرية لتسجيلات الوصول — قيد',
+                'body_html' => <<<'HTML'
+<p>مرحبًا <strong>{{name}}</strong>،</p>
+<p>لقد استخدمتم <strong>{{used}}</strong> من أصل <strong>{{quota}}</strong> تسجيل وصول هذا الشهر.</p>
+<p>تستمر خدمتكم في العمل بشكل طبيعي. إذا كان عدد الوافدين لديكم في تزايد منتظم، فقد تكون الباقة الأعلى أنسب لنشاطكم.</p>
+{{cta_button}}
+HTML,
+            ],
+            'quota_reached' => [
+                'subject' => 'تم بلوغ الحصة الشهرية لتسجيلات الوصول — قيد',
+                'body_html' => <<<'HTML'
+<p>مرحبًا <strong>{{name}}</strong>،</p>
+<p>لقد بلغتم حصتكم الشهرية البالغة <strong>{{quota}}</strong> تسجيل وصول.</p>
+<p><strong>تستمر تسجيلات الوصول لديكم في العمل بشكل طبيعي</strong> — تسجيل المسافرين لا يُحظر أبدًا.</p>
+{{overage_notice}}
+{{cta_button}}
+HTML,
+            ],
+            'quota_upsell' => [
+                'subject' => 'باقة أنسب لحجم الوافدين لديكم — قيد',
+                'body_html' => <<<'HTML'
+<p>مرحبًا <strong>{{name}}</strong>،</p>
+<p>تجاوزت مؤسستكم حصتها من تسجيلات الوصول لشهرين متتاليين. إليكم ما يمثله ذلك مقارنة بالباقة الأعلى:</p>
+{{comparison_box}}
+<p>بالانتقال إلى باقة <strong>{{suggested_plan}}</strong>، لن تكون لديكم تجاوزات لتسديدها وستستفيدون من المزايا الإضافية للباقة.</p>
 {{cta_button}}
 HTML,
             ],

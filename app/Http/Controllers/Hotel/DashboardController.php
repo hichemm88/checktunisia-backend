@@ -304,6 +304,11 @@ class DashboardController extends Controller
                     'days_remaining' => $sub->days_remaining,
                     'plan'           => $sub->plan?->name,
                 ] : ['status' => 'none'],
+                // Quota mensuel de check-ins (grille V2) — null pour les comptes
+                // illimités (aucun bandeau). Jamais bloquant côté serveur.
+                'quota' => ($org = $hotel->organization)
+                    ? \App\Services\Subscription\CheckinQuota::status($org)
+                    : null,
                 'recent_check_ins'         => $recentCheckIns,
                 'pending_watchlist_hits'   => $pendingWatchlistHits,
                 'month_insights' => [

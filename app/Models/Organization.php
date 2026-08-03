@@ -46,12 +46,14 @@ class Organization extends Model
         'address',
         'status',
         'locale',
+        'upsell_flagged_at',
     ];
 
     protected function casts(): array
     {
         return [
-            'address' => 'array',
+            'address'           => 'array',
+            'upsell_flagged_at' => 'datetime',
         ];
     }
 

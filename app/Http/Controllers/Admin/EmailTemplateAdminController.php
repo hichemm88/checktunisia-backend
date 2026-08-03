@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Mail;
 
 class EmailTemplateAdminController extends Controller
 {
-    private const KEYS = ['welcome', 'account_suspended', 'payment_received', 'subscription_reminder', 'trial_ending', 'invoice_available'];
+    private const KEYS = ['welcome', 'account_suspended', 'payment_received', 'subscription_reminder', 'trial_ending', 'invoice_available', 'quota_warning', 'quota_reached', 'quota_upsell'];
 
     private const LABELS = [
         'welcome'                => 'Bienvenue',
@@ -22,6 +22,9 @@ class EmailTemplateAdminController extends Controller
         'subscription_reminder'  => "Rappel d'expiration",
         'trial_ending'           => "Fin d'essai gratuit",
         'invoice_available'      => 'Facture disponible',
+        'quota_warning'          => 'Quota check-ins — 80 %',
+        'quota_reached'          => 'Quota check-ins atteint',
+        'quota_upsell'           => 'Suggestion de plan supérieur',
     ];
 
     /** Langue demandee (repli francais). */

@@ -164,6 +164,76 @@ class BillingService
         return $invoice;
     }
 
+    // ─── Dépassements de quota check-ins (grille V2) ─────────────────────────
+
+    /**
+     * Facture un dépassement de quota clôturé (quota:close-month). Comptes
+     * NON-legacy uniquement — un compte grandfathered n'est jamais facturé
+     * automatiquement (CheckinQuota::overageBillable, vérifié en amont).
+     * Idempotent : rien si le dépassement est déjà rattaché à une facture.
+     */
+    public function generateOverageInvoice(Subscription $sub, \App\Models\OverageCharge $charge): ?Invoice
+    {
+        if ($charge->invoice_id || $charge->amount <= 0) {
+            return null;
+        }
+
+        $settings = PlatformSetting::get();
+        $amount   = (float) $charge->amount;
+        $tax      = round($amount * ((float) $settings->tax_rate) / 100, 3) + (float) $settings->timbre_fiscal;
+        $monthFr  = $charge->period->locale('fr')->isoFormat('MMMM YYYY');
+
+        $invoice = Invoice::create([
+            'subscription_id' => $sub->id,
+            'hotel_id'        => null,
+            'invoice_number'  => $this->nextInvoiceNumber(),
+            'amount'          => $amount,
+            'tax_amount'      => $tax,
+            'total_amount'    => $amount + $tax,
+            'currency'        => 'TND',
+            'status'          => 'sent',
+            'due_at'          => now()->addDays(7),
+            'notes'           => sprintf(
+                'Dépassement de quota check-ins — %s : %d check-ins au-delà du quota de %d (%d tranche(s) de %d × %s TND).',
+                $monthFr, $charge->overage_count, $charge->quota,
+                $charge->bundle_count, $charge->bundle_size,
+                number_format((float) $charge->unit_price, 3, '.', ''),
+            ),
+            'metadata'        => [
+                'overage'        => true,
+                'overage_period' => $charge->period->toDateString(),
+                'checkins_count' => $charge->checkins_count,
+                'quota'          => $charge->quota,
+                'overage_count'  => $charge->overage_count,
+                'bundle_size'    => $charge->bundle_size,
+                'bundle_count'   => $charge->bundle_count,
+                'unit_price'     => (string) $charge->unit_price,
+                'tax_rate'       => (string) $settings->tax_rate,
+                'timbre_fiscal'  => (string) $settings->timbre_fiscal,
+            ],
+        ]);
+
+        $charge->update(['invoice_id' => $invoice->id, 'status' => \App\Models\OverageCharge::STATUS_INVOICED]);
+
+        AuditLogger::log('invoice.overage_generated', $invoice, newValues: [
+            'invoice_number' => $invoice->invoice_number,
+            'total_amount'   => (string) $invoice->total_amount,
+            'overage_period' => $charge->period->toDateString(),
+        ]);
+
+        $org    = $sub->organization;
+        $locale = $org?->locale ?? \App\Models\EmailTemplate::DEFAULT_LOCALE;
+        SystemMailer::send('invoice_available', $org?->contact_email, [
+            'name'            => $org?->name ?? $sub->hotel?->name ?? 'Client Qayed',
+            'plan_name'       => $sub->plan?->name ?? '—',
+            'invoice_number'  => $invoice->invoice_number,
+            'credentials_box' => SystemMailer::amountBox(Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number, $locale),
+            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), SystemMailer::label('view_invoice', $locale)),
+        ], $locale);
+
+        return $invoice;
+    }
+
     // ─── Relances impayé + suspension ────────────────────────────────────────
 
     /**

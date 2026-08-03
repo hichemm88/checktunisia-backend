@@ -51,6 +51,7 @@ class SystemMailer
             'login' => 'Se connecter', 'set_password' => 'Définir mon mot de passe',
             'reset_password' => 'Réinitialiser mon mot de passe', 'view_invoice' => 'Voir la facture',
             'pay_invoice' => 'Régler la facture', 'view_subscriptions' => 'Voir les abonnements',
+            'upgrade_plan' => 'Passer au plan supérieur',
             'amount' => 'Montant', 'invoice_number' => 'N° facture',
             'role_admin' => 'Administrateur', 'role_receptionist' => 'Réceptionniste',
         ],
@@ -58,6 +59,7 @@ class SystemMailer
             'login' => 'Sign in', 'set_password' => 'Set my password',
             'reset_password' => 'Reset my password', 'view_invoice' => 'View invoice',
             'pay_invoice' => 'Pay invoice', 'view_subscriptions' => 'View plans',
+            'upgrade_plan' => 'Upgrade my plan',
             'amount' => 'Amount', 'invoice_number' => 'Invoice no.',
             'role_admin' => 'Administrator', 'role_receptionist' => 'Receptionist',
         ],
@@ -65,6 +67,7 @@ class SystemMailer
             'login' => 'تسجيل الدخول', 'set_password' => 'تعيين كلمة المرور',
             'reset_password' => 'إعادة تعيين كلمة المرور', 'view_invoice' => 'عرض الفاتورة',
             'pay_invoice' => 'دفع الفاتورة', 'view_subscriptions' => 'عرض الاشتراكات',
+            'upgrade_plan' => 'الترقية إلى باقة أعلى',
             'amount' => 'المبلغ', 'invoice_number' => 'رقم الفاتورة',
             'role_admin' => 'مدير', 'role_receptionist' => 'موظف استقبال',
         ],
@@ -113,6 +116,26 @@ class SystemMailer
                 'credentials_box' => self::amountBox(\App\Support\Money::tnd(119), 'INV-2026-0042', $locale),
                 'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('view_invoice', $locale)),
             ],
+            'quota_warning' => [
+                'name' => 'Dar Omi', 'used' => '82', 'quota' => '100', 'percent' => '82',
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('view_subscriptions', $locale)),
+            ],
+            'quota_reached' => [
+                'name' => 'Dar Omi', 'quota' => '100',
+                'overage_notice' => \App\Services\Subscription\QuotaAlertService::overageNotice([
+                    'billable' => true, 'unit_price' => 10.0, 'bundle_size' => 50, 'unlimited' => false,
+                ], $locale),
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('upgrade_plan', $locale)),
+            ],
+            'quota_upsell' => [
+                'name' => 'Dar Omi', 'suggested_plan' => 'Professionnel',
+                'comparison_box' => \App\Services\Subscription\QuotaAlertService::comparisonBox(
+                    ['label' => 'Essentiel + dépassements (2 derniers mois)', 'amount' => \App\Support\Money::tnd(158)],
+                    ['label' => 'Professionnel (600 check-ins / mois)', 'amount' => \App\Support\Money::tnd(119)],
+                    $locale,
+                ),
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('upgrade_plan', $locale)),
+            ],
             default => [],
         };
 
@@ -125,7 +148,7 @@ class SystemMailer
 
     private static function substitute(string $text, array $vars): string
     {
-        $composite = ['credentials_box', 'cta_button'];
+        $composite = ['credentials_box', 'cta_button', 'overage_notice', 'comparison_box'];
         foreach ($vars as $key => $value) {
             $safe = in_array($key, $composite, true) ? $value : htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
             $text = str_replace('{{'.$key.'}}', $safe, $text);

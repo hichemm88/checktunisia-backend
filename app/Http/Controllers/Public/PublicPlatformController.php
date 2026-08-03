@@ -13,11 +13,15 @@ class PublicPlatformController extends Controller
      */
     public function plans(): JsonResponse
     {
+        // is_public : les plans legacy (Multi-sites) restent actifs pour leurs
+        // abonnés mais disparaissent de la grille publique.
         $plans = SubscriptionPlan::where('is_active', true)
+            ->where('is_public', true)
             ->orderBy('sort_order')
             ->get(['id', 'name', 'slug', 'scope', 'min_rooms', 'max_rooms',
                    'price_monthly', 'price_yearly', 'currency', 'features', 'marketing',
-                   'included_properties', 'extra_property_price']);
+                   'included_properties', 'extra_property_price',
+                   'overage_price', 'overage_bundle_size']);
 
         return response()->json(['data' => $plans]);
     }
