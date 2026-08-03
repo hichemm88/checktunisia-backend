@@ -197,7 +197,7 @@ class OpenSanctionsService
         $context = stream_context_create([
             'http' => [
                 'timeout'    => 120,
-                'user_agent' => 'QayedTN/1.0 (hotel watchlist sync; contact: support@qayed.tn)',
+                'user_agent' => 'QayedTN/1.0 (hotel watchlist sync; contact: contact@qayed.tn)',
             ],
             'ssl' => [
                 'verify_peer'      => true,

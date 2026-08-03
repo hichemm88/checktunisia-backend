@@ -78,7 +78,7 @@ class SubscriptionController extends Controller
         $user = $request->user();
         $org  = $user->organization;
         if (!$org) {
-            return response()->json(['errors' => [['code' => 'NO_ORGANIZATION', 'message' => "Compte sans organisation — contactez support@qayed.tn."]]], 422);
+            return response()->json(['errors' => [['code' => 'NO_ORGANIZATION', 'message' => "Compte sans organisation — contactez contact@qayed.tn."]]], 422);
         }
 
         $v = $request->validate([
