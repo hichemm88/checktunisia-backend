@@ -105,9 +105,15 @@ class SeedDarElKenzDemoFiches extends Command
 
         $rooms = $hotel->rooms()->orderBy('number')->get();
 
+        // Le taux d'occupation du dashboard = séjours actifs ÷ room_count :
+        // on plafonne les fiches actives à (chambres − 1) pour rester réaliste
+        // ET laisser toujours au moins une chambre libre.
+        $roomCount = $rooms->count() ?: (int) $hotel->room_count;
+        $maxActive = $roomCount > 0 ? max(1, $roomCount - 1) : 3;
+
         // Jeu de données déterministe (même sortie à chaque exécution).
         mt_srand(self::RNG_SEED);
-        $fiches = $this->buildFiches();
+        $fiches = $this->buildFiches($maxActive);
 
         $this->info(sprintf(
             'Établissement : %s (%s) — créateur : %s — %d fiches / %d voyageurs à insérer [%s]',
@@ -158,9 +164,11 @@ class SeedDarElKenzDemoFiches extends Command
      * nationalité) + 28 voyageurs seuls, dont 2 fiches tunisiennes avec CIN.
      * Statuts : ~70 % terminés (1-5 nuits sur les 90 derniers jours),
      * ~30 % actifs (check-in 0-4 jours, départ prévu demain ou plus tard —
-     * jamais aujourd'hui, pour ne pas déclencher le rappel « départ du jour »).
+     * jamais aujourd'hui, pour ne pas déclencher le rappel « départ du jour »),
+     * plafonnés à $maxActive (l'excédent bascule en terminé) pour un taux
+     * d'occupation < 100 % avec une chambre libre.
      */
-    private function buildFiches(): array
+    private function buildFiches(int $maxActive): array
     {
         $couples = [
             ['FRA', 'completed'], ['ITA', 'completed'], ['GBR', 'completed'],
@@ -177,9 +185,14 @@ class SeedDarElKenzDemoFiches extends Command
             ['SWE', 'active'], ['CAN', 'active'], ['MAR', 'active'], ['TUN', 'active'],
         ];
 
-        $fiches = [];
+        $fiches      = [];
+        $activesLeft = $maxActive;
 
         foreach ($couples as [$code, $status]) {
+            if ($status === 'active') {
+                $status = $activesLeft > 0 ? 'active' : 'completed';
+                $activesLeft = max(0, $activesLeft - 1);
+            }
             $dates = $this->stayDates($status);
             $last  = $this->pick(self::COUNTRIES[$code]['last']);
             $fiches[] = [
@@ -194,6 +207,10 @@ class SeedDarElKenzDemoFiches extends Command
         }
 
         foreach ($singles as $i => [$code, $status]) {
+            if ($status === 'active') {
+                $status = $activesLeft > 0 ? 'active' : 'completed';
+                $activesLeft = max(0, $activesLeft - 1);
+            }
             $dates = $this->stayDates($status);
             $sex   = mt_rand(0, 1) ? 'M' : 'F';
             $fiches[] = [
@@ -308,9 +325,20 @@ class SeedDarElKenzDemoFiches extends Command
     {
         $checkInsCount = 0;
         $guestsCount   = 0;
+        $activeRoomIdx = 0; // les séjours actifs occupent des chambres DISTINCTES
 
         foreach ($fiches as $i => $fiche) {
             $dates = $fiche['dates'];
+
+            // Actifs : une chambre différente chacun (maxActive ≤ chambres − 1
+            // garantit qu'il en reste au moins une libre). Terminés : round-robin,
+            // sans impact sur l'occupation actuelle.
+            $roomId = null;
+            if ($rooms->isNotEmpty()) {
+                $roomId = $fiche['status'] === 'active'
+                    ? $rooms[$activeRoomIdx++ % $rooms->count()]->id
+                    : $rooms[$i % $rooms->count()]->id;
+            }
 
             // Référence explicite « QYD-YYYYMMDD-Sxxx » : le hook creating ne
             // touche donc jamais check_in_sequences (table globale), et le
@@ -319,7 +347,7 @@ class SeedDarElKenzDemoFiches extends Command
 
             $checkIn = CheckIn::create([
                 'hotel_id'                => $hotel->id,
-                'room_id'                 => $rooms->isNotEmpty() ? $rooms[$i % $rooms->count()]->id : null,
+                'room_id'                 => $roomId,
                 'reference'               => $reference,
                 'booking_source'          => $this->pick(['direct', 'booking', 'direct', 'phone', 'expedia']),
                 'check_in_date'           => $dates['check_in']->toDateString(),
