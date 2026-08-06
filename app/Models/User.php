@@ -25,6 +25,7 @@ class User extends Authenticatable
 
     protected $fillable = [
         'organization_id',
+        'role_org',
         'email',
         'password',
         'first_name',
@@ -108,6 +109,15 @@ class User extends Authenticatable
     public function isHotelStaff(): bool
     {
         return $this->hasAnyRole(['hotel_admin', 'receptionist']);
+    }
+
+    /**
+     * Propriétaire de son organisation (dimension intra-org, distincte du
+     * rôle plateforme hotel_admin — voir users.role_org).
+     */
+    public function isOrgOwner(): bool
+    {
+        return $this->role_org === 'owner';
     }
 
     public function getFullNameAttribute(): string

@@ -149,6 +149,7 @@ class TwoFactorController extends Controller
                     'first_name'        => $user->first_name,
                     'last_name'         => $user->last_name,
                     'role'              => $user->primary_role,
+                    'role_org'          => $user->role_org,
                     'hotel'             => $hotel ? [
                         'id'                  => $hotel->id,
                         'name'                => $hotel->name,

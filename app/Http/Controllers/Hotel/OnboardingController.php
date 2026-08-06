@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Hotel;
 
 use App\Http\Controllers\Controller;
+use App\Models\Organization;
+use App\Services\Organization\RoleOrgMigrator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -18,41 +20,55 @@ use Illuminate\Http\Request;
 class OnboardingController extends Controller
 {
     /**
-     * Return onboarding status for the user's active property.
-     * Returns has_property: false when the org has no properties yet.
+     * Return onboarding status, scoped to the ORGANIZATION — never to the user.
+     *
+     * The post-login gate keys on establishments_count + role_org:
+     *   count >= 1            → dashboard (whatever the role)
+     *   count == 0 && owner   → onboarding
+     *   count == 0 && admin   → "Configuration en attente" screen
+     *
+     * Root-cause fix: a second hotel_admin used to reach this endpoint with a
+     * null organization_id (the invitation flow only wrote the user_hotels
+     * pivot), so the org lookup failed and the front redirected them to
+     * onboarding even though the org's properties already existed.
      */
     public function status(Request $request): JsonResponse
     {
         $user = $request->user();
-        $org  = $user->organization;
+        $org  = $this->resolveOrganization($user);
+
+        if ($org && $user->isHotelAdmin() && is_null($user->role_org)) {
+            // Sessions créées avant la migration role_org : attribution paresseuse
+            // (même règle idempotente que la migration/commande).
+            RoleOrgMigrator::assignForOrg($org);
+            $user->refresh();
+        }
 
         if (!$org) {
+            // Vrai legacy : ni organization_id ni propriété rattachée à une org.
+            $legacyHotel = $user->hotel();
+
             return response()->json([
                 'data' => [
-                    'setup_completed'    => false,
-                    'setup_completed_at' => null,
-                    'has_property'       => false,
+                    'setup_completed'      => !is_null($legacyHotel?->setup_completed_at),
+                    'setup_completed_at'   => $legacyHotel?->setup_completed_at,
+                    'has_property'         => (bool) $legacyHotel,
+                    'establishments_count' => $legacyHotel ? 1 : 0,
+                    'role_org'             => $user->role_org,
                 ],
             ]);
         }
 
-        $hotel = $this->resolveHotel($request, $org);
-
-        if (!$hotel) {
-            return response()->json([
-                'data' => [
-                    'setup_completed'    => false,
-                    'setup_completed_at' => null,
-                    'has_property'       => false,
-                ],
-            ]);
-        }
+        $count = $org->properties()->count();
+        $hotel = $count > 0 ? $this->resolveHotel($request, $org) : null;
 
         return response()->json([
             'data' => [
-                'setup_completed'    => !is_null($hotel->setup_completed_at),
-                'setup_completed_at' => $hotel->setup_completed_at,
-                'has_property'       => true,
+                'setup_completed'      => !is_null($hotel?->setup_completed_at),
+                'setup_completed_at'   => $hotel?->setup_completed_at,
+                'has_property'         => $count > 0,
+                'establishments_count' => $count,
+                'role_org'             => $user->role_org,
             ],
         ]);
     }
@@ -91,6 +107,33 @@ class OnboardingController extends Controller
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Org du user, avec self-heal : les invités créés avant que l'invitation ne
+     * renseigne organization_id sont reliés via leur propriété (pivot), et le
+     * lien est persisté pour les prochains appels (même correction silencieuse
+     * que OrganizationController::show).
+     */
+    private function resolveOrganization($user): ?Organization
+    {
+        if ($user->organization) {
+            return $user->organization;
+        }
+
+        $viaHotel = $user->hotels()->whereNotNull('hotels.organization_id')
+            ->orderBy('user_hotels.granted_at')->first();
+
+        if (!$viaHotel) {
+            return null;
+        }
+
+        $org = Organization::find($viaHotel->organization_id);
+        if ($org) {
+            $user->update(['organization_id' => $org->id]);
+        }
+
+        return $org;
+    }
 
     private function resolveHotel(Request $request, $org)
     {

@@ -46,6 +46,7 @@ class HotelUserController extends Controller {
             'last_name'     => $u->last_name,
             'email'         => $u->email,
             'role'          => $u->primary_role,
+            'role_org'      => $u->role_org,
             'status'        => $u->status,
             'last_login_at' => $u->last_login_at,
             'properties'    => $u->hotels->map(fn($h) => ['id' => $h->id, 'name' => $h->name])->values(),
@@ -73,8 +74,17 @@ class HotelUserController extends Controller {
             \App\Services\Subscription\PlanEntitlements::assertWithinLimit($org, 'max_users');
         }
 
-        $user = DB::transaction(function() use ($v, $targetHotelIds) {
+        // L'invitant est forcément l'owner (route org.owner) : tout hotel_admin
+        // invité est un « admin » de l'organisation, jamais un second owner.
+        $orgId = app('tenant')->organization_id ?? $request->user()->organization_id;
+
+        $user = DB::transaction(function() use ($v, $targetHotelIds, $orgId) {
             $u = User::create([
+                // Membership org posé à la création — l'absence d'organization_id
+                // sur les invités est ce qui renvoyait à tort le 2e hotel_admin
+                // vers l'onboarding après connexion.
+                'organization_id'   => $orgId,
+                'role_org'          => $v['role'] === 'hotel_admin' ? 'admin' : null,
                 'first_name'        => $v['first_name'],
                 'last_name'         => $v['last_name'],
                 'email'             => $v['email'],
@@ -104,6 +114,11 @@ class HotelUserController extends Controller {
         $manageableIds = $this->manageableHotelIds();
         $user = $this->manageableUsersQuery($manageableIds)->findOrFail($id);
         $hotel = $user->hotels->first() ?? app('tenant');
+        // Le propriétaire ne peut être ni rétrogradé ni suspendu ici — l'org ne
+        // doit jamais se retrouver sans owner (passer par le transfert d'ownership).
+        if ($user->isOrgOwner() && ($request->has('role') || $request->has('status'))) {
+            return $this->ownerProtected();
+        }
         $v = $request->validate([
             'first_name' => ['sometimes','string','max:100'],
             'last_name'  => ['sometimes','string','max:100'],
@@ -119,7 +134,12 @@ class HotelUserController extends Controller {
             'status'     => $v['status']     ?? null,
         ], fn($val) => $val !== null);
         if ($fields) { $user->update($fields); }
-        if (isset($v['role'])) { $user->syncRoles([$v['role']]); }
+        if (isset($v['role'])) {
+            $user->syncRoles([$v['role']]);
+            // role_org suit le rôle plateforme : un hotel_admin non owner est un
+            // « admin » de l'org ; un receptionist n'a pas de role_org.
+            $user->update(['role_org' => $v['role'] === 'hotel_admin' ? 'admin' : null]);
+        }
         if (isset($v['hotel_ids'])) {
             $user->hotels()->sync(array_fill_keys($v['hotel_ids'], ['granted_at' => now()]));
         }
@@ -134,6 +154,7 @@ class HotelUserController extends Controller {
             'first_name' => $user->first_name,
             'last_name'  => $user->last_name,
             'role'       => $user->primary_role,
+            'role_org'   => $user->role_org,
             'status'     => $user->status,
             'properties' => $user->hotels()->get()->map(fn($h) => ['id' => $h->id, 'name' => $h->name])->values(),
         ]]);
@@ -142,6 +163,9 @@ class HotelUserController extends Controller {
     public function destroy(string $id): JsonResponse {
         $user = $this->manageableUsersQuery($this->manageableHotelIds())->findOrFail($id);
         $hotel = $user->hotels->first() ?? app('tenant');
+        if ($user->isOrgOwner()) {
+            return $this->ownerProtected();
+        }
         $user->update(['status'=>'inactive']);
         $user->tokens()->delete();
         $old = $user->only(['email', 'first_name', 'last_name']);
@@ -172,6 +196,17 @@ class HotelUserController extends Controller {
             'id'         => $user->id,
             'email_sent' => $sent,
         ]]);
+    }
+
+    private function ownerProtected(): JsonResponse {
+        return response()->json([
+            'data'   => null,
+            'errors' => [[
+                'code'    => 'ROLE_ORG_FORBIDDEN',
+                'message' => 'Le propriétaire du compte ne peut pas être modifié ou retiré. Utilisez le transfert de propriété.',
+                'field'   => null,
+            ]],
+        ], 403);
     }
 
     private function sendWelcomeEmail(User $user, string $hotelName, string $role): bool {

@@ -211,8 +211,6 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
             // ── Hotel admin only (tenant-aware) ────────────────────────────
             Route::middleware('role:hotel_admin')->group(function () {
-                // Hotel profile (write)
-                Route::patch('profile', [HotelProfileController::class, 'update']);
 
                 // Envoi direct des fiches : voir/cocher les agents destinataires (Phase 2).
                 Route::get('whatsapp-recipients', [\App\Http\Controllers\Hotel\HotelWhatsappRecipientController::class, 'index']);
@@ -221,12 +219,19 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
                 // Export des fiches de police (PDF par email) sur une plage de dates.
                 Route::post('exports/police-fiches', [\App\Http\Controllers\Hotel\HotelExportController::class, 'policeFiches']);
 
-                // Staff management
-                Route::get('users', [HotelUserController::class, 'index']);
-                Route::post('users', [HotelUserController::class, 'store']);
-                Route::patch('users/{id}', [HotelUserController::class, 'update']);
-                Route::delete('users/{id}', [HotelUserController::class, 'destroy']);
-                Route::post('users/{id}/resend-invite', [HotelUserController::class, 'resendInvite']);
+                // ── Owner only (matrice role_org) : modification établissement
+                //    et gestion des utilisateurs ─────────────────────────────
+                Route::middleware('org.owner')->group(function () {
+                    // Hotel profile (write)
+                    Route::patch('profile', [HotelProfileController::class, 'update']);
+
+                    // Staff management
+                    Route::get('users', [HotelUserController::class, 'index']);
+                    Route::post('users', [HotelUserController::class, 'store']);
+                    Route::patch('users/{id}', [HotelUserController::class, 'update']);
+                    Route::delete('users/{id}', [HotelUserController::class, 'destroy']);
+                    Route::post('users/{id}/resend-invite', [HotelUserController::class, 'resendInvite']);
+                });
 
                 // Staff activity feed
                 Route::get('activity', [ActivityLogController::class, 'index']);
@@ -266,7 +271,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     // plateforme (le billing en place ne gère pas le self-service ni le
     // prorata ; effet appliqué par l'admin, au cycle suivant par défaut).
     Route::prefix('hotel')
-        ->middleware(['role:hotel_admin', 'throttle:5,10'])
+        ->middleware(['role:hotel_admin', 'org.owner', 'throttle:5,10'])
         ->group(function () {
             Route::post('subscription/upgrade-request', [SubscriptionController::class, 'requestUpgrade']);
         });
@@ -276,7 +281,7 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     // admin-created invoices are org-level and must be reachable before any
     // property exists.
     Route::prefix('hotel')
-        ->middleware(['role:hotel_admin'])
+        ->middleware(['role:hotel_admin', 'org.owner'])
         ->group(function () {
             Route::get('invoices', [SubscriptionController::class, 'invoices']);
             Route::get('invoices/{id}/pdf', [SubscriptionController::class, 'downloadInvoicePdf']);
@@ -290,22 +295,32 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
         ->middleware(['role:hotel_admin'])
         ->group(function () {
 
-            // Onboarding (works before first property exists)
+            // Onboarding status : lisible par tout hotel_admin — le gate de
+            // redirection post-login en a besoin, y compris pour les « admin »
+            // (écran Configuration en attente).
             Route::get('onboarding/status', [OnboardingController::class, 'status']);
-            Route::post('onboarding/complete', [OnboardingController::class, 'complete']);
 
-            // Organization info & multi-property management
+            // Organization info & properties (lecture)
             Route::get('organization', [OrganizationController::class, 'show']);
-            Route::patch('organization', [OrganizationController::class, 'update']);
             Route::get('organization/properties', [OrganizationController::class, 'properties']);
-            Route::post('organization/properties', [OrganizationController::class, 'addProperty']);
-            Route::patch('organization/properties/{id}', [OrganizationController::class, 'updateProperty']);
-            Route::delete('organization/properties/{id}', [OrganizationController::class, 'deleteProperty']);
             Route::get('organization/properties/{id}/rooms', [OrganizationController::class, 'propertyRooms']);
+
+            // Rooms (écriture) — gestion opérationnelle, ouverte aux hotel_admin
             Route::post('organization/properties/{id}/rooms', [OrganizationController::class, 'addPropertyRoom']);
             Route::post('organization/properties/{id}/rooms/bulk', [OrganizationController::class, 'bulkAddPropertyRooms']);
             Route::patch('organization/properties/{id}/rooms/{roomId}', [OrganizationController::class, 'updatePropertyRoom']);
             Route::delete('organization/properties/{id}/rooms/{roomId}', [OrganizationController::class, 'deletePropertyRoom']);
+
+            // ── Owner only (matrice role_org) : onboarding, création /
+            //    modification / suppression d'établissement, transfert ─────────
+            Route::middleware('org.owner')->group(function () {
+                Route::post('onboarding/complete', [OnboardingController::class, 'complete']);
+                Route::patch('organization', [OrganizationController::class, 'update']);
+                Route::post('organization/properties', [OrganizationController::class, 'addProperty']);
+                Route::patch('organization/properties/{id}', [OrganizationController::class, 'updateProperty']);
+                Route::delete('organization/properties/{id}', [OrganizationController::class, 'deleteProperty']);
+                Route::post('organization/transfer-ownership', [OrganizationController::class, 'transferOwnership']);
+            });
         });
 
     /*

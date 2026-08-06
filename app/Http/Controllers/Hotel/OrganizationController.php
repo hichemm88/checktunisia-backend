@@ -9,10 +9,12 @@ use App\Models\HotelContact;
 use App\Models\Organization;
 use App\Models\Room;
 use App\Models\Subscription;
+use App\Models\User;
 use App\Services\Audit\AuditLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 
 /**
@@ -104,6 +106,79 @@ class OrganizationController extends Controller
                 'total_rooms'         => $org->totalRooms(),
             ],
         ]);
+    }
+
+    /**
+     * Transfert d'ownership : l'owner actuel cède son rôle à un hotel_admin
+     * (« admin ») de la même organisation.
+     *
+     * Atomique : dans une même transaction, l'ancien owner devient admin puis
+     * le nouveau devient owner — jamais deux owners, jamais zéro owner (l'index
+     * unique partiel users_one_owner_per_org verrouille l'invariant côté DB).
+     * Confirmation forte : re-saisie du mot de passe de l'owner actuel.
+     */
+    public function transferOwnership(Request $request): JsonResponse
+    {
+        $current = $request->user();
+        $org     = $current->organization;
+
+        if (!$org) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'ORG_NOT_FOUND', 'message' => 'Aucune organisation associée à ce compte.', 'field' => null]],
+            ], 404);
+        }
+
+        $v = $request->validate([
+            'user_id'  => ['required', 'uuid'],
+            'password' => ['required', 'string'],
+        ]);
+
+        if (!Hash::check($v['password'], $current->password)) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'INVALID_PASSWORD', 'message' => 'Mot de passe incorrect.', 'field' => 'password']],
+            ], 422);
+        }
+
+        if ($v['user_id'] === $current->id) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'TRANSFER_TARGET_INVALID', 'message' => 'Vous êtes déjà propriétaire de ce compte.', 'field' => 'user_id']],
+            ], 422);
+        }
+
+        $target = User::where('organization_id', $org->id)
+            ->where('status', 'active')
+            ->find($v['user_id']);
+
+        if (!$target || !$target->isHotelAdmin()) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'TRANSFER_TARGET_INVALID', 'message' => 'Le destinataire doit être un administrateur actif de la même organisation.', 'field' => 'user_id']],
+            ], 422);
+        }
+
+        DB::transaction(function () use ($current, $target) {
+            // Verrouille les deux lignes pour exclure tout transfert concurrent.
+            $lockedCurrent = User::lockForUpdate()->findOrFail($current->id);
+            $lockedTarget  = User::lockForUpdate()->findOrFail($target->id);
+
+            // Rétrograder d'abord, promouvoir ensuite : l'index unique partiel
+            // n'accepte jamais deux owners, et un échec au milieu annule tout.
+            $lockedCurrent->update(['role_org' => 'admin']);
+            $lockedTarget->update(['role_org' => 'owner']);
+        });
+
+        AuditLogger::log('organization.ownership_transferred', $org,
+            ['owner_id' => $current->id, 'owner_email' => $current->email],
+            ['owner_id' => $target->id, 'owner_email' => $target->email],
+        );
+
+        return response()->json(['data' => [
+            'previous_owner' => ['id' => $current->id, 'role_org' => 'admin'],
+            'new_owner'      => ['id' => $target->id, 'role_org' => 'owner'],
+        ]]);
     }
 
     /** Update org-level info (name, registration number, phone). */

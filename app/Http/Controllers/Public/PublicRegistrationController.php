@@ -78,6 +78,8 @@ class PublicRegistrationController extends Controller
             // ── 2. Create admin user ──────────────────────────────────────
             $user = User::create([
                 'organization_id'   => $org->id,
+                // Créateur du compte = propriétaire unique de l'organisation.
+                'role_org'          => 'owner',
                 'first_name'        => $validated['first_name'],
                 'last_name'         => $validated['last_name'],
                 'email'             => $validated['email'],

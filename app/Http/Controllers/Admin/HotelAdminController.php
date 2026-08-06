@@ -201,7 +201,16 @@ class HotelAdminController extends Controller
         ]);
 
         $user = DB::transaction(function () use ($validated, $hotel) {
+            // Membership org dès la création (le pivot seul faisait atterrir le
+            // compte sur l'onboarding) ; premier hotel_admin d'une org → owner.
+            $roleOrg = null;
+            if ($validated['role'] === 'hotel_admin' && $hotel->organization_id) {
+                $roleOrg = \App\Services\Organization\RoleOrgMigrator::defaultRoleForNewAdmin($hotel->organization);
+            }
+
             $user = User::create([
+                'organization_id' => $hotel->organization_id,
+                'role_org'   => $roleOrg,
                 'first_name' => $validated['first_name'],
                 'last_name'  => $validated['last_name'],
                 'email'      => $validated['email'],

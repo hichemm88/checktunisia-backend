@@ -73,7 +73,16 @@ class PlatformUserAdminController extends Controller
         $hotel = Hotel::findOrFail($v['hotel_id']);
 
         $user = DB::transaction(function () use ($v, $hotel) {
+            // Membership org dès la création (le pivot seul faisait atterrir le
+            // compte sur l'onboarding) ; premier hotel_admin d'une org → owner.
+            $roleOrg = null;
+            if ($v['role'] === 'hotel_admin' && $hotel->organization_id) {
+                $roleOrg = \App\Services\Organization\RoleOrgMigrator::defaultRoleForNewAdmin($hotel->organization);
+            }
+
             $u = User::create([
+                'organization_id'   => $hotel->organization_id,
+                'role_org'          => $roleOrg,
                 'first_name'        => $v['first_name'],
                 'last_name'         => $v['last_name'],
                 'email'             => $v['email'],
@@ -117,7 +126,20 @@ class PlatformUserAdminController extends Controller
             'status'     => $v['status']     ?? null,
         ], fn($val) => $val !== null);
         if ($fields) $user->update($fields);
-        if (isset($v['role'])) $user->syncRoles([$v['role']]);
+        if (isset($v['role'])) {
+            // Invariant : jamais zéro owner — rétrograder un owner passe par le
+            // transfert d'ownership, même pour l'admin plateforme.
+            if ($user->isOrgOwner() && $v['role'] !== 'hotel_admin') {
+                return response()->json([
+                    'data'   => null,
+                    'errors' => [['code' => 'ROLE_ORG_FORBIDDEN', 'message' => 'Ce compte est propriétaire de son organisation : transférez la propriété avant de changer son rôle.', 'field' => 'role']],
+                ], 403);
+            }
+            $user->syncRoles([$v['role']]);
+            if (!$user->isOrgOwner()) {
+                $user->update(['role_org' => $v['role'] === 'hotel_admin' && $user->organization_id ? 'admin' : null]);
+            }
+        }
 
         // A suspended/deactivated account must lose access immediately, not
         // whenever its existing tokens happen to expire (up to 8h later).

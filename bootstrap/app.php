@@ -3,6 +3,7 @@
 use App\Http\Middleware\AuditRequestMiddleware;
 use App\Http\Middleware\EnsureActiveSubscription;
 use App\Http\Middleware\EnsureAuthorityCredentialValid;
+use App\Http\Middleware\EnsureOrgOwner;
 use App\Http\Middleware\Require2FA;
 use App\Http\Middleware\ResolveTenant;
 use App\Http\Middleware\SecurityHeaders;
@@ -37,6 +38,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'tenant' => ResolveTenant::class,
             'subscription.active' => EnsureActiveSubscription::class,
             'authority.credential' => EnsureAuthorityCredentialValid::class,
+            'org.owner' => EnsureOrgOwner::class,
             'require.2fa' => Require2FA::class,
             'audit' => AuditRequestMiddleware::class,
             'role' => RoleMiddleware::class,
