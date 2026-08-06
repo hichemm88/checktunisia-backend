@@ -182,6 +182,11 @@ class WhatsappWorkerController extends Controller
             // Exposé pour le self-test média du worker (/selftest-media) — évite
             // de faire transiter le numéro en clair dans une URL.
             'recipient' => (string) config('whatsapp.recipient'),
+            // État connu du backend : le worker le compare au sien et resynchronise
+            // s'il diverge. Un POST session « ready » perdu (ex. backend en plein
+            // redéploiement) laissait sinon le backend en « initializing » pour
+            // toujours → canDispatch() false → file gelée en silence.
+            'session_status' => $state->status,
         ]]);
     }
 }
