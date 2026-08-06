@@ -75,5 +75,10 @@ persistée dans `WHATSAPP_SESSION_PATH` et survit aux redémarrages.
 
 - La session **ignore tous les messages entrants** (pas de bot, surface nulle).
 - Aucun secret en dur : destinataire et secret worker sont des variables d'env.
+- Les pages **`/qr`, `/debug` et `/selftest-media` sont protégées par jeton**
+  (`WHATSAPP_QR_TOKEN`, passé en `?token=…`) : quiconque voit le QR peut capter
+  la session, et `/selftest-media` envoie un vrai message. Sans le bon jeton la
+  page répond 404. Reporter le jeton dans `WHATSAPP_QR_URL` côté backend pour
+  que le bouton de l'email d'alerte l'inclue automatiquement.
 - Pour **couper les envois immédiatement** sans redéployer :
   `POST /api/v1/admin/whatsapp/pause` (le worker cesse d'émettre au prochain tick).
