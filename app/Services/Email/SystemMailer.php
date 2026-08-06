@@ -4,7 +4,11 @@ namespace App\Services\Email;
 
 use App\Mail\SystemMail;
 use App\Models\EmailTemplate;
+use App\Models\User;
+use App\Services\Subscription\QuotaAlertService;
+use App\Support\Money;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Password;
 
 /**
  * Sends the 4 system emails (welcome, account_suspended, payment_received,
@@ -18,29 +22,32 @@ use Illuminate\Support\Facades\Mail;
 class SystemMailer
 {
     /**
-     * @param array<string,string> $vars Plain placeholders, e.g. ['name' => 'Dar Omi'].
-     *   Two special composite placeholders are available to templates:
-     *   {{credentials_box}} and {{cta_button}} — pass them pre-built via $vars
-     *   only when relevant (see helpers below); otherwise they render empty.
+     * @param  array<string,string>  $vars  Plain placeholders, e.g. ['name' => 'Dar Omi'].
+     *                                      Two special composite placeholders are available to templates:
+     *                                      {{credentials_box}} and {{cta_button}} — pass them pre-built via $vars
+     *                                      only when relevant (see helpers below); otherwise they render empty.
      */
     public static function send(string $key, ?string $to, array $vars = [], ?string $locale = null): bool
     {
-        if (!$to) {
+        if (! $to) {
             \Log::warning("SystemMailer: no recipient for template [{$key}], skipped.");
+
             return false;
         }
 
         try {
-            $locale   = EmailTemplate::normalizeLocale($locale);
+            $locale = EmailTemplate::normalizeLocale($locale);
             $template = EmailTemplate::getOrDefault($key, $locale);
-            $subject  = self::substitute($template['subject'], $vars);
+            $subject = self::substitute($template['subject'], $vars);
             $bodyHtml = self::substitute($template['body_html'], $vars);
-            $html     = self::wrapShell($bodyHtml, $locale);
+            $html = self::wrapShell($bodyHtml, $locale);
 
             Mail::to($to)->send(new SystemMail($subject, $html));
+
             return true;
         } catch (\Throwable $e) {
             \Log::warning("SystemMailer: send failed for template [{$key}] to [{$to}]: ".$e->getMessage());
+
             return false;
         }
     }
@@ -96,10 +103,10 @@ class SystemMailer
                 'first_name' => 'Nour', 'last_name' => 'Kaouach',
                 'cta_button' => self::ctaButton(self::frontendUrl('/set-password?email=nour%40example.tn&token=exemple'), self::label('reset_password', $locale)),
             ],
-            'account_suspended' => ['name' => 'Kasbahost SARL', 'reason' => "Facture impayée depuis 30 jours"],
+            'account_suspended' => ['name' => 'Kasbahost SARL', 'reason' => 'Facture impayée depuis 30 jours'],
             'payment_received' => [
                 'name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'expires_at' => '31/12/2026',
-                'credentials_box' => self::amountBox(\App\Support\Money::tnd(119), 'INV-2026-0042', $locale),
+                'credentials_box' => self::amountBox(Money::tnd(119), 'INV-2026-0042', $locale),
             ],
             'subscription_reminder' => ['name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'expires_at' => '15/07/2026', 'days_remaining' => '7'],
             'trial_ending' => [
@@ -108,12 +115,12 @@ class SystemMailer
             ],
             'invoice_overdue' => [
                 'name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'invoice_number' => 'INV-2026-0042', 'days_late' => '7',
-                'credentials_box' => self::amountBox(\App\Support\Money::tnd(119), 'INV-2026-0042', $locale),
+                'credentials_box' => self::amountBox(Money::tnd(119), 'INV-2026-0042', $locale),
                 'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('pay_invoice', $locale)),
             ],
             'invoice_available' => [
                 'name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'invoice_number' => 'INV-2026-0042',
-                'credentials_box' => self::amountBox(\App\Support\Money::tnd(119), 'INV-2026-0042', $locale),
+                'credentials_box' => self::amountBox(Money::tnd(119), 'INV-2026-0042', $locale),
                 'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('view_invoice', $locale)),
             ],
             'quota_warning' => [
@@ -122,16 +129,16 @@ class SystemMailer
             ],
             'quota_reached' => [
                 'name' => 'Dar Omi', 'quota' => '100',
-                'overage_notice' => \App\Services\Subscription\QuotaAlertService::overageNotice([
+                'overage_notice' => QuotaAlertService::overageNotice([
                     'billable' => true, 'unit_price' => 10.0, 'bundle_size' => 50, 'unlimited' => false,
                 ], $locale),
                 'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('upgrade_plan', $locale)),
             ],
             'quota_upsell' => [
                 'name' => 'Dar Omi', 'suggested_plan' => 'Professionnel',
-                'comparison_box' => \App\Services\Subscription\QuotaAlertService::comparisonBox(
-                    ['label' => 'Essentiel + dépassements (2 derniers mois)', 'amount' => \App\Support\Money::tnd(158)],
-                    ['label' => 'Professionnel (600 check-ins / mois)', 'amount' => \App\Support\Money::tnd(119)],
+                'comparison_box' => QuotaAlertService::comparisonBox(
+                    ['label' => 'Essentiel + dépassements (2 derniers mois)', 'amount' => Money::tnd(158)],
+                    ['label' => 'Professionnel (600 check-ins / mois)', 'amount' => Money::tnd(119)],
                     $locale,
                 ),
                 'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('upgrade_plan', $locale)),
@@ -140,9 +147,10 @@ class SystemMailer
         };
 
         $template = EmailTemplate::getOrDefault($key, $locale);
+
         return [
             'subject' => self::substitute($template['subject'], $sample),
-            'html'    => self::wrapShell(self::substitute($template['body_html'], $sample), $locale),
+            'html' => self::wrapShell(self::substitute($template['body_html'], $sample), $locale),
         ];
     }
 
@@ -153,6 +161,7 @@ class SystemMailer
             $safe = in_array($key, $composite, true) ? $value : htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
             $text = str_replace('{{'.$key.'}}', $safe, $text);
         }
+
         // Any placeholder left unresolved (composite box not passed for this send) → drop silently.
         return preg_replace('/\{\{\w+\}\}/', '', $text);
     }
@@ -175,9 +184,10 @@ class SystemMailer
      * validates, so "set my first password" and "reset a forgotten one"
      * are the same operation on the backend.
      */
-    public static function issueSetPasswordLink(\App\Models\User $user): string
+    public static function issueSetPasswordLink(User $user): string
     {
-        $token = \Illuminate\Support\Facades\Password::createToken($user);
+        $token = Password::createToken($user);
+
         return self::frontendUrl('/set-password?email='.urlencode($user->email).'&token='.$token);
     }
 
@@ -186,14 +196,14 @@ class SystemMailer
      * mechanism and /set-password SPA page as the invite flow, so a forgotten
      * password and a first password are validated identically server-side.
      */
-    public static function sendPasswordReset(\App\Models\User $user): bool
+    public static function sendPasswordReset(User $user): bool
     {
-        $link   = self::issueSetPasswordLink($user);
+        $link = self::issueSetPasswordLink($user);
         $locale = $user->locale ?? EmailTemplate::DEFAULT_LOCALE;
 
         return self::send('password_reset', $user->email, [
             'first_name' => $user->first_name,
-            'last_name'  => $user->last_name,
+            'last_name' => $user->last_name,
             'cta_button' => self::ctaButton($link, self::label('reset_password', $locale)),
         ], $locale);
     }
@@ -212,8 +222,7 @@ class SystemMailer
 
     private static function twoRowBox(string $label1, string $value1, string $label2, string $value2): string
     {
-        $cell = fn(string $label, string $value, bool $border) =>
-            '<td style="padding:14px 24px;'.($border ? 'border-bottom:1px solid #DDD9CF;' : '').'font-size:12px;font-weight:600;color:#8A94A0;text-transform:uppercase;letter-spacing:0.05em;font-family:\'IBM Plex Sans\',-apple-system,\'Segoe UI\',Arial,sans-serif;">'.htmlspecialchars($label, ENT_QUOTES, 'UTF-8').'</td>'
+        $cell = fn (string $label, string $value, bool $border) => '<td style="padding:14px 24px;'.($border ? 'border-bottom:1px solid #DDD9CF;' : '').'font-size:12px;font-weight:600;color:#8A94A0;text-transform:uppercase;letter-spacing:0.05em;font-family:\'IBM Plex Sans\',-apple-system,\'Segoe UI\',Arial,sans-serif;">'.htmlspecialchars($label, ENT_QUOTES, 'UTF-8').'</td>'
             .'<td align="right" style="padding:14px 24px;'.($border ? 'border-bottom:1px solid #DDD9CF;' : '').'font-size:14px;font-weight:600;color:#10222E;font-family:\'IBM Plex Mono\',monospace;">'.htmlspecialchars($value, ENT_QUOTES, 'UTF-8').'</td>';
 
         return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F6F5F1;border:1px solid #DDD9CF;border-radius:14px;margin:24px 0;">'
@@ -225,7 +234,7 @@ class SystemMailer
     /** Sceau قيد + wordmark, rendered as an email-safe table (the −6° tilt degrades gracefully where `transform` isn't supported). */
     private static function sceau(): string
     {
-        return <<<HTML
+        return <<<'HTML'
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;">
   <tr>
     <td style="width:40px;height:40px;border:2.5px solid #8B7FE0;border-radius:9px;transform:rotate(-6deg);-webkit-transform:rotate(-6deg);-ms-transform:rotate(-6deg);text-align:center;vertical-align:middle;font-family:'IBM Plex Sans Arabic',Arial,sans-serif;font-weight:700;font-size:15px;color:#8B7FE0;line-height:40px;">قيد</td>
@@ -240,32 +249,36 @@ HTML;
     private const SHELL = [
         'fr' => [
             'tagline' => "Plateforme d'enregistrement des voyageurs",
-            'rights'  => 'Tous droits réservés',
-            'auto'    => 'Cet email a été envoyé automatiquement, merci de ne pas y répondre.',
+            'rights' => 'Tous droits réservés',
+            'auto' => 'Cet email a été envoyé automatiquement, merci de ne pas y répondre.',
         ],
         'en' => [
             'tagline' => 'Traveler registration platform',
-            'rights'  => 'All rights reserved',
-            'auto'    => 'This email was sent automatically, please do not reply.',
+            'rights' => 'All rights reserved',
+            'auto' => 'This email was sent automatically, please do not reply.',
         ],
         'ar' => [
             'tagline' => 'منصة تسجيل المسافرين',
-            'rights'  => 'جميع الحقوق محفوظة',
-            'auto'    => 'أُرسلت هذه الرسالة تلقائيًا، يُرجى عدم الرد عليها.',
+            'rights' => 'جميع الحقوق محفوظة',
+            'auto' => 'أُرسلت هذه الرسالة تلقائيًا، يُرجى عدم الرد عليها.',
         ],
     ];
 
-    private static function wrapShell(string $bodyHtml, ?string $locale = null): string
+    // Public : réutilisé par WhatsappAlertService pour que les alertes admin
+    // (module provisoire relais WhatsApp) portent le même habillage que les
+    // autres emails système.
+    public static function wrapShell(string $bodyHtml, ?string $locale = null): string
     {
         $locale = EmailTemplate::normalizeLocale($locale);
-        $shell  = self::SHELL[$locale] ?? self::SHELL[EmailTemplate::DEFAULT_LOCALE];
-        $year   = date('Y');
-        $sceau  = self::sceau();
-        $dir    = $locale === 'ar' ? 'rtl' : 'ltr';
+        $shell = self::SHELL[$locale] ?? self::SHELL[EmailTemplate::DEFAULT_LOCALE];
+        $year = date('Y');
+        $sceau = self::sceau();
+        $dir = $locale === 'ar' ? 'rtl' : 'ltr';
         // Bordure d'accent du cote du debut de ligne (gauche en LTR, droite en RTL).
         $accent = $locale === 'ar' ? 'right' : 'left';
         $tagline = $shell['tagline'];
-        $footer  = '© '.$year.' Qayed — '.$shell['rights'].'<br>'.$shell['auto'];
+        $footer = '© '.$year.' Qayed — '.$shell['rights'].'<br>'.$shell['auto'];
+
         return <<<HTML
 <!DOCTYPE html>
 <html lang="{$locale}" dir="{$dir}">

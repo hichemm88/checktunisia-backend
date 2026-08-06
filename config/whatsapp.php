@@ -56,4 +56,10 @@ return [
     // scans ne sont conservés que le temps nécessaire aux envois (retries max
     // 24 h), puis purgés automatiquement. Aligné sur max_age_minutes.
     'image_retention_hours' => (int) env('WHATSAPP_IMAGE_RETENTION_HOURS', 24),
+
+    // URL publique de la page /qr du service Node (whatsapp-service) — insérée
+    // en bouton dans l'email d'alerte de déconnexion pour reconnecter en un clic.
+    // Le QR lui-même ne peut pas être mis dans l'email : il tourne toutes les
+    // ~30 s, il serait expiré à l'ouverture. Vide => bouton omis.
+    'qr_url' => env('WHATSAPP_QR_URL'),
 ];
