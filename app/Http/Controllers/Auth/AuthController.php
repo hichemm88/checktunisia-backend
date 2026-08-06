@@ -6,11 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
+use App\Services\Email\SystemMailer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password as PasswordRule;
 use Illuminate\Validation\ValidationException;
 
@@ -22,7 +24,7 @@ class AuthController extends Controller
             ->whereNull('deleted_at')
             ->first();
 
-        if (!$user || !Hash::check($request->password, $user->password)) {
+        if (! $user || ! Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
             ]);
@@ -30,7 +32,7 @@ class AuthController extends Controller
 
         if ($user->status !== 'active') {
             return response()->json([
-                'data'   => null,
+                'data' => null,
                 'errors' => [['code' => 'AUTH_ACCOUNT_SUSPENDED', 'message' => 'Your account is suspended.', 'field' => null]],
             ], 403);
         }
@@ -46,11 +48,11 @@ class AuthController extends Controller
 
             return response()->json([
                 'data' => [
-                    'requires_2fa'  => true,
+                    'requires_2fa' => true,
                     'partial_token' => $partial->plainTextToken,
-                    'token_type'    => 'Bearer',
-                    'expires_in'    => 900,
-                    'user'          => null,
+                    'token_type' => 'Bearer',
+                    'expires_in' => 900,
+                    'user' => null,
                 ],
             ]);
         }
@@ -60,26 +62,26 @@ class AuthController extends Controller
 
         return response()->json([
             'data' => [
-                'token'      => $token->plainTextToken,
+                'token' => $token->plainTextToken,
                 'token_type' => 'Bearer',
                 'expires_at' => $token->accessToken->expires_at,
-                'user'       => [
-                    'id'                => $user->id,
-                    'email'             => $user->email,
-                    'first_name'        => $user->first_name,
-                    'last_name'         => $user->last_name,
-                    'phone'             => $user->phone,
-                    'role'              => $user->primary_role,
-                    'role_org'          => $user->role_org,
-                    'hotel'             => $hotel ? [
-                        'id'                  => $hotel->id,
-                        'name'                => $hotel->name,
-                        'slug'                => $hotel->slug,
-                        'type'                => $hotel->type,
+                'user' => [
+                    'id' => $user->id,
+                    'email' => $user->email,
+                    'first_name' => $user->first_name,
+                    'last_name' => $user->last_name,
+                    'phone' => $user->phone,
+                    'role' => $user->primary_role,
+                    'role_org' => $user->role_org,
+                    'hotel' => $hotel ? [
+                        'id' => $hotel->id,
+                        'name' => $hotel->name,
+                        'slug' => $hotel->slug,
+                        'type' => $hotel->type,
                         'subscription_status' => $hotel->activeSubscription?->status ?? 'none',
                     ] : null,
                     'authority_profile' => $this->buildAuthorityProfile($user),
-                    'permissions'       => $user->getAllPermissions()->pluck('name'),
+                    'permissions' => $user->getAllPermissions()->pluck('name'),
                 ],
             ],
         ]);
@@ -87,13 +89,13 @@ class AuthController extends Controller
 
     public function refresh(Request $request): JsonResponse
     {
-        $user  = $request->user();
-        $old   = $user->currentAccessToken();
+        $user = $request->user();
+        $old = $user->currentAccessToken();
 
         // Only allow refresh within 24h after expiry (grace window)
         if ($old->expires_at && $old->expires_at->lt(now()->subHours(24))) {
             return response()->json([
-                'data'   => null,
+                'data' => null,
                 'errors' => [['code' => 'TOKEN_EXPIRED', 'message' => 'Session expired. Please log in again.', 'field' => null]],
             ], 401);
         }
@@ -103,7 +105,7 @@ class AuthController extends Controller
 
         return response()->json([
             'data' => [
-                'token'      => $newToken->plainTextToken,
+                'token' => $newToken->plainTextToken,
                 'token_type' => 'Bearer',
                 'expires_at' => $newToken->accessToken->expires_at,
             ],
@@ -114,33 +116,34 @@ class AuthController extends Controller
     {
         AuditLogger::log('user.logout', $request->user());
         $request->user()->currentAccessToken()->delete();
+
         return response()->json(null, 204);
     }
 
     public function me(Request $request): JsonResponse
     {
-        $user  = $request->user()->load(['roles', 'hotels']);
+        $user = $request->user()->load(['roles', 'hotels']);
         $hotel = $user->isHotelStaff() ? $user->hotel() : null;
 
         return response()->json([
             'data' => [
-                'id'                => $user->id,
-                'email'             => $user->email,
-                'first_name'        => $user->first_name,
-                'last_name'         => $user->last_name,
-                'phone'             => $user->phone,
-                'role'              => $user->primary_role,
-                'role_org'          => $user->role_org,
-                'hotel'             => $hotel ? [
-                    'id'                      => $hotel->id,
-                    'name'                    => $hotel->name,
-                    'slug'                    => $hotel->slug,
-                    'type'                    => $hotel->type,
-                    'subscription_status'     => $hotel->activeSubscription?->status ?? 'none',
+                'id' => $user->id,
+                'email' => $user->email,
+                'first_name' => $user->first_name,
+                'last_name' => $user->last_name,
+                'phone' => $user->phone,
+                'role' => $user->primary_role,
+                'role_org' => $user->role_org,
+                'hotel' => $hotel ? [
+                    'id' => $hotel->id,
+                    'name' => $hotel->name,
+                    'slug' => $hotel->slug,
+                    'type' => $hotel->type,
+                    'subscription_status' => $hotel->activeSubscription?->status ?? 'none',
                     'subscription_expires_at' => $hotel->activeSubscription?->expires_at,
                 ] : null,
                 'authority_profile' => $this->buildAuthorityProfile($user),
-                'permissions'       => $user->getAllPermissions()->pluck('name'),
+                'permissions' => $user->getAllPermissions()->pluck('name'),
             ],
         ]);
     }
@@ -155,7 +158,7 @@ class AuthController extends Controller
         $user = User::where('email', $request->email)->whereNull('deleted_at')->first();
 
         if ($user && $user->status === 'active') {
-            \App\Services\Email\SystemMailer::sendPasswordReset($user);
+            SystemMailer::sendPasswordReset($user);
             AuditLogger::log('user.password_reset_requested', $user, actor: $user);
         } else {
             // Log the attempt without a subject — helps spot enumeration/abuse.
@@ -169,8 +172,8 @@ class AuthController extends Controller
     public function resetPassword(Request $request): JsonResponse
     {
         $request->validate([
-            'token'    => ['required'],
-            'email'    => ['required', 'email'],
+            'token' => ['required'],
+            'email' => ['required', 'email'],
             'password' => $this->passwordRules(),
         ]);
 
@@ -191,16 +194,37 @@ class AuthController extends Controller
 
     public function updateProfile(Request $request): JsonResponse
     {
-        $user      = $request->user();
+        $user = $request->user();
         $validated = $request->validate([
             'first_name' => ['sometimes', 'string', 'max:100'],
-            'last_name'  => ['sometimes', 'string', 'max:100'],
-            'phone'      => ['sometimes', 'nullable', 'string', 'max:30'],
+            'last_name' => ['sometimes', 'string', 'max:100'],
+            'phone' => ['sometimes', 'nullable', 'string', 'max:30'],
+            // L'email est l'identifiant de connexion : on l'accepte, mais tout
+            // changement exige le mot de passe actuel (ci-dessous) — une session
+            // laissée ouverte ne doit pas suffire à détourner le compte.
+            'email' => ['sometimes', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
+            'current_password' => ['sometimes', 'string'],
         ]);
 
-        $old = $user->only(['first_name', 'last_name', 'phone']);
+        $emailChanged = array_key_exists('email', $validated)
+            && strcasecmp($validated['email'], (string) $user->email) !== 0;
+
+        if ($emailChanged && ! Hash::check($validated['current_password'] ?? '', $user->password)) {
+            throw ValidationException::withMessages([
+                'current_password' => ['Le mot de passe actuel est requis pour changer l\'adresse e-mail.'],
+            ]);
+        }
+
+        // Jamais persisté : sert uniquement à prouver l'identité ci-dessus.
+        unset($validated['current_password']);
+        if (! $emailChanged) {
+            unset($validated['email']);
+        }
+
+        $fields = ['first_name', 'last_name', 'phone', 'email'];
+        $old = $user->only($fields);
         $user->update($validated);
-        AuditLogger::log('profile.updated', $user, $old, $user->fresh()->only(['first_name', 'last_name', 'phone']));
+        AuditLogger::log('profile.updated', $user, $old, $user->fresh()->only($fields));
 
         return response()->json(['data' => $user->fresh()->only(['id', 'email', 'first_name', 'last_name', 'phone'])]);
     }
@@ -209,11 +233,11 @@ class AuthController extends Controller
     {
         $validated = $request->validate([
             'current_password' => ['required'],
-            'password'         => $this->passwordRules(),
+            'password' => $this->passwordRules(),
         ]);
 
         $user = $request->user();
-        if (!Hash::check($validated['current_password'], $user->password)) {
+        if (! Hash::check($validated['current_password'], $user->password)) {
             throw ValidationException::withMessages(['current_password' => ['Current password is incorrect.']]);
         }
 
@@ -246,25 +270,25 @@ class AuthController extends Controller
      */
     private function buildAuthorityProfile(User $user): ?array
     {
-        if (!$user->isAuthorityUser()) {
+        if (! $user->isAuthorityUser()) {
             return null;
         }
 
         $profile = $user->authorityProfile()->with('organization')->first();
-        if (!$profile) {
+        if (! $profile) {
             return null;
         }
 
         $org = $profile->organization;
 
         return [
-            'org_id'       => $org?->id,
-            'org_name'     => $org?->name,
-            'org_type'     => $org?->type,      // 'ministry' | 'police'
-            'governorate'  => $org?->governorate, // null for ministry (national scope)
+            'org_id' => $org?->id,
+            'org_name' => $org?->name,
+            'org_type' => $org?->type,      // 'ministry' | 'police'
+            'governorate' => $org?->governorate, // null for ministry (national scope)
             'badge_number' => $profile->badge_number,
-            'rank'         => $profile->rank,
-            'expires_at'   => $profile->expires_at?->toDateString(),
+            'rank' => $profile->rank,
+            'expires_at' => $profile->expires_at?->toDateString(),
         ];
     }
 }
