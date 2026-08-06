@@ -7,6 +7,7 @@ use App\Mail\SystemMail;
 use App\Models\DeviceToken;
 use App\Models\User;
 use App\Models\WhatsappSendLog;
+use App\Services\Email\SystemMailer;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
@@ -25,13 +26,21 @@ class WhatsappAlertService
     /** Session tombée (QR expiré, téléphone hors ligne, ban, auth échouée). */
     public function sessionDown(string $status, ?string $reason): void
     {
+        // Le QR lui-même ne peut pas être joint : il tourne toutes les ~30 s et
+        // serait expiré à l'ouverture. On pointe vers la page /qr, qui affiche
+        // toujours le QR frais et se rafraîchit seule.
+        $qrUrl = (string) config('whatsapp.qr_url');
+
         $this->dispatch(
             "WhatsApp Qayed — session {$status}",
             "La session WhatsApp du relais police est « {$status} ». "
             .'Les check-ins continuent normalement, les envois s\'accumulent en attente et reprendront '
             .'automatiquement à la reconnexion.'
             .($reason ? "\n\nRaison : {$reason}" : '')
-            ."\n\nScannez à nouveau le QR sur le service WhatsApp si nécessaire.",
+            ."\n\nPour reconnecter : ouvrez la page ci-dessous et scannez le QR avec le téléphone émetteur Qayed "
+            .'(WhatsApp → Appareils connectés → Connecter un appareil).'
+            .($qrUrl === '' ? "\n\nPage de reconnexion : voir le service WhatsApp sur Railway (URL /qr)." : ''),
+            $qrUrl !== '' ? SystemMailer::ctaButton($qrUrl, 'Reconnecter (scanner le QR)') : null,
         );
     }
 
@@ -47,6 +56,7 @@ class WhatsappAlertService
             "Le worker WhatsApp n'a donné aucun signe de vie depuis {$minutes} minute(s). "
             .'Le conteneur est probablement arrêté ou bloqué : vérifiez le service Railway '
             .'(logs, redeploy). Les fiches s\'accumulent en attente et repartiront au retour du worker.',
+            SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
         );
     }
 
@@ -60,17 +70,22 @@ class WhatsappAlertService
             .'Check-in : '.($job->check_in_id ?? '—')."\n"
             .'Dernière erreur : '.($error ?? '—')."\n\n"
             .'Vous pouvez le renvoyer depuis l\'écran WhatsApp de l\'administration.',
+            SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
         );
     }
 
-    private function dispatch(string $subject, string $body): void
+    /**
+     * @param  string|null  $ctaButton  bouton pré-rendu (SystemMailer::ctaButton) inséré sous le texte.
+     */
+    private function dispatch(string $subject, string $body, ?string $ctaButton = null): void
     {
         try {
             $admins = User::whereHas('roles', fn ($q) => $q->where('name', 'platform_admin'))->get();
 
-            // Email
-            $html = '<div style="font-family:sans-serif;font-size:15px;line-height:1.5;color:#1a1a1a;">'
-                .nl2br(e($body)).'</div>';
+            // Email — même habillage que les autres emails système (wrapShell).
+            $html = SystemMailer::wrapShell(
+                '<p style="margin:0 0 16px;">'.nl2br(e($body)).'</p>'.($ctaButton ?? ''),
+            );
             foreach ($admins as $admin) {
                 if ($admin->email) {
                     try {
