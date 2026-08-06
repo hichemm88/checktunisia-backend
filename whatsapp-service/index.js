@@ -365,6 +365,26 @@ function sleep(ms) {
 
 // ── Endpoint santé local du service Node ─────────────────────────────────────
 const app = express();
+
+// Jeton d'accès aux pages sensibles (/qr, /debug, /selftest-media) : quiconque
+// voit le QR peut capter la session WhatsApp, et /selftest-media envoie un vrai
+// message. Le jeton passe en query (?token=…) — il est intégré à WHATSAPP_QR_URL
+// côté backend, donc le bouton de l'email d'alerte l'inclut automatiquement.
+// Vide => pages ouvertes (compatibilité), avec avertissement au démarrage.
+const QR_TOKEN = process.env.WHATSAPP_QR_TOKEN || '';
+if (!QR_TOKEN) {
+  console.warn('[whatsapp] WHATSAPP_QR_TOKEN absent : /qr, /debug et /selftest-media sont accessibles sans jeton.');
+}
+const crypto = require('crypto');
+function requireToken(req, res, next) {
+  if (!QR_TOKEN) return next();
+  const given = Buffer.from(String(req.query.token || ''));
+  const expected = Buffer.from(QR_TOKEN);
+  if (given.length === expected.length && crypto.timingSafeEqual(given, expected)) return next();
+  // 404 volontaire : ne pas révéler l'existence de la page à qui n'a pas le jeton.
+  res.status(404).type('text/plain').send('Not found');
+}
+
 app.get('/health', (_req, res) => {
   const { qrDataUrl, ...safe } = state;
   res.json({ ok: ready, has_qr: !!qrDataUrl, ...safe });
@@ -372,7 +392,7 @@ app.get('/health', (_req, res) => {
 
 // Diagnostic : version WhatsApp Web réellement chargée dans Chromium (permet de
 // vérifier que le pin webVersionCache s'applique) + réactivité de la page.
-app.get('/debug', async (_req, res) => {
+app.get('/debug', requireToken, async (_req, res) => {
   const out = { ready, session: state.session };
   try {
     out.wweb_version = await withTimeout(client.getWWebVersion(), 10000, 'getWWebVersion');
@@ -396,7 +416,7 @@ app.get('/debug', async (_req, res) => {
  * des fiches AVEC photo sans polluer le vrai flux.
  */
 const TINY_JPEG_B64 = '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAAv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AfwD/2Q==';
-app.get('/selftest-media', async (_req, res) => {
+app.get('/selftest-media', requireToken, async (_req, res) => {
   const t0 = Date.now();
   const steps = [];
   const mark = (s) => steps.push(`${Date.now() - t0}ms ${s}`);
@@ -439,7 +459,7 @@ app.get('/selftest-media', async (_req, res) => {
 
 // Page de connexion : affiche le QR en image (scannable au téléphone) ou l'état.
 // Se rafraîchit toute seule jusqu'à ce que la session soit prête.
-app.get('/qr', (_req, res) => {
+app.get('/qr', requireToken, (_req, res) => {
   const body = ready
     ? '<h2 style="color:#1a7f4b">✅ Session WhatsApp connectée</h2><p>Rien à scanner. Tu peux fermer cette page.</p>'
     : state.qrDataUrl
