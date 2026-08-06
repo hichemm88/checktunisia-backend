@@ -315,6 +315,17 @@ async function tick() {
   try {
     // Le backend décide si on peut avancer (activé, non en pause, session prête).
     const control = (await api.get('/internal/whatsapp/control')).data.data;
+
+    // Resynchronisation d'état : si le backend a une autre vision de la session
+    // (ex. notre POST « ready » perdu pendant un redéploiement backend), on
+    // re-signale notre état réel. Sans ça, le backend restait « initializing »
+    // pour toujours → distribution gelée alors que la session était connectée.
+    const localStatus = ready ? 'ready' : state.session;
+    if (control.session_status && control.session_status !== localStatus) {
+      console.warn(`[whatsapp] resynchronisation d'état : backend=${control.session_status}, local=${localStatus}`);
+      await reportSession(localStatus, state.reason);
+    }
+
     if (!ready || !control.enabled || control.paused) {
       return IDLE_POLL_MS;
     }
