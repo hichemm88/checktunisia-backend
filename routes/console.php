@@ -42,9 +42,47 @@ Schedule::command('checkins:report-next')->everyMinute()->withoutOverlapping();
 // scheduler) : on draine la file Redis chaque minute. --stop-when-empty pour
 // sortir dès qu'il n'y a plus rien ; --max-time borne la durée sous la minute.
 // Corrige aussi les push notifications (jobs qui s'accumulaient sans worker).
-Schedule::command('queue:work --stop-when-empty --max-time=55 --tries=3')
+// Conditionné par QUEUE_DRAIN_VIA_SCHEDULER (défaut : true = comportement
+// historique, rien ne change tant que la variable n'est pas posée).
+// Passer à false dès qu'un service worker dédié tourne (docker/worker.sh) :
+// les deux peuvent coexister sans corruption, mais c'est du CPU gaspillé.
+if (config('features.queue_drain_via_scheduler')) {
+    Schedule::command('queue:work --stop-when-empty --max-time=55 --tries=3')
+        ->everyMinute()
+        ->withoutOverlapping();
+}
+
+// Sauvegarde chiffrée hors Railway. Railway ne fournit ni sauvegarde native ni
+// PITR sur le plan actuel : c'est la SEULE protection du registre.
+//
+// HORAIRE plutôt que quotidienne à heure fixe, à dessein. Un `dailyAt('03:30')`
+// n'a qu'une seule minute par jour pour se déclencher : une exécution manquée
+// coûtait une journée entière de registre. Ici la commande tourne toutes les
+// heures et décide elle-même si le travail est dû (dernière réussite datant de
+// plus de backup.interval_hours). Un créneau raté est rattrapé au suivant.
+//
+// Pas de ->skip() sur la configuration : une sauvegarde non configurée DOIT
+// échouer bruyamment, pas disparaître silencieusement du planning.
+Schedule::command('qayed:db-backup')
+    ->hourly()
+    ->withoutOverlapping(120)
+    ->onFailure(function () {
+        // Filet en plus de la remontée interne de la commande : couvre aussi
+        // le cas où le processus meurt avant d'avoir pu se signaler lui-même.
+        \Illuminate\Support\Facades\Log::error('[backup] la tâche planifiée s\'est terminée en échec');
+
+        if (config('sentry.dsn')) {
+            \Sentry\captureMessage('Qayed : échec de la tâche planifiée de sauvegarde');
+        }
+    });
+
+// Battement de cœur du planificateur. Sans lui, un planificateur mort est
+// invisible : le serveur web répond normalement pendant que la file cesse
+// d'être drainée et que les fiches ne partent plus. Lu par
+// GET /admin/health, qui marque « stale » au-delà de 5 minutes.
+Schedule::call(fn () => cache()->put('scheduler:last_run_at', now()->toIso8601String(), now()->addHour()))
     ->everyMinute()
-    ->withoutOverlapping();
+    ->name('scheduler-heartbeat');
 
 // MODULE PROVISOIRE — relais WhatsApp : alerte admin si le worker est
 // silencieux (heartbeat périmé > 10 min) — chantier B3.

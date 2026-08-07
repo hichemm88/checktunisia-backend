@@ -3,12 +3,21 @@ FROM php:8.3-cli-alpine
 # System dependencies
 RUN apk add --no-cache \
     bash curl git unzip libpng-dev libzip-dev oniguruma-dev \
-    libjpeg-turbo-dev freetype-dev \
+    libjpeg-turbo-dev freetype-dev libwebp-dev \
     postgresql-dev icu-dev libxml2-dev \
-    autoconf g++ make
+    autoconf g++ make \
+    # pg_dump 18 + gzip : exercés par les tests de sauvegarde.
+    # 18 pour refléter la PRODUCTION (Railway PostgreSQL 18) — la base de test
+    # est elle aussi en 18. Tester sur une combinaison de versions qui n'existe
+    # nulle part ne prouverait rien.
+    postgresql18-client gzip
 
-# PHP extensions (gd is required by the image resizer used in media uploads)
-RUN docker-php-ext-configure gd --with-jpeg --with-freetype \
+# PHP extensions (gd is required by the image resizer used in media uploads).
+# --with-webp est indispensable : MediaAdminController convertit les médias CMS
+# en WebP. Son absence ici alors que l'image de PRODUCTION l'a rendait les deux
+# environnements non équivalents — un test vert ne prouvait plus rien sur ce
+# chemin.
+RUN docker-php-ext-configure gd --with-jpeg --with-freetype --with-webp \
     && docker-php-ext-install \
     pdo pdo_pgsql pgsql \
     zip bcmath mbstring \

@@ -9,7 +9,11 @@ services:
 
   # ── PostgreSQL test database ──────────────────────────────────────────────
   db_test:
-    image: postgres:16-alpine
+    # 18 pour refléter la production (Railway PostgreSQL 18). Les tests
+    # tournaient jusqu'ici sur 16 : ils validaient donc un couple de versions
+    # qui n'existe nulle part. Aucun volume nommé ici — les données de test
+    # sont recréées à chaque exécution, la montée de version est sans risque.
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB:       qayed_test
       POSTGRES_USER:     qayed
