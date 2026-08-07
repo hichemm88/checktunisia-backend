@@ -74,7 +74,13 @@ RUN cp .env.example .env
 
 RUN composer dump-autoload --optimize --no-dev --classmap-authoritative
 
-RUN mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
+# storage/app manquait : git ne versionne pas les répertoires vides, et rien ne
+# le créait ici. Flysystem crée ses répertoires à la volée, ce qui masquait le
+# problème — mais la redirection shell du dump de sauvegarde, elle, échouait
+# sur un conteneur neuf (« Directory nonexistent »). La commande garantit
+# désormais elle-même l'existence du répertoire ; ceci est la ceinture en plus
+# des bretelles. `private` est la racine du disque Flysystem « local ».
+RUN mkdir -p storage/app/private storage/app/backup-tmp storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
     && chown -R www-data:www-data storage bootstrap/cache \
     && chmod -R 775 storage bootstrap/cache
 

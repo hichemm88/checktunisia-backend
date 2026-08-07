@@ -308,8 +308,10 @@ class DatabaseBackupTest extends TestCase
 
         // Un dump en clair oublié sur le disque du conteneur annulerait tout
         // le bénéfice du chiffrement.
-        $this->assertEmpty(glob(storage_path('app/qayed-*.sql.gz')) ?: []);
-        $this->assertEmpty(glob(storage_path('app/qayed-*.enc')) ?: []);
+        // Chemin corrigé le 2026-08-07 : les temporaires vivent désormais dans
+        // app/backup-tmp/. Scruter l'ancien emplacement rendait ces tests verts
+        // à vide — ils ne prouvaient plus rien.
+        $this->assertEmpty(glob(storage_path('app/backup-tmp/*')) ?: []);
     }
 
     public function test_no_temporary_files_survive_a_success(): void
@@ -318,8 +320,48 @@ class DatabaseBackupTest extends TestCase
 
         $this->artisan('qayed:db-backup')->assertExitCode(0);
 
-        $this->assertEmpty(glob(storage_path('app/qayed-*.sql.gz')) ?: []);
-        $this->assertEmpty(glob(storage_path('app/qayed-*.enc')) ?: []);
+        $this->assertEmpty(glob(storage_path('app/backup-tmp/*')) ?: []);
+    }
+
+    // ── Conteneur neuf : répertoire temporaire absent ────────────────────────
+
+    /**
+     * Régression du 2026-08-07, constatée au PREMIER test réel en production.
+     *
+     * Sur un conteneur Railway neuf, `storage/app` n'existe pas : git ne
+     * versionne pas les répertoires vides et le Dockerfile ne le créait pas.
+     * La redirection shell `> "$OUTFILE"` du dump ne crée aucun répertoire
+     * parent, d'où « cannot create ... : Directory nonexistent ». Le
+     * « Broken pipe » de pg_dump n'en était que la conséquence.
+     */
+    public function test_backup_creates_its_temp_directory_when_missing(): void
+    {
+        $this->requirePgDump();
+
+        $tempDir = storage_path('app/backup-tmp');
+        \Illuminate\Support\Facades\File::deleteDirectory($tempDir);
+        $this->assertDirectoryDoesNotExist($tempDir, 'Préalable du test : le répertoire doit être absent.');
+
+        $this->artisan('qayed:db-backup', ['--force' => true])->assertExitCode(0);
+
+        $this->assertDirectoryExists($tempDir, 'La commande doit créer son répertoire temporaire.');
+        $this->assertCount(1, Storage::disk('backups')->files('daily'));
+    }
+
+    /**
+     * Symptôme secondaire du même bug : disk_free_space() renvoie false sur un
+     * répertoire inexistant, donc le contrôle d'espace était silencieusement
+     * ignoré (« Espace disque libre indéterminable » en production).
+     */
+    public function test_disk_space_check_works_on_a_fresh_container(): void
+    {
+        $this->requirePgDump();
+
+        \Illuminate\Support\Facades\File::deleteDirectory(storage_path('app/backup-tmp'));
+
+        $this->artisan('qayed:db-backup', ['--force' => true])
+            ->doesntExpectOutputToContain('Espace disque libre indéterminable')
+            ->assertExitCode(0);
     }
 
     // ── Rétention ────────────────────────────────────────────────────────────

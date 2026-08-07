@@ -8,6 +8,7 @@ use App\Services\Backup\BackupState;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\Process\Process;
@@ -207,7 +208,12 @@ class BackupDatabase extends Command
     private function guardDiskSpace(): void
     {
         $required = config('backup.min_free_disk_mb') * 1024 * 1024;
-        $free = @disk_free_space(storage_path('app'));
+
+        // tempDir() crée le répertoire au besoin : sans lui, disk_free_space()
+        // renvoyait false sur un répertoire inexistant et le contrôle était
+        // silencieusement ignoré — c'était le premier symptôme visible du bug
+        // de conteneur neuf.
+        $free = @disk_free_space($this->tempDir());
 
         if ($free === false) {
             // Ne pas bloquer sur une information indisponible, mais le dire.
@@ -422,9 +428,44 @@ class BackupDatabase extends Command
 
     // ── Fichiers temporaires ─────────────────────────────────────────────────
 
+    /**
+     * Répertoire de travail des fichiers temporaires, CRÉÉ SI ABSENT.
+     *
+     * Sur un conteneur Railway neuf, `storage/app` n'existe pas : le
+     * Dockerfile ne créait que `storage/framework/*` et `storage/logs`, et
+     * aucun fichier de `storage/app` n'est suivi par git (git ne versionne pas
+     * les répertoires vides).
+     *
+     * Le reste de l'application ne s'en apercevait pas : Flysystem crée les
+     * répertoires à la volée lors d'un `Storage::put()`. Mais la redirection
+     * shell `> "$OUTFILE"` du dump, elle, ne crée aucun répertoire parent —
+     * d'où « cannot create ... : Directory nonexistent », et le « Broken pipe »
+     * de pg_dump qui n'en était que la conséquence (gzip mort, tube fermé).
+     *
+     * On ne suppose donc plus l'existence du répertoire : on la garantit,
+     * avant toute redirection shell. Sous-répertoire dédié pour que ces
+     * artefacts transitoires ne se mélangent jamais aux disques Flysystem
+     * (`storage/app/private` est la racine du disque « local »).
+     */
+    private function tempDir(): string
+    {
+        $dir = storage_path('app/backup-tmp');
+
+        if (! is_dir($dir)) {
+            // Récursif : storage/app peut lui-même être absent.
+            File::ensureDirectoryExists($dir, 0775, true);
+        }
+
+        if (! is_writable($dir)) {
+            throw new \RuntimeException("Répertoire temporaire non inscriptible : {$dir}");
+        }
+
+        return $dir;
+    }
+
     private function temp(string $name): string
     {
-        $path = storage_path('app/'.$name);
+        $path = $this->tempDir().'/'.$name;
         $this->tempFiles[] = $path;
 
         return $path;
