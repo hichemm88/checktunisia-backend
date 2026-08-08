@@ -40,7 +40,13 @@ RUN apt-get update \
 # fiche WhatsApp partait sans photo, sans erreur visible. Le frontend réduit
 # désormais l'image avant envoi, mais l'app mobile et tout autre client
 # passent par ici.
-RUN { echo "upload_max_filesize=20M"; echo "post_max_size=25M"; } > /usr/local/etc/php/conf.d/uploads.ini
+#
+# 64M / 70M et non 20M / 25M : le worker WhatsApp dépose ici son archive de
+# session (profil Chromium appairé, quelques dizaines de Mo une fois les caches
+# exclus). Un dépassement de post_max_size vide $_POST SANS erreur PHP — la
+# sauvegarde de la session échouerait en silence, ce qui est exactement le
+# genre de panne qu'on ne découvre que le jour où on en a besoin.
+RUN { echo "upload_max_filesize=64M"; echo "post_max_size=70M"; } > /usr/local/etc/php/conf.d/uploads.ini
 
 # OPcache : sans lui, chaque requête recompile tout le framework.
 # validate_timestamps reste à 1 (revalidation toutes les 2 s) car cette même

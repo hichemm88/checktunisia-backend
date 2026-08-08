@@ -99,6 +99,14 @@ Route::prefix('internal/whatsapp')
         Route::get('scan/{scanId}', [WhatsappWorkerController::class, 'scan']);
         Route::post('jobs/{id}/result', [WhatsappWorkerController::class, 'result']);
         Route::post('session', [WhatsappWorkerController::class, 'session']);
+
+        // Coffre de session : le worker dépose une copie chiffrée de son
+        // appairage et la réclame au démarrage si son volume est vide. Sans
+        // ceci, la session ne vit que sur un volume attaché à une instance —
+        // sa perte impose un re-scan de QR, donc une coupure du canal légal.
+        Route::get('session-archive', [WhatsappWorkerController::class, 'sessionArchive']);
+        Route::get('session-archive/meta', [WhatsappWorkerController::class, 'sessionArchiveMeta']);
+        Route::post('session-archive', [WhatsappWorkerController::class, 'storeSessionArchive']);
     });
 
 // Ingestion du tracking des coûts IA — consommée uniquement par la fonction

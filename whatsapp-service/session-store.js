@@ -1,0 +1,369 @@
+'use strict';
+
+/*
+ * Persistance durable de la session WhatsApp Web.
+ *
+ * LE PROBLÈME — la session (profil Chromium appairé au téléphone) ne vivait
+ * que sur le volume Railway de ce service. Un volume est attaché à UNE
+ * instance : il survit à un redéploiement ordinaire, mais pas à une recréation
+ * du service, à une migration, ni à une fausse manœuvre. Et le seul moyen de
+ * reconstituer la session est de re-scanner un QR sur place — c'est-à-dire une
+ * coupure du canal de transmission légal du produit.
+ *
+ * LA SOLUTION — le volume reste le chemin rapide (aucun changement au
+ * démarrage nominal), et une copie chiffrée part dans le stockage objet DÉJÀ
+ * utilisé pour les sauvegardes de base, via le backend Laravel qui détient
+ * seul les clés. Au démarrage, on ne réclame cette copie que si le disque
+ * local n'a PAS de session exploitable.
+ *
+ * RÈGLES, dans l'ordre d'importance :
+ *
+ *   1. Ne JAMAIS supprimer une session locale existante. Aucune fonction de ce
+ *      fichier n'efface quoi que ce soit dans le dossier de session.
+ *   2. Ne JAMAIS déposer une archive issue d'un dossier sans session valide :
+ *      c'est ainsi qu'un worker démarré sans volume écraserait les credentials.
+ *   3. Ne JAMAIS journaliser le contenu de la session. Les traces ne portent
+ *      que des noms de fichiers de l'archive temporaire, des tailles et des
+ *      empreintes.
+ *   4. Un échec du coffre n'empêche jamais le worker de démarrer. La session
+ *      locale, si elle existe, prime toujours.
+ */
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
+
+/*
+ * Caches volumineux et reconstructibles, exclus de l'archive. Même liste que
+ * celle qu'utilise la stratégie RemoteAuth de whatsapp-web.js : ces dossiers
+ * pèsent l'essentiel du profil, changent en permanence (donc s'archivent mal à
+ * chaud) et WhatsApp Web les reconstruit tout seul.
+ *
+ * ⚠️ IndexedDB et Local Storage ne sont PAS exclus : c'est là que vivent les
+ * credentials. Les exclure produirait une archive qui restaure un profil vide.
+ */
+const EXCLUDED = [
+  'Default/Cache',
+  'Default/Code Cache',
+  'Default/GPUCache',
+  'Default/DawnCache',
+  'Default/DawnGraphiteCache',
+  'Default/DawnWebGPUCache',
+  'Default/Service Worker/CacheStorage',
+  'Default/Service Worker/ScriptCache',
+  'Default/Shared Dictionary',
+  'GrShaderCache',
+  'ShaderCache',
+  'GraphiteDawnCache',
+  'component_crx_cache',
+  'extensions_crx_cache',
+];
+
+/** Fichiers de verrou Chromium : jamais archivés, ils bloqueraient la restauration. */
+const EXCLUDED_GLOBS = ['Singleton*', '*.lock', 'lockfile'];
+
+/**
+ * État de la session sur le disque local.
+ *
+ * `usable` est la seule chose qui compte, et elle est volontairement stricte :
+ * l'existence du dossier ne prouve rien (un point de montage de volume vide
+ * existe aussi). Ce qui prouve un appairage, c'est la présence des magasins
+ * où WhatsApp Web écrit ses credentials.
+ *
+ * @returns {{root:string, exists:boolean, usable:boolean, stores:string[], bytes:number}}
+ */
+function localSessionState(dataPath, { clientId } = {}) {
+  const root = path.join(dataPath, clientId ? `session-${clientId}` : 'session');
+  const profile = path.join(root, 'Default');
+
+  const exists = safeIsDir(root);
+  const stores = ['IndexedDB', 'Local Storage'].filter((s) => safeIsDir(path.join(profile, s)));
+
+  return {
+    root,
+    exists,
+    // Les deux magasins sont exigés : WhatsApp Web répartit l'état d'appairage
+    // entre les deux, et un profil qui n'aurait que l'un des deux est un
+    // profil à moitié écrit — il repartirait sur un QR de toute façon.
+    usable: exists && stores.length === 2,
+    stores,
+    bytes: exists ? directoryBytes(root) : 0,
+  };
+}
+
+/**
+ * Faut-il réclamer la session au coffre ?
+ * Uniquement quand le disque local n'a rien d'exploitable — une session locale
+ * valide n'est jamais remplacée par celle du coffre, qui peut être plus vieille.
+ */
+function shouldRestore(state) {
+  return !state.usable;
+}
+
+/**
+ * Faut-il déposer la session dans le coffre ?
+ * Jamais sans session locale exploitable : c'est LA garantie que des
+ * credentials valides ne peuvent pas être écrasés par un démarrage à vide.
+ */
+function shouldSnapshot(state) {
+  return state.usable;
+}
+
+/**
+ * Le blocage au démarrage doit-il effacer la session locale ?
+ *
+ * NON, par défaut — et c'est un changement de comportement délibéré. L'ancien
+ * watchdog vidait le dossier de session dès que ni QR ni connexion n'arrivaient
+ * sous 120 s. Or un démarrage à froid derrière un volume réseau dépasse
+ * régulièrement ce délai : le worker détruisait lui-même une session parfaitement
+ * valide, puis affichait un QR. C'était la cause des « déconnexions à chaque
+ * déploiement ». Un redémarrage simple suffit ; effacer ne se justifie que sur
+ * décision humaine, via WHATSAPP_ALLOW_SESSION_WIPE=1.
+ */
+function shouldWipeOnStartupTimeout(env = process.env) {
+  return String(env.WHATSAPP_ALLOW_SESSION_WIPE || '') === '1';
+}
+
+// ── Archive ──────────────────────────────────────────────────────────────────
+
+/**
+ * Fabrique un tar.gz du dossier de session, caches exclus.
+ * @returns {Promise<{path:string, bytes:number, sha256:string}>}
+ */
+async function createArchive(dataPath, state, { tmpDir = os.tmpdir() } = {}) {
+  const out = path.join(tmpDir, `wa-session-${process.pid}-${Date.now()}.tar.gz`);
+  const sessionDir = path.basename(state.root);
+
+  // Aucun chemin absolu dans les arguments : on se place dans le dossier et on
+  // écrit sur la sortie standard. Sous Windows (tests), GNU tar prendrait un
+  // « C:\… » pour un hôte distant et échouerait.
+  const args = ['-czf', '-'];
+  for (const dir of EXCLUDED) args.push('--exclude', `${sessionDir}/${dir}`);
+  for (const glob of EXCLUDED_GLOBS) args.push('--exclude', glob);
+  args.push(sessionDir);
+
+  // Code 1 accepté : le profil est VIVANT, Chromium y écrit pendant qu'on lit.
+  // tar signale ces fichiers en avertissement — refuser l'archive pour cela
+  // reviendrait à ne jamais réussir un dépôt à chaud.
+  await pipeTar(args, { cwd: dataPath, stdout: fs.createWriteStream(out), acceptExitCodes: [0, 1] });
+
+  const bytes = fs.statSync(out).size;
+
+  return { path: out, bytes, sha256: await sha256File(out) };
+}
+
+/**
+ * Extrait une archive dans le dossier de session.
+ *
+ * N'efface rien au préalable : tar écrase les entrées présentes dans l'archive
+ * et laisse le reste. On n'appelle de toute façon cette fonction que lorsqu'il
+ * n'y a pas de session exploitable.
+ */
+async function extractArchive(archivePath, dataPath) {
+  fs.mkdirSync(dataPath, { recursive: true });
+  await pipeTar(['-xzf', '-'], { cwd: dataPath, stdin: fs.createReadStream(archivePath) });
+}
+
+// ── Coffre (via le backend Laravel) ──────────────────────────────────────────
+
+/**
+ * Réclame la session au coffre si le disque local n'a rien d'exploitable.
+ *
+ * Ne lève jamais : un coffre injoignable (backend en plein redéploiement, ce
+ * qui est précisément le cas au moment où l'on démarre) ne doit pas empêcher
+ * le worker de tourner avec ce qu'il a.
+ *
+ * @returns {Promise<'local'|'restored'|'empty'|'unavailable'|'disabled'>}
+ */
+async function restoreIfMissing({ api, dataPath, log = console, enabled = true, attempts = 3, delayMs = 5000, sleep = defaultSleep, tmpDir = os.tmpdir() }) {
+  const state = localSessionState(dataPath);
+
+  if (!shouldRestore(state)) {
+    log.log(`[wa-session] session locale présente (${state.stores.join(', ')}, ${mb(state.bytes)}) — le coffre n'est pas sollicité.`);
+    return 'local';
+  }
+
+  if (!enabled) {
+    log.warn('[wa-session] coffre désactivé : démarrage sans session (un QR sera demandé).');
+    return 'disabled';
+  }
+
+  log.log('[wa-session] aucune session locale exploitable — tentative de restauration depuis le coffre…');
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const res = await api.get('/internal/whatsapp/session-archive', { responseType: 'arraybuffer' });
+      const archive = path.join(tmpDir, `wa-session-restore-${process.pid}.tar.gz`);
+      fs.writeFileSync(archive, Buffer.from(res.data));
+
+      try {
+        await extractArchive(archive, dataPath);
+      } finally {
+        safeUnlink(archive);
+      }
+
+      const after = localSessionState(dataPath);
+
+      if (!after.usable) {
+        // L'archive existait mais ne contenait pas de profil appairé : on ne
+        // ment pas sur l'état, le QR sera demandé.
+        log.warn('[wa-session] archive restaurée mais incomplète — un QR sera demandé.');
+        return 'empty';
+      }
+
+      log.log(`[wa-session] session restaurée depuis le coffre (${mb(after.bytes)}) — aucun QR ne devrait être demandé.`);
+      return 'restored';
+    } catch (err) {
+      if (err?.response?.status === 404) {
+        log.log('[wa-session] coffre vide (premier appairage) — un QR sera demandé.');
+        return 'empty';
+      }
+
+      log.warn(`[wa-session] restauration impossible (essai ${attempt}/${attempts}) : ${err.message}`);
+
+      if (attempt < attempts) await sleep(delayMs);
+    }
+  }
+
+  return 'unavailable';
+}
+
+/**
+ * Dépose la session courante dans le coffre.
+ *
+ * @returns {Promise<'stored'|'skipped'|'failed'|'disabled'>}
+ */
+async function snapshot({ api, dataPath, log = console, enabled = true, reason = 'périodique', tmpDir = os.tmpdir() }) {
+  if (!enabled) return 'disabled';
+
+  const state = localSessionState(dataPath);
+
+  if (!shouldSnapshot(state)) {
+    // Refus le plus important du fichier : sans lui, un worker démarré sans
+    // volume déposerait une archive vide par-dessus des credentials valides.
+    log.warn('[wa-session] aucune session locale exploitable — dépôt REFUSÉ (le coffre n\'est pas écrasé).');
+    return 'skipped';
+  }
+
+  let archive = null;
+
+  try {
+    archive = await createArchive(dataPath, state, { tmpDir });
+
+    // FormData/Blob natifs (Node ≥ 18) plutôt qu'une dépendance de plus ;
+    // axios v1 les sérialise et pose l'en-tête multipart tout seul.
+    const form = new FormData();
+    form.append(
+      'archive',
+      new Blob([fs.readFileSync(archive.path)], { type: 'application/gzip' }),
+      'session.tar.gz',
+    );
+    form.append('sha256', archive.sha256);
+
+    await api.post('/internal/whatsapp/session-archive', form, {
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      timeout: 120000,
+    });
+
+    // Taille et empreinte seulement — jamais un octet du contenu.
+    log.log(`[wa-session] session déposée dans le coffre (${reason}, ${mb(archive.bytes)}, sha256 ${archive.sha256.slice(0, 12)}…).`);
+    return 'stored';
+  } catch (err) {
+    // Un dépôt raté n'est pas une panne : la session locale est intacte et le
+    // coffre garde la version précédente.
+    log.warn(`[wa-session] dépôt impossible (${reason}) : ${err?.response?.status || ''} ${err.message}`);
+    return 'failed';
+  } finally {
+    if (archive) safeUnlink(archive.path);
+  }
+}
+
+// ── Utilitaires ──────────────────────────────────────────────────────────────
+
+/**
+ * Lance tar en flux (stdin/stdout), sans jamais lui passer de chemin absolu.
+ * Le message d'erreur ne reprend que la sortie d'erreur de tar — des noms de
+ * fichiers, jamais leur contenu.
+ */
+function pipeTar(args, { cwd, stdin = null, stdout = null, acceptExitCodes = [0] }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('tar', args, { cwd, stdio: [stdin ? 'pipe' : 'ignore', stdout ? 'pipe' : 'ignore', 'pipe'] });
+
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+    let writeDone = Promise.resolve();
+
+    if (stdin) stdin.pipe(child.stdin);
+
+    if (stdout) {
+      child.stdout.pipe(stdout);
+      writeDone = new Promise((res, rej) => {
+        stdout.on('finish', res);
+        stdout.on('error', rej);
+      });
+    }
+
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (!acceptExitCodes.includes(code)) {
+        reject(new Error(`tar a échoué (code ${code}) : ${stderr.slice(0, 300)}`));
+        return;
+      }
+      writeDone.then(resolve, reject);
+    });
+  });
+}
+
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(file);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+function safeIsDir(p) {
+  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}
+
+function safeUnlink(p) {
+  try { fs.rmSync(p, { force: true }); } catch { /* le fichier temporaire disparaîtra avec le conteneur */ }
+}
+
+function directoryBytes(dir) {
+  let total = 0;
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) total += directoryBytes(full);
+      else if (entry.isFile()) { try { total += fs.statSync(full).size; } catch { /* course avec Chromium */ } }
+    }
+  } catch { /* dossier illisible : la taille n'est qu'indicative */ }
+  return total;
+}
+
+function mb(bytes) {
+  return `${(bytes / 1048576).toFixed(1)} Mo`;
+}
+
+function defaultSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+module.exports = {
+  EXCLUDED,
+  localSessionState,
+  shouldRestore,
+  shouldSnapshot,
+  shouldWipeOnStartupTimeout,
+  createArchive,
+  extractArchive,
+  restoreIfMissing,
+  snapshot,
+};

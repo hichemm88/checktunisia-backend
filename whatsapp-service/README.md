@@ -35,6 +35,9 @@ Copier `.env.example` → `.env` et renseigner :
 | `LARAVEL_API_BASE` | URL du backend, préfixe `/api/v1` inclus |
 | `WHATSAPP_WORKER_SECRET` | **identique** à celui du backend Laravel |
 | `WHATSAPP_SESSION_PATH` | dossier de session `LocalAuth` (→ volume persistant) |
+| `WHATSAPP_SESSION_VAULT_ENABLED` | copie chiffrée de la session côté backend (`1` par défaut) |
+| `WHATSAPP_WATCHDOG_MS` | blocage au démarrage → redémarrage, session conservée (défaut 420000) |
+| `WHATSAPP_ALLOW_SESSION_WIPE` | ⚠️ `1` autorise l'effacement de la session — ré-appairage volontaire uniquement |
 | `PORT` | port du endpoint santé Node (`/health`) |
 | `PUPPETEER_EXECUTABLE_PATH` | chemin Chromium (fourni par le Dockerfile) |
 
@@ -66,10 +69,36 @@ persistée dans `WHATSAPP_SESSION_PATH` et survit aux redémarrages.
 > persistant** sur `WHATSAPP_SESSION_PATH`, sinon le QR devra être re-scanné à
 > chaque redéploiement.
 
+## Persistance de la session
+
+Le volume est le chemin nominal, mais il est attaché à **une** instance : il ne
+survit pas à une recréation du service. Une copie chiffrée part donc aussi dans
+le stockage objet des sauvegardes, via le backend, et n'est réclamée au
+démarrage que si le volume n'a rien d'exploitable.
+
+**Aucune fonction de ce service n'efface la session** en dehors d'un
+`WHATSAPP_ALLOW_SESSION_WIPE=1` explicite. Le watchdog de démarrage, qui le
+faisait auparavant au bout de 120 s, était la cause des « déconnexions à chaque
+déploiement ».
+
+Détails, garde-fous et procédure de vérification : [`docs/session-whatsapp.md`](../docs/session-whatsapp.md).
+
 ## Santé
 
 - `GET /health` (ce service) : état local de la session + compteurs.
+- `GET /session-vault?token=…` : session sur le disque + copie en coffre
+  (métadonnées seules — jamais un octet de la session).
 - `GET /api/v1/health/whatsapp` (Laravel) : état consolidé + profondeur de file.
+
+## Tests
+
+```bash
+npm test     # node --test, sans dépendance
+```
+
+Couvre la résilience de la session : une session existante n'est jamais
+effacée, une instance recréée la retrouve, une session vide ne peut pas écraser
+le coffre, et aucun secret n'atteint les journaux.
 
 ## Sécurité
 

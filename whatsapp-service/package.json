@@ -10,6 +10,7 @@
   },
   "scripts": {
     "start": "node index.js",
+    "test": "node --test",
     "postinstall": "patch-package"
   },
   "dependencies": {

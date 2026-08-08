@@ -25,6 +25,7 @@ const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const axios = require('axios');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const sessionStore = require('./session-store');
 
 // ── Configuration (variables d'environnement uniquement) ─────────────────────
 const API_BASE = (process.env.LARAVEL_API_BASE || 'http://localhost:8000/api/v1').replace(/\/$/, '');
@@ -33,6 +34,15 @@ const SESSION_PATH = process.env.WHATSAPP_SESSION_PATH || './.wwebjs_auth';
 const HEALTH_PORT = parseInt(process.env.PORT || '3001', 10);
 const IDLE_POLL_MS = parseInt(process.env.WHATSAPP_IDLE_POLL_MS || '5000', 10);
 const ERROR_BACKOFF_MS = parseInt(process.env.WHATSAPP_ERROR_BACKOFF_MS || '15000', 10);
+
+// ── Coffre de session (persistance durable, hors volume) ─────────────────────
+// Le volume Railway reste le chemin rapide ; le coffre est le filet quand
+// l'instance est recréée. Voir session-store.js.
+const VAULT_ENABLED = String(process.env.WHATSAPP_SESSION_VAULT_ENABLED || '1') !== '0';
+// Délai après « ready » avant le premier dépôt : laisse WhatsApp Web finir
+// d'écrire son profil, pour ne pas archiver un état à moitié posé.
+const VAULT_FIRST_SNAPSHOT_MS = parseInt(process.env.WHATSAPP_SESSION_SNAPSHOT_DELAY_MS || '180000', 10);
+const VAULT_SNAPSHOT_INTERVAL_MS = parseInt(process.env.WHATSAPP_SESSION_SNAPSHOT_INTERVAL_MS || String(6 * 3600 * 1000), 10);
 
 if (!WORKER_SECRET) {
   console.error('[whatsapp] FATAL: WHATSAPP_WORKER_SECRET manquant.');
@@ -143,20 +153,48 @@ async function reportSession(status, reason = null) {
   }
 }
 
-// Watchdog anti-blocage : si ni QR ni connexion sous WATCHDOG_MS, la session
-// sur le volume est probablement corrompue → on la vide et on redémarre le
-// conteneur (Railway relance) pour repartir sur un QR frais.
-const WATCHDOG_MS = parseInt(process.env.WHATSAPP_WATCHDOG_MS || '120000', 10);
+/*
+ * Watchdog anti-blocage au démarrage.
+ *
+ * ⚠️ CE WATCHDOG EFFAÇAIT LA SESSION — c'était la cause des « déconnexions à
+ * chaque déploiement ». Dès que ni QR ni connexion n'arrivaient sous 120 s, il
+ * vidait le dossier de session sur le volume puis redémarrait. Or un démarrage
+ * à froid (conteneur neuf, Chromium à lancer, profil à ouvrir depuis un volume
+ * réseau, WhatsApp Web à charger) dépasse régulièrement 120 s — et l'événement
+ * `authenticated` ne désarmait même pas le compte à rebours. Le worker
+ * détruisait donc lui-même une session parfaitement valide, puis affichait un
+ * QR. Comme les deux services Railway se redéploient depuis le même dépôt,
+ * chaque livraison du backend rejouait ce tirage au sort.
+ *
+ * Désormais : délai plus large, désarmé dès le moindre signe de vie, et un
+ * dépassement ne fait que REDÉMARRER — la session reste sur le volume. Effacer
+ * n'est plus qu'une décision humaine (WHATSAPP_ALLOW_SESSION_WIPE=1).
+ */
+const WATCHDOG_MS = parseInt(process.env.WHATSAPP_WATCHDOG_MS || '420000', 10);
 const watchdog = setTimeout(() => {
-  if (!ready && !state.qrDataUrl) {
-    console.error('[whatsapp] bloqué au démarrage (ni QR ni connexion) — réinitialisation de la session.');
+  if (ready || state.qrDataUrl) return;
+
+  if (sessionStore.shouldWipeOnStartupTimeout()) {
+    console.error('[whatsapp] bloqué au démarrage — effacement de la session EXPLICITEMENT autorisé (WHATSAPP_ALLOW_SESSION_WIPE=1).');
     wipeSession(SESSION_PATH);
-    process.exit(1); // Railway relance le conteneur → session fraîche → nouveau QR
+  } else {
+    console.error('[whatsapp] bloqué au démarrage (ni QR ni connexion) — redémarrage du conteneur. La session est CONSERVÉE.');
   }
+
+  process.exit(1); // Railway relance le conteneur
 }, WATCHDOG_MS);
 
-client.on('qr', (qr) => {
+/** Désarme le compte à rebours dès qu'un signe de vie arrive, quel qu'il soit. */
+let watchdogDisarmed = false;
+function disarmWatchdog(signal) {
+  if (watchdogDisarmed) return;
+  watchdogDisarmed = true;
   clearTimeout(watchdog);
+  console.log(`[whatsapp] démarrage confirmé (${signal}).`);
+}
+
+client.on('qr', (qr) => {
+  disarmWatchdog('QR émis');
   // Premier démarrage : scanner ce QR avec la SIM dédiée Qayed (jamais un numéro perso).
   // 1) dans les logs (ASCII) ; 2) en image sur la page /qr (scannable depuis un téléphone).
   console.log('[whatsapp] Scannez ce QR avec le téléphone émetteur Qayed (ou ouvrez /qr) :');
@@ -166,7 +204,16 @@ client.on('qr', (qr) => {
     .catch((err) => console.warn('[whatsapp] QR image error:', err.message));
 });
 
-client.on('authenticated', () => console.log('[whatsapp] authentifié.'));
+client.on('authenticated', () => {
+  // Désarmement indispensable : une session restaurée s'authentifie bien avant
+  // d'être « ready », et c'est exactement pendant cet intervalle que l'ancien
+  // watchdog effaçait le profil.
+  disarmWatchdog('authentifié');
+  console.log('[whatsapp] authentifié.');
+});
+
+// Chargement de la conversation après authentification : encore un signe de vie.
+client.on('loading_screen', (percent) => disarmWatchdog(`chargement ${percent}%`));
 
 // Tampon circulaire des derniers messages/erreurs de la page WhatsApp Web —
 // exposé sur /debug pour diagnostiquer les blocages d'envoi de médias.
@@ -188,14 +235,35 @@ function attachPageDiagnostics() {
 }
 
 client.on('ready', () => {
-  clearTimeout(watchdog);
+  disarmWatchdog('session prête');
   ready = true;
   state.qrDataUrl = null; // plus besoin du QR une fois connecté
   console.log('[whatsapp] session prête.');
   reportSession('ready');
   attachPageDiagnostics();
   startPageLivenessWatchdog();
+  startSessionSnapshots();
 });
+
+/**
+ * Dépôts périodiques de la session dans le coffre.
+ *
+ * Le premier est différé : WhatsApp Web finit d'écrire son profil après
+ * « ready », et archiver trop tôt donnerait une copie à moitié posée.
+ */
+let snapshotTimer = null;
+function startSessionSnapshots() {
+  if (snapshotTimer || !VAULT_ENABLED) return;
+
+  const take = (reason) => sessionStore
+    .snapshot({ api, dataPath: SESSION_PATH, enabled: VAULT_ENABLED, reason })
+    .catch((err) => console.warn('[wa-session] dépôt en erreur :', err.message));
+
+  setTimeout(() => {
+    take('après appairage');
+    snapshotTimer = setInterval(() => take('périodique'), VAULT_SNAPSHOT_INTERVAL_MS);
+  }, VAULT_FIRST_SNAPSHOT_MS);
+}
 
 /**
  * Watchdog de vivacité de la page : quand le renderer WhatsApp Web se fait
@@ -420,6 +488,36 @@ app.get('/debug', requireToken, async (_req, res) => {
 });
 
 /**
+ * Diagnostic du coffre de session — sert au contrôle après déploiement :
+ * « la session a-t-elle survécu, et une copie durable existe-t-elle ? ».
+ * Ne renvoie QUE des métadonnées (présence, magasins, tailles) — jamais un
+ * octet de la session elle-même.
+ */
+app.get('/session-vault', requireToken, async (_req, res) => {
+  const local = sessionStore.localSessionState(SESSION_PATH);
+
+  const out = {
+    ready,
+    session: state.session,
+    vault_enabled: VAULT_ENABLED,
+    local: {
+      exists: local.exists,
+      usable: local.usable,
+      stores: local.stores,
+      megabytes: +(local.bytes / 1048576).toFixed(1),
+    },
+  };
+
+  try {
+    out.vault = (await api.get('/internal/whatsapp/session-archive/meta')).data.data;
+  } catch (err) {
+    out.vault_error = err.message;
+  }
+
+  res.json(out);
+});
+
+/**
  * Self-test d'envoi de média isolé de la file d'attente : envoie une image
  * minuscule (1×1 px) au destinataire configuré, en instrumentant chaque étape,
  * et renvoie EXACTEMENT où ça bloque (upload vs sérialisation du retour) plus
@@ -491,10 +589,63 @@ app.get('/qr', requireToken, (_req, res) => {
 
 app.listen(HEALTH_PORT, () => console.log(`[whatsapp] health sur :${HEALTH_PORT}/health, QR sur :${HEALTH_PORT}/qr`));
 
+// ── Arrêt propre ─────────────────────────────────────────────────────────────
+/*
+ * Railway envoie SIGTERM avant de couper le conteneur. Sans gestionnaire, Node
+ * s'arrête net : Chromium est tué au milieu de ses écritures et laisse un
+ * profil (LevelDB, IndexedDB) potentiellement incohérent sur le volume, ce qui
+ * rallonge — ou fait échouer — le démarrage suivant.
+ *
+ * On ferme donc Chromium proprement, PUIS on archive : c'est le seul moment où
+ * le profil est certainement au repos, donc la meilleure copie possible. Tout
+ * est borné dans le temps, un arrêt ne doit jamais traîner.
+ */
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[whatsapp] ${signal} reçu — arrêt propre.`);
+
+  try {
+    await withTimeout(client.destroy(), 15000, 'fermeture de Chromium');
+    console.log('[whatsapp] Chromium fermé proprement.');
+  } catch (err) {
+    console.warn('[whatsapp] fermeture de Chromium :', err.message);
+  }
+
+  // Profil au repos : la copie prise ici est la plus fiable de toutes.
+  if (VAULT_ENABLED) {
+    try {
+      await withTimeout(
+        sessionStore.snapshot({ api, dataPath: SESSION_PATH, enabled: VAULT_ENABLED, reason: 'arrêt' }),
+        20000,
+        'dépôt de session',
+      );
+    } catch (err) {
+      console.warn('[wa-session] dépôt à l\'arrêt impossible :', err.message);
+    }
+  }
+
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
 // ── Démarrage ────────────────────────────────────────────────────────────────
 process.on('unhandledRejection', (err) => console.warn('[whatsapp] unhandledRejection:', err?.message || err));
 
-reportSession('initializing');
-cleanupStaleLocks(SESSION_PATH); // retire les verrous Chromium périmés avant de démarrer
-client.initialize();
-loop();
+async function start() {
+  reportSession('initializing');
+  cleanupStaleLocks(SESSION_PATH); // retire les verrous Chromium périmés avant de démarrer
+
+  // AVANT d'initialiser le client : s'il n'y a pas de session exploitable sur
+  // le volume, on la réclame au coffre. Une session locale valide n'est jamais
+  // remplacée — le volume reste le chemin nominal.
+  await sessionStore.restoreIfMissing({ api, dataPath: SESSION_PATH, enabled: VAULT_ENABLED });
+
+  client.initialize();
+  loop();
+}
+
+start();

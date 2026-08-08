@@ -8,11 +8,13 @@ use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
 use App\Services\Whatsapp\WhatsappAlertService;
 use App\Services\Whatsapp\WhatsappOutboxService;
+use App\Services\Whatsapp\WhatsappSessionVault;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
 use Intervention\Image\ImageManager;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * MODULE PROVISOIRE — à retirer après homologation MI.
@@ -28,7 +30,115 @@ class WhatsappWorkerController extends Controller
     public function __construct(
         private WhatsappOutboxService $outbox,
         private WhatsappAlertService $alerts,
+        private WhatsappSessionVault $vault,
     ) {}
+
+    /*
+    |--------------------------------------------------------------------------
+    | Coffre de session
+    |--------------------------------------------------------------------------
+    |
+    | La session WhatsApp Web ne vivait que sur le volume Railway du worker :
+    | un exemplaire unique, non sauvegardé, d'un secret qu'on ne peut
+    | reconstituer qu'en re-scannant un QR sur place. Ces trois routes lui
+    | donnent une copie chiffrée dans le stockage objet des sauvegardes.
+    |
+    | Le contenu de l'archive ne transite QUE dans ces réponses binaires : il
+    | n'est jamais journalisé, ni inclus dans un message d'erreur.
+    */
+
+    /** GET internal/whatsapp/session-archive/meta — taille et date, jamais le contenu. */
+    public function sessionArchiveMeta(): JsonResponse
+    {
+        return response()->json(['data' => [
+            'configured' => $this->vault->isConfigured(),
+        ] + $this->vault->metadata()]);
+    }
+
+    /**
+     * GET internal/whatsapp/session-archive — restitue l'archive de session.
+     *
+     * 404 quand le coffre est vide : c'est le cas normal du tout premier
+     * démarrage, le worker enchaîne alors sur l'appairage par QR.
+     */
+    public function sessionArchive(): StreamedResponse|JsonResponse
+    {
+        if (! $this->vault->isConfigured()) {
+            return response()->json([
+                'data' => null,
+                'errors' => [['code' => 'VAULT_NOT_CONFIGURED', 'message' => 'Session vault not configured.', 'field' => null]],
+            ], 503);
+        }
+
+        try {
+            $path = $this->vault->retrieve();
+        } catch (\Throwable $e) {
+            return response()->json([
+                'data' => null,
+                'errors' => [['code' => 'VAULT_UNREADABLE', 'message' => 'Stored session is unreadable.', 'field' => null]],
+            ], 500);
+        }
+
+        if ($path === null) {
+            return response()->json([
+                'data' => null,
+                'errors' => [['code' => 'RESOURCE_NOT_FOUND', 'message' => 'No stored session.', 'field' => null]],
+            ], 404);
+        }
+
+        // Flux + suppression immédiate : la copie EN CLAIR de la session ne
+        // doit pas rester sur le disque du conteneur une seconde de plus que
+        // le transfert, ni y tenir en mémoire d'un seul bloc.
+        return response()->streamDownload(function () use ($path) {
+            $handle = fopen($path, 'rb');
+
+            try {
+                while (! feof($handle)) {
+                    echo fread($handle, 1048576);
+                }
+            } finally {
+                fclose($handle);
+                @unlink($path);
+            }
+        }, 'session.tar.gz', [
+            'Content-Type' => 'application/gzip',
+            'Cache-Control' => 'no-store',
+        ]);
+    }
+
+    /**
+     * POST internal/whatsapp/session-archive — le worker dépose sa session.
+     *
+     * Un refus (archive trop petite, empreinte non conforme) laisse la session
+     * déjà en coffre STRICTEMENT intacte : c'est la propriété qui compte, un
+     * worker démarré sans volume ne doit jamais pouvoir effacer les credentials.
+     */
+    public function storeSessionArchive(Request $request): JsonResponse
+    {
+        $maxKilobytes = (int) ceil(((int) config('whatsapp.session_vault.max_bytes', 64 * 1024 * 1024)) / 1024);
+
+        $request->validate([
+            'archive' => "required|file|max:{$maxKilobytes}",
+            'sha256' => 'nullable|string|size:64',
+        ]);
+
+        try {
+            $result = $this->vault->store(
+                $request->file('archive')->getRealPath(),
+                $request->input('sha256'),
+            );
+        } catch (\Throwable $e) {
+            // Le message de refus porte des tailles, jamais de contenu.
+            \Log::warning('[wa-session] dépôt refusé : '.$e->getMessage());
+
+            return response()->json([
+                'data' => null,
+                'errors' => [['code' => 'VAULT_REJECTED', 'message' => $e->getMessage(), 'field' => 'archive']],
+            ], 422);
+        }
+
+        return response()->json(['data' => $result]);
+    }
 
     /** GET internal/whatsapp/next — réclame le prochain envoi (FIFO, un à la fois). */
     public function next(): JsonResponse

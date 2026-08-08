@@ -62,4 +62,72 @@ return [
     // Le QR lui-même ne peut pas être mis dans l'email : il tourne toutes les
     // ~30 s, il serait expiré à l'ouverture. Vide => bouton omis.
     'qr_url' => env('WHATSAPP_QR_URL'),
+
+    /*
+    | Canal de transmission actif (STRAT-07).
+    |
+    | 'web'   = relais WhatsApp Web non officiel (worker Node). Défaut, et
+    |           comportement historique : rien ne change tant qu'on n'y touche pas.
+    | 'cloud' = API Cloud officielle (Meta Graph). Cible avant le 10/09/2026,
+    |           date d'expiration du contournement par pin de version.
+    |
+    | Voir docs/canal-transmission.md pour la procédure de bascule.
+    */
+    'channel' => env('WHATSAPP_CHANNEL', 'web'),
+
+    /*
+    | Mode ombre : le canal cible est exercé À BLANC sur chaque job (résolution
+    | des destinataires, formatage, validation) et le résultat est journalisé,
+    | SANS rien transmettre. Permet de comparer les deux canaux sur du trafic
+    | réel avant de basculer.
+    */
+    'shadow_channel' => env('WHATSAPP_SHADOW_CHANNEL'),
+
+    'cloud' => [
+        'token' => env('WHATSAPP_CLOUD_TOKEN'),
+        'phone_number_id' => env('WHATSAPP_CLOUD_PHONE_NUMBER_ID'),
+        'base_url' => env('WHATSAPP_CLOUD_BASE_URL', 'https://graph.facebook.com'),
+        'api_version' => env('WHATSAPP_CLOUD_API_VERSION', 'v21.0'),
+        'timeout' => (int) env('WHATSAPP_CLOUD_TIMEOUT', 30),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Coffre de session (persistance durable de l'appairage WhatsApp Web)
+    |--------------------------------------------------------------------------
+    |
+    | La session WhatsApp Web (profil Chromium appairé au téléphone) vivait
+    | UNIQUEMENT sur le volume Railway du service worker. Un volume est lié à
+    | une instance : il survit à un redéploiement, mais pas à une recréation du
+    | service, à une migration de région, ni à une erreur d'opération. Le seul
+    | moyen de retrouver la session était alors de re-scanner un QR — c'est-à-dire
+    | une interruption du canal de transmission légal du produit.
+    |
+    | Le coffre archive la session dans le MÊME stockage objet chiffré que les
+    | sauvegardes de base (disque « backups », chiffrement XChaCha20-Poly1305 du
+    | trousseau BackupKeyring). Aucun nouveau secret, aucun nouveau fournisseur.
+    |
+    | Le worker est le seul client : il dépose une archive après appairage puis
+    | périodiquement, et la réclame au démarrage UNIQUEMENT si son disque local
+    | n'a pas de session exploitable. Voir whatsapp-service/session-store.js.
+    */
+    'session_vault' => [
+        'enabled' => (bool) env('WHATSAPP_SESSION_VAULT_ENABLED', true),
+
+        // Clé unique dans le bucket : on ne garde qu'une session courante (plus
+        // une copie de sûreté, écrite par le service avant tout remplacement).
+        'path' => env('WHATSAPP_SESSION_VAULT_PATH', 'whatsapp-session/session.tar.gz.enc'),
+
+        /*
+        | Plancher de taille, en octets. Une archive plus petite ne peut pas
+        | contenir un profil Chromium appairé : c'est le garde-fou qui empêche
+        | qu'une session vide (worker démarré sans volume, extraction ratée)
+        | vienne ÉCRASER des credentials valides dans le coffre.
+        */
+        'min_bytes' => (int) env('WHATSAPP_SESSION_VAULT_MIN_BYTES', 65536),
+
+        // Plafond, en octets. Doit rester sous post_max_size (voir Dockerfile).
+        'max_bytes' => (int) env('WHATSAPP_SESSION_VAULT_MAX_BYTES', 64 * 1024 * 1024),
+    ],
+
 ];

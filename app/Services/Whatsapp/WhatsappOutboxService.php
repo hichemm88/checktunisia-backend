@@ -33,9 +33,21 @@ class WhatsappOutboxService
 
     public function __construct(private WhatsappAlertService $alerts) {}
 
+    /**
+     * Canal de transmission actif (STRAT-07). Résolu à l'appel plutôt
+     * qu'injecté : la config peut changer entre deux requêtes, et les tests
+     * basculent de canal à la volée.
+     */
+    private function channel(): \App\Contracts\DeliveryChannel
+    {
+        return app(\App\Services\Delivery\DeliveryChannelManager::class)->active();
+    }
+
     public function enabled(): bool
     {
-        return (bool) config('whatsapp.enabled') && (bool) config('whatsapp.recipient');
+        // Délégué au canal — la condition est identique à celle d'avant pour
+        // WhatsApp Web, mais chaque canal porte désormais la sienne.
+        return $this->channel()->isConfigured();
     }
 
     /**
@@ -179,33 +191,21 @@ class WhatsappOutboxService
      */
     public function recipientsForHotel(?Hotel $hotel): array
     {
-        $global = (string) config('whatsapp.recipient');
+        $recipients = $this->channel()->recipientsFor($hotel);
 
-        if ($hotel && config('whatsapp.direct_routing', true)) {
-            $jids = $hotel->whatsappRecipientProfiles()
-                ->where('receives_whatsapp_fiches', true)
-                ->whereNotNull('whatsapp_number')
-                ->pluck('whatsapp_number')
-                ->map(fn ($n) => $this->toJid($n))
-                ->filter()
-                ->unique()
-                ->values()
-                ->all();
+        // Mode ombre : exerce le canal cible à blanc sur le même établissement
+        // et journalise tout écart. Ne transmet rien, n'appelle pas le réseau,
+        // et n'échoue jamais bruyamment.
+        app(\App\Services\Delivery\DeliveryChannelManager::class)
+            ->compareRecipients($hotel, $recipients);
 
-            if (! empty($jids)) {
-                return $jids;
-            }
-        }
-
-        return $global !== '' ? [$global] : [];
+        return $recipients;
     }
 
-    /** Numéro (chiffres internationaux) → JID WhatsApp individuel. */
+    /** Numéro (chiffres internationaux) → adresse native du canal actif. */
     private function toJid(?string $number): ?string
     {
-        $digits = preg_replace('/\D+/', '', (string) $number);
-
-        return $digits === '' ? null : $digits.'@c.us';
+        return $this->channel()->formatRecipient($number);
     }
 
     /** Enfile une fiche factice [TEST] pour le bouton « message test » admin. */
