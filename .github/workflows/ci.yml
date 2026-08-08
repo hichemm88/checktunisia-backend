@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Une seule exécution par branche : un push qui suit de près annule le précédent.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: PHPUnit
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: qayed_test
+          POSTGRES_USER: qayed
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U qayed"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # phpunit.xml force DB_HOST=postgres (force="true", volontairement — voir le
+      # commentaire du fichier : sans ça les tests vidaient la base de DEV). Le
+      # service tourne sur 127.0.0.1 côté runner, on fait donc résoudre le nom.
+      - name: Résoudre « postgres » vers le service
+        run: echo "127.0.0.1 postgres" | sudo tee -a /etc/hosts
+
+      - name: Installer PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          # Mêmes extensions que Dockerfile.test — gd est requis par le
+          # redimensionnement d'images des médias CMS.
+          extensions: pdo, pdo_pgsql, pgsql, zip, bcmath, mbstring, exif, pcntl, intl, gd, redis
+          coverage: none
+
+      - name: Cache des dépendances Composer
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-
+
+      # Avant composer install : le script post-autoload-dump lance
+      # « artisan package:discover », qui démarre l'application.
+      - name: Préparer l'environnement
+        run: |
+          cp .env.example .env
+          mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache
+
+      - name: Installer les dépendances
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      # La suite complète : Unit + Feature. Toute régression fait échouer le job.
+      - name: Tests
+        run: php vendor/bin/phpunit
+
+  # Le worker WhatsApp est un service Node à part, hors de la suite PHPUnit.
+  # Ses tests protègent la session appairée — un secret qu'on ne peut
+  # reconstituer qu'en re-scannant un QR sur place.
+  whatsapp-worker:
+    name: Worker WhatsApp
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # `node --test` est intégré à Node : aucune dépendance à installer, donc
+      # rien à mettre en cache et pas de npm install (qui téléchargerait
+      # Chromium et ses patches pour rien).
+      - name: Tests de résilience de la session
+        working-directory: whatsapp-service
+        run: node --test
+
+  # Analyse statique à signal réel. Volontairement PAS de contrôle de style
+  # bloquant : la base a une convention maison cohérente (alignement des `=>`,
+  # `!$x` sans espace, CRLF) qui diverge du preset Laravel sur ~230 fichiers.
+  # L'imposer exigerait un reformatage global qui détruirait git blame et
+  # entrerait en conflit avec tout travail en cours — c'est une décision
+  # esthétique qui appartient au propriétaire du code, pas au pipeline.
+  # `pint.json` est fourni, configuré pour la convention maison, pour qui veut
+  # le lancer manuellement.
+  quality:
+    name: Dépendances
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      # Détecte un composer.json malformé ou désynchronisé du lock.
+      - name: Valider composer.json
+        run: composer validate --strict
+
+      # Bloquant : ce produit manipule des données d'identité, une CVE connue
+      # dans une dépendance n'a pas à atteindre la production. Remis à zéro le
+      # 2026-08-07 (18 avis sur guzzle, dompdf et commonmark corrigés).
+      - name: Vulnérabilités connues des dépendances
+        run: composer audit --no-dev

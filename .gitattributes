@@ -1,0 +1,4 @@
+# Les scripts shell doivent garder des fins de ligne LF : convertis en CRLF par
+# git sous Windows, ils deviennent inexécutables dans le conteneur Linux
+# ("no such file or directory" sur le shebang).
+*.sh text eol=lf

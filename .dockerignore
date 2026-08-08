@@ -1,0 +1,28 @@
+# Contexte de build : sans ce fichier, vendor/, storage/logs et les tests
+# partaient dans le contexte envoyé au daemon Docker à chaque build.
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+
+vendor/
+node_modules/
+
+storage/logs/*
+storage/framework/cache/data/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/app/private/*
+storage/app/public/*
+bootstrap/cache/*.php
+
+tests/
+phpunit.xml
+.phpunit.result.cache
+Dockerfile
+Dockerfile.test
+docker-compose*.yml
+
+# Worker WhatsApp : image distincte, ne doit pas alourdir le contexte backend.
+whatsapp-service/
