@@ -151,4 +151,105 @@ class WhatsappLogoutTest extends TestCase
     {
         $this->report('inventé')->assertStatus(422);
     }
+
+    // ── Idempotence des alertes ───────────────────────────────────────────────
+    //
+    // Deux mécanismes envoient l'alerte : la transition de statut (worker) et la
+    // commande planifiée whatsapp:check-health (toutes les 10 min). Chacun avait
+    // sa propre déduplication, et aucune ne portait sur l'ÉVÉNEMENT lui-même.
+
+    private function admin(): \App\Models\User
+    {
+        return \App\Models\User::factory()->platformAdmin()->create();
+    }
+
+    /** Nombre d'emails d'alerte réellement partis. */
+    private function sentAlerts(): int
+    {
+        $count = 0;
+        Mail::assertSent(\App\Mail\SystemMail::class, function () use (&$count) {
+            $count++;
+
+            return true;
+        });
+
+        return $count;
+    }
+
+    public function test_one_revocation_produces_exactly_one_email_whoever_reports_it(): void
+    {
+        $this->admin();
+
+        $this->report('ready')->assertOk();
+        $this->report('logged_out', 'LOGOUT')->assertOk();
+        $this->assertSame(1, $this->sentAlerts(), 'le worker alerte une fois');
+
+        // La commande planifiée passe et constate la même panne, avec son
+        // propre libellé. Elle ne doit pas produire un second email.
+        $state = WhatsappSessionState::current()->fresh();
+        app(\App\Services\Whatsapp\WhatsappAlertService::class)
+            ->sessionDown($state->status, 'La session n\'est plus opérationnelle depuis 20 min.', $state);
+
+        $this->assertSame(1, $this->sentAlerts());
+    }
+
+    public function test_a_technical_disconnect_after_a_revocation_sends_no_second_email(): void
+    {
+        $this->admin();
+
+        $this->report('ready')->assertOk();
+        $this->report('logged_out', 'LOGOUT')->assertOk();
+        $this->assertSame(1, $this->sentAlerts());
+
+        // Sans convergence des clés, celui-ci annoncerait « reconnexion
+        // automatique, aucune action requise » juste après avoir réclamé un QR.
+        $this->report('disconnected', 'NAVIGATION')->assertOk();
+
+        $this->assertSame(1, $this->sentAlerts());
+    }
+
+    public function test_a_worker_restart_sends_no_new_email(): void
+    {
+        $this->admin();
+
+        $this->report('ready')->assertOk();
+        $this->report('logged_out', 'LOGOUT')->assertOk();
+        $this->assertSame(1, $this->sentAlerts());
+
+        $this->report('initializing')->assertOk();
+        $this->report('logged_out', 'Coffre antérieur à la révocation.')->assertOk();
+
+        $this->assertSame(1, $this->sentAlerts(), 'un redémarrage ne réveille pas l\'alerte');
+    }
+
+    public function test_a_genuinely_new_revocation_does_alert_again(): void
+    {
+        $this->admin();
+
+        $this->report('ready')->assertOk();
+        $this->report('logged_out', 'LOGOUT')->assertOk();
+        $this->assertSame(1, $this->sentAlerts());
+
+        // Le QR est scanné : la session repart, la révocation est levée…
+        $this->travel(2)->minutes();
+        $this->report('ready')->assertOk();
+        $this->assertNull(WhatsappSessionState::current()->fresh()->revoked_at);
+
+        // …puis WhatsApp révoque de nouveau. C'est un ÉVÉNEMENT distinct :
+        // l'alerte DOIT repartir, sinon une vraie panne passerait inaperçue.
+        $this->travel(2)->minutes();
+        $this->report('logged_out', 'LOGOUT')->assertOk();
+
+        $this->assertSame(2, $this->sentAlerts());
+    }
+
+    public function test_a_healthy_session_never_alerts(): void
+    {
+        $this->admin();
+
+        $this->report('initializing')->assertOk();
+        $this->report('ready')->assertOk();
+
+        Mail::assertNothingSent();
+    }
 }

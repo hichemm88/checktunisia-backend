@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
 use App\Services\Email\SystemMailer;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
@@ -47,6 +48,32 @@ class WhatsappAlertService
         $state ??= WhatsappSessionState::current();
         $needsPairing = $status === WhatsappSessionState::STATUS_LOGGED_OUT;
 
+        // UN événement, UN email — quel que soit le nombre d'appelants.
+        //
+        // Deux mécanismes concurrents envoyaient l'alerte : la transition de
+        // statut côté contrôleur, et la commande planifiée toutes les 10 min.
+        // Chacun avait sa propre déduplication, et aucune ne portait sur
+        // l'ÉVÉNEMENT :
+        //   • le garde `$previous !== $status` re-alertait sur la séquence
+        //     logged_out → disconnected → logged_out, soit deux emails de plus
+        //     pour une seule et même révocation ;
+        //   • le drapeau de la commande planifiée était levé dès que la session
+        //     repassait « prête », si bien qu'une reprise de quelques minutes
+        //     suffisait à autoriser un second email pour la panne suivante.
+        //
+        // La clé est désormais celle de l'événement lui-même : l'instant de la
+        // révocation pour un logout, celui de la dernière session vivante pour
+        // une coupure. Une nouvelle panne porte naturellement une nouvelle clé —
+        // il n'y a plus de drapeau à lever, ni à effacer au bon moment.
+        //
+        // Cache::add est atomique (écrit seulement si absent) : deux appels
+        // simultanés ne peuvent pas produire deux emails.
+        if (! Cache::add($this->outageKey($status, $state), true, now()->addDays(7))) {
+            Log::info('[whatsapp] alerte déjà envoyée pour cet événement de session — email supprimé.');
+
+            return;
+        }
+
         $pending = WhatsappSendLog::where('status', WhatsappSendLog::STATUS_PENDING)->count();
 
         $context = [];
@@ -84,6 +111,36 @@ class WhatsappAlertService
             $body,
             $needsPairing && $qrUrl !== '' ? SystemMailer::ctaButton($qrUrl, 'Reconnecter (scanner le QR)') : null,
         );
+    }
+
+    /**
+     * Identifiant de l'ÉVÉNEMENT de panne, et non de l'état courant.
+     *
+     *  • révocation → l'instant où WhatsApp a invalidé l'appareil ;
+     *  • coupure    → l'instant de la dernière session vivante.
+     *
+     * Deux alertes portant la même clé décrivent la même panne, quels que
+     * soient l'appelant et le libellé. Le repli sur la date du jour couvre le
+     * cas où aucun des deux horodatages n'est connu (première mise en service) :
+     * une alerte par jour au pire, jamais une boucle.
+     */
+    private function outageKey(string $status, WhatsappSessionState $state): string
+    {
+        // Tant qu'une révocation n'est pas réparée, TOUTE alerte de panne se
+        // rapporte à elle. Sans cette convergence, une déconnexion technique
+        // survenant après le logout aurait sa propre clé et enverrait un second
+        // email — celui-là annonçant « reconnexion automatique, aucune action
+        // requise », juste après avoir réclamé un QR. Message contradictoire
+        // pour un seul et même incident.
+        if ($state->revoked_at) {
+            $scope = WhatsappSessionState::STATUS_LOGGED_OUT;
+            $moment = $state->revoked_at;
+        } else {
+            $scope = $status;
+            $moment = $state->last_ready_at;
+        }
+
+        return 'whatsapp:alerted:'.sha1($scope.'|'.($moment?->toAtomString() ?? now()->toDateString()));
     }
 
     /**
