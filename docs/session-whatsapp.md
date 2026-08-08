@@ -75,7 +75,7 @@ Ils comptent plus que le mécanisme, parce que la panne qu'ils préviennent est 
 | Un **dépôt valide mais inutilisable** (profil pris au mauvais moment) | La version précédente est conservée sous `…​.previous` |
 | Le coffre **restaure une session périmée** par-dessus une session locale valide | Le coffre n'est sollicité que si le disque local n'a **rien** d'exploitable |
 | Un **profil fantôme** (né d'un QR jamais scanné) passe pour une session et masque la copie saine | Marqueur d'appairage `.qayed-paired.json`, posé uniquement sur `ready`. Voir ci-dessous |
-| Un profil restauré se **mélange** au profil déjà présent | L'ancien est écarté sous `session.orphan` — conservé, pas supprimé — avant extraction, et remis en place si l'extraction échoue |
+| Un profil restauré se **mélange** au profil déjà présent | L'archive est extraite à l'écart et **validée** d'abord ; l'ancien profil n'est écarté (sous `session.orphan`, conservé) qu'une fois le remplaçant prouvé bon, et remis en place si le basculement échoue |
 | Le coffre est **injoignable au démarrage** (backend en plein redéploiement — le cas normal) | Trois tentatives, puis démarrage avec ce qu'on a. Rien n'est jamais effacé |
 | La session finit **en clair** dans le stockage objet | Sans clé de chiffrement, le coffre refuse de stocker plutôt que de déposer en clair |
 | Un secret **fuit dans les journaux** | Les traces ne portent que des tailles, des préfixes d'empreinte et des identifiants de clé. Testé |

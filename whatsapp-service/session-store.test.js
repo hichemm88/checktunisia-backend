@@ -187,6 +187,30 @@ test('un profil non appairé est ÉCARTÉ, pas supprimé, avant restauration', a
   );
 });
 
+test('une archive sans session appairée laisse le disque local INTACT', async () => {
+  // Cas rencontré en production : le coffre contenait un profil fantôme,
+  // déposé avant que le marqueur d'appairage n'existe.
+  const fantome = tmpRoot('coffre-fantome');
+  makeUnpairedProfile(fantome);
+
+  // On fabrique une archive du fantôme en contournant le refus de dépôt.
+  const state = store.localSessionState(fantome);
+  const archive = await store.createArchive(fantome, { ...state, root: path.join(fantome, 'session') });
+  const vault = fakeVault({ contents: fs.readFileSync(archive.path) });
+
+  const local = tmpRoot('local-intact');
+  makeUnpairedProfile(local);
+  const avant = fs.readFileSync(path.join(local, 'session', 'Default', 'IndexedDB', 'vide.ldb'));
+
+  const outcome = await store.restoreIfMissing({ api: vault.api, dataPath: local, log: silent });
+
+  assert.equal(outcome, 'empty');
+  // Rien n'a bougé : ni écarté, ni remplacé, ni mélangé.
+  assert.deepEqual(fs.readFileSync(path.join(local, 'session', 'Default', 'IndexedDB', 'vide.ldb')), avant);
+  assert.ok(!fs.existsSync(path.join(local, 'session.orphan')), 'aucun profil ne doit être écarté pour rien');
+  assert.ok(!fs.existsSync(path.join(local, '.restore-staging')), 'la zone de transit doit être nettoyée');
+});
+
 test('un profil appairé est reconnu comme exploitable', () => {
   const dir = tmpRoot('appairee');
   makePairedSession(dir);

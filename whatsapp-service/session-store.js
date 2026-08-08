@@ -233,16 +233,36 @@ async function restoreIfMissing({ api, dataPath, log = console, enabled = true, 
       fs.writeFileSync(archive, Buffer.from(res.data));
 
       /*
-       * Écarter le profil orphelin AVANT d'extraire, plutôt qu'extraire
-       * par-dessus : tar écrase les entrées de l'archive et laisse le reste,
-       * ce qui produirait un profil hybride — mélange de deux sessions
-       * Chromium, cas où l'on perdrait les deux.
+       * Extraire D'ABORD à l'écart, valider, et seulement ensuite prendre la
+       * place. L'ordre inverse — écarter le profil puis extraire par-dessus —
+       * touche au disque avant de savoir si le remplaçant vaut quelque chose,
+       * et une archive décevante laisse alors les lieux en désordre.
        *
-       * Écarter, pas supprimer : le profil est déplacé sous « .orphan » et
-       * remis en place si l'extraction échoue. Un orphelin précédent est en
-       * revanche remplacé — c'est un profil qu'on a déjà jugé non appairé, et
-       * en garder une collection remplirait le volume.
+       * On n'extrait jamais par-dessus un profil existant : tar écrase les
+       * entrées de l'archive et laisse le reste, ce qui produirait un hybride
+       * de deux profils Chromium — le cas où l'on perdrait les deux.
        */
+      const staging = path.join(dataPath, '.restore-staging');
+      fs.rmSync(staging, { recursive: true, force: true });
+
+      try {
+        await extractArchive(archive, staging);
+      } finally {
+        safeUnlink(archive);
+      }
+
+      const restored = localSessionState(staging);
+
+      if (!restored.usable) {
+        // Archive présente mais sans session appairée : on n'y touche pas et
+        // on le dit. Le disque local n'a pas bougé d'un octet.
+        fs.rmSync(staging, { recursive: true, force: true });
+        log.warn('[wa-session] le coffre ne contient pas de session appairée — un QR sera demandé, le disque local est intact.');
+        return 'empty';
+      }
+
+      // Le remplaçant est prouvé bon : on peut maintenant écarter l'ancien.
+      // Écarter, pas supprimer — et remettre en place si le basculement rate.
       const orphan = `${state.root}.orphan`;
       let setAside = false;
 
@@ -253,32 +273,25 @@ async function restoreIfMissing({ api, dataPath, log = console, enabled = true, 
           setAside = true;
           log.warn(`[wa-session] profil local non appairé écarté sous « ${path.basename(orphan)} » (conservé, non supprimé).`);
         } catch (err) {
+          fs.rmSync(staging, { recursive: true, force: true });
           log.warn(`[wa-session] impossible d'écarter le profil local : ${err.message} — restauration abandonnée, rien n'est touché.`);
-          safeUnlink(archive);
           return 'unavailable';
         }
       }
 
       try {
-        await extractArchive(archive, dataPath);
+        fs.renameSync(restored.root, state.root);
       } catch (err) {
         if (setAside) {
-          // Remise en l'état : mieux vaut le profil d'avant que rien.
-          try { fs.rmSync(state.root, { recursive: true, force: true }); fs.renameSync(orphan, state.root); } catch { /* au mieux */ }
+          try { fs.renameSync(orphan, state.root); } catch { /* au mieux */ }
         }
+        fs.rmSync(staging, { recursive: true, force: true });
         throw err;
-      } finally {
-        safeUnlink(archive);
       }
+
+      fs.rmSync(staging, { recursive: true, force: true });
 
       const after = localSessionState(dataPath);
-
-      if (!after.usable) {
-        // L'archive existait mais ne contenait pas de profil appairé : on ne
-        // ment pas sur l'état, le QR sera demandé.
-        log.warn('[wa-session] archive restaurée mais incomplète — un QR sera demandé.');
-        return 'empty';
-      }
 
       log.log(`[wa-session] session restaurée depuis le coffre (${mb(after.bytes)}) — aucun QR ne devrait être demandé.`);
       return 'restored';
