@@ -574,4 +574,26 @@ class CheckInHardeningTest extends TestCase
         $out = \App\Models\AuditLog::where('action', 'check_in.checked_out')->first();
         $this->assertSame($this->receptionist2->id, $out->actor_id, 'Le départ doit être imputé au second agent.');
     }
+
+    /**
+     * Archiver une fiche détache définitivement ses voyageurs (le lien n'est
+     * pas archivable, contrairement au séjour). La composition du séjour doit
+     * donc survivre dans le journal, sans quoi on perd la seule preuve de qui
+     * y figurait.
+     */
+    public function test_archiving_a_stay_keeps_a_record_of_who_was_on_it(): void
+    {
+        $checkIn = $this->draft();
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$checkIn->id}/guests", $this->guestPayload())->assertCreated();
+
+        $this->actingAs($this->admin)
+            ->deleteJson("/api/v1/hotel/check-ins/{$checkIn->id}")->assertNoContent();
+
+        $log = \App\Models\AuditLog::where('action', 'check_in.deleted')->sole();
+
+        $this->assertSame('GHARBI', $log->old_values['guests'][0]['last_name']);
+        $this->assertTrue($log->old_values['guests'][0]['is_primary']);
+        $this->assertDatabaseMissing('check_in_guests', ['check_in_id' => $checkIn->id]);
+    }
 }

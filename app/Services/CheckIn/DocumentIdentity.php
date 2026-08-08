@@ -144,8 +144,13 @@ class DocumentIdentity
             return collect();
         }
 
+        // Égalité simple et non `whereDate` : la colonne est déjà de type date
+        // et indexée (idx_guests_dob) — enrober la colonne dans une fonction
+        // empêcherait le planificateur d'utiliser l'index. La borne protège
+        // d'un cas pathologique (date de naissance par défaut saisie en masse).
         return Guest::query()
-            ->whereDate('date_of_birth', substr((string) $data['date_of_birth'], 0, 10))
+            ->where('date_of_birth', substr((string) $data['date_of_birth'], 0, 10))
+            ->limit(200)
             ->get()
             ->filter(fn (Guest $g) => static::comparableName($g->last_name) === static::comparableName($data['last_name'])
                 && static::comparableName($g->first_name) === static::comparableName($data['first_name'] ?? null))

@@ -283,10 +283,21 @@ class CheckInController extends Controller
     {
         $checkIn = $this->findForTenant($id);
 
+        // La composition du séjour est journalisée AVANT le détachement : les
+        // lignes check_in_guests, elles, sont supprimées pour de bon (le
+        // check-in n'est qu'archivé), et sans cette trace on perdait la seule
+        // preuve de qui séjournait sur cette fiche.
         \App\Services\Audit\AuditLogger::log(
             'check_in.deleted',
             $checkIn,
-            $checkIn->toArray(),
+            $checkIn->toArray() + [
+                'guests' => $checkIn->guests->map(fn ($g) => [
+                    'id' => $g->id,
+                    'first_name' => $g->first_name,
+                    'last_name' => $g->last_name,
+                    'is_primary' => (bool) $g->pivot?->is_primary,
+                ])->all(),
+            ],
             [],
             hotelId: $checkIn->hotel_id,
         );
