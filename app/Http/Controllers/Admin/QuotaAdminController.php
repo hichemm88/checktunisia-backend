@@ -11,9 +11,13 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
 /**
- * Pilotage commercial des quotas de check-ins (grille V2) — l'outil
- * d'upsell : comptes à ≥80 % de leur quota ce mois-ci et comptes en
- * dépassement, triés par volume. Les comptes illimités n'apparaissent pas.
+ * Pilotage commercial des quotas de check-ins — l'outil d'upsell : comptes à
+ * ≥80 % de leur quota ce mois-ci et comptes en dépassement, triés par
+ * volume. Les comptes illimités n'apparaissent pas.
+ *
+ * Chaque ligne porte le payload complet de CheckinQuota::status (dont
+ * `monthly_base` et `estimated_total`) : l'admin doit pouvoir expliquer
+ * pourquoi un client sera facturé X TND sans refaire le calcul lui-même.
  */
 class QuotaAdminController extends Controller
 {
@@ -113,7 +117,9 @@ class QuotaAdminController extends Controller
             $out = fopen('php://output', 'w');
             // BOM UTF-8 pour Excel.
             fwrite($out, "\xEF\xBB\xBF");
-            fputcsv($out, ['Hébergeur', 'Email', 'Plan', 'Check-ins', 'Quota', 'Dépassement', 'Tranches', 'Prix tranche (TND)', 'Montant (TND)', 'Statut', 'Facture'], ';');
+            // « Unités facturées » = check-ins supplémentaires en grille V3
+            // (tranche de 1), tranches entamées si un pack repasse à un lot.
+            fputcsv($out, ['Hébergeur', 'Email', 'Plan', 'Check-ins', 'Quota inclus', 'Dépassement', 'Unités facturées', 'Taille tranche', 'Prix unitaire (TND)', 'Montant (TND)', 'Statut', 'Facture'], ';');
             foreach ($charges as $c) {
                 fputcsv($out, [
                     $c->organization?->name,
@@ -123,6 +129,7 @@ class QuotaAdminController extends Controller
                     $c->quota,
                     $c->overage_count,
                     $c->bundle_count,
+                    $c->bundle_size,
                     number_format((float) $c->unit_price, 3, '.', ''),
                     number_format((float) $c->amount, 3, '.', ''),
                     $c->status,

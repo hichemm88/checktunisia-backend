@@ -107,13 +107,6 @@ class CheckInController extends Controller
             return $conflict;
         }
 
-        // Alertes quota (80 % / 100 %) après la réponse — la création de la
-        // fiche n'est JAMAIS bloquée ni ralentie par le quota (obligation
-        // légale de déclaration ; le dépassement est facturé, pas empêché).
-        if ($org = $hotel->organization) {
-            dispatch(fn () => \App\Services\Subscription\QuotaAlertService::evaluateSafely($org))->afterResponse();
-        }
-
         return response()->json(['data' => $this->detail($checkIn)], 201);
     }
 
@@ -203,6 +196,15 @@ class CheckInController extends Controller
             return response()->json([
                 'errors' => [['code' => 'INVALID_STATUS', 'message' => $e->getMessage()]],
             ], 422);
+        }
+
+        // Alertes quota (80 % / 100 %) après la réponse, sur la FINALISATION —
+        // pas sur la création du brouillon : seule une fiche déclarée consomme
+        // du quota. La finalisation n'est JAMAIS bloquée ni ralentie par le
+        // quota (obligation légale de déclaration ; le dépassement est facturé,
+        // pas empêché).
+        if ($org = $checkIn->hotel?->organization) {
+            dispatch(fn () => \App\Services\Subscription\QuotaAlertService::evaluateSafely($org))->afterResponse();
         }
 
         return response()->json(['data' => [

@@ -272,6 +272,13 @@ class CheckInService
 
             AuditLogger::log('check_in.completed', $checkIn, ['status' => 'draft'], ['status' => 'active', 'reference' => $checkIn->reference], hotelId: $checkIn->hotel_id);
 
+            // ── Consommation de quota : c'est ICI, et nulle part ailleurs ──
+            // La finalisation est l'acte déclaratif facturable. Dans la même
+            // transaction que le passage en « active » : si la finalisation
+            // échoue, aucune consommation n'est laissée derrière. L'unicité
+            // SQL sur check_in_id rend l'écriture rejouable sans risque.
+            \App\Services\Subscription\CheckinUsageRecorder::recordSafely($checkIn);
+
             // ── Watchlist check: flag hotel if any guest is on a watchlist ──
             app(WatchlistService::class)->checkCheckIn($checkIn->load('guests.documents'));
 
@@ -383,6 +390,12 @@ class CheckInService
             ]);
 
             AuditLogger::log('check_in.cancelled', $checkIn, newValues: ['reference' => $checkIn->reference, 'cancel_reason' => $reason], hotelId: $checkIn->hotel_id);
+
+            // Transparence : l'annulation est horodatée dans le registre de
+            // consommation. Elle ne rend PAS le check-in — la fiche a été
+            // déclarée. Sans consommation posée (annulation d'un brouillon),
+            // il n'y a rien à horodater.
+            \App\Services\Subscription\CheckinUsageRecorder::markCancelled($checkIn);
 
             app(PushNotificationService::class)
                 ->notifyCheckInEvent($checkIn, PushNotificationService::TYPE_FICHE_CANCELLED, $actor);

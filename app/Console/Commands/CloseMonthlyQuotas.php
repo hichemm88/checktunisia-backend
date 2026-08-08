@@ -79,11 +79,13 @@ class CloseMonthlyQuotas extends Command
             return;
         }
 
-        // Paramètres de tranche du plan ; repli sur la règle standard de la
-        // grille (+10 TND / tranche de 50) pour que le pilotage admin ait
-        // toujours un montant estimé, même sur un plan mal configuré.
-        $bundleSize = (int) ($plan?->overage_bundle_size ?? 0) >= 1 ? (int) $plan->overage_bundle_size : 50;
-        $unitPrice  = $plan?->overage_price !== null ? (float) $plan->overage_price : 10.0;
+        // Paramètres de dépassement du plan. Un plan sans tarif configuré est
+        // enregistré à 0 : le dépassement reste VISIBLE dans le pilotage admin
+        // (c'est un signal commercial), mais on n'invente jamais un montant
+        // qui n'a pas été vendu. `overageBillable` refuse de toute façon de
+        // facturer un plan non configuré.
+        $bundleSize = (int) ($plan?->overage_bundle_size ?? 0) >= 1 ? (int) $plan->overage_bundle_size : 1;
+        $unitPrice  = $plan?->overage_price !== null ? (float) $plan->overage_price : 0.0;
         $bundles    = CheckinQuota::bundleCount($used, $quota, $bundleSize);
         $billable   = CheckinQuota::overageBillable($sub);
 

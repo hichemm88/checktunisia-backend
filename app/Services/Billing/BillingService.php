@@ -193,12 +193,7 @@ class BillingService
             'currency'        => 'TND',
             'status'          => 'sent',
             'due_at'          => now()->addDays(7),
-            'notes'           => sprintf(
-                'Dépassement de quota check-ins — %s : %d check-ins au-delà du quota de %d (%d tranche(s) de %d × %s TND).',
-                $monthFr, $charge->overage_count, $charge->quota,
-                $charge->bundle_count, $charge->bundle_size,
-                number_format((float) $charge->unit_price, 3, '.', ''),
-            ),
+            'notes'           => self::overageInvoiceNotes($charge, $monthFr),
             'metadata'        => [
                 'overage'        => true,
                 'overage_period' => $charge->period->toDateString(),
@@ -214,6 +209,8 @@ class BillingService
         ]);
 
         $charge->update(['invoice_id' => $invoice->id, 'status' => \App\Models\OverageCharge::STATUS_INVOICED]);
+
+        $this->recordOverageEvent($sub, $charge, $invoice);
 
         AuditLogger::log('invoice.overage_generated', $invoice, newValues: [
             'invoice_number' => $invoice->invoice_number,
@@ -232,6 +229,50 @@ class BillingService
         ], $locale);
 
         return $invoice;
+    }
+
+    /**
+     * Libellé d'une facture de dépassement — le client doit pouvoir refaire
+     * le calcul de tête, sans consulter les CGV.
+     *
+     * Tranche de 1 (grille V3) : « 12 check-ins supplémentaires × 0,4 TND ».
+     * Tranche > 1 : « 2 tranche(s) de 50 × 10 TND », la formulation reste
+     * juste si la facturation par lot revient un jour.
+     */
+    public static function overageInvoiceNotes(\App\Models\OverageCharge $charge, string $monthFr): string
+    {
+        $price = rtrim(rtrim(number_format((float) $charge->unit_price, 3, ',', ' '), '0'), ',');
+
+        $detail = (int) $charge->bundle_size === 1
+            ? sprintf('%d check-in(s) supplémentaire(s) × %s TND', $charge->bundle_count, $price)
+            : sprintf('%d tranche(s) de %d × %s TND', $charge->bundle_count, $charge->bundle_size, $price);
+
+        return sprintf(
+            'Dépassement de quota check-ins — %s : %d check-ins déclarés pour un quota de %d inclus, soit %s.',
+            $monthFr, $charge->checkins_count, $charge->quota, $detail,
+        );
+    }
+
+    /**
+     * Trace la facturation d'un dépassement dans l'historique de
+     * l'abonnement : l'admin doit pouvoir expliquer un montant sans lire les
+     * logs. Le statut ne change pas (un dépassement ne suspend rien).
+     */
+    private function recordOverageEvent(Subscription $sub, \App\Models\OverageCharge $charge, Invoice $invoice): void
+    {
+        SubscriptionEvent::create([
+            'subscription_id' => $sub->id,
+            'event_type'      => 'overage_invoiced',
+            'previous_status' => $sub->status,
+            'new_status'      => $sub->status,
+            'notes'           => sprintf(
+                '%s — %d/%d check-ins, %d facturé(s) : %s TND (facture %s).',
+                $charge->period->format('m/Y'), $charge->checkins_count, $charge->quota,
+                $charge->overage_count, number_format((float) $charge->amount, 3, '.', ''),
+                $invoice->invoice_number,
+            ),
+            'created_at'      => now(),
+        ]);
     }
 
     // ─── Relances impayé + suspension ────────────────────────────────────────

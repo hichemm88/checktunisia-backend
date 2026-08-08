@@ -151,13 +151,22 @@ class QuotaAlertService
         }
 
         $price  = rtrim(rtrim(number_format($status['unit_price'], 3, '.', ''), '0'), '.');
-        $bundle = $status['bundle_size'];
+        $bundle = (int) $status['bundle_size'];
 
-        $text = match ($locale) {
-            'en' => "Each additional bundle of {$bundle} check-ins started will be billed {$price} TND at the end of the month. Your check-ins are never blocked.",
-            'ar' => "كل شريحة إضافية من {$bundle} تسجيل وصول يبدأ استخدامها ستُفوتر بـ {$price} دينار في نهاية الشهر. لن يتم حظر تسجيلات الوصول أبدًا.",
-            default => "Chaque tranche supplémentaire de {$bundle} check-ins entamée sera facturée {$price} TND en fin de mois. Vos check-ins ne sont jamais bloqués.",
-        };
+        // Tranche de 1 (grille V3) : on parle au client de check-ins, pas de
+        // « tranches » — « par tranche de 1 » ne veut rien dire. La formulation
+        // par lot reste disponible si un pack repasse à un bundle > 1.
+        $text = $bundle === 1
+            ? match ($locale) {
+                'en' => "Each additional check-in will be billed {$price} TND at the end of the month. Your check-ins are never blocked.",
+                'ar' => "سيُفوتر كل تسجيل وصول إضافي بـ {$price} دينار في نهاية الشهر. لن يتم حظر تسجيلات الوصول أبدًا.",
+                default => "Chaque check-in supplémentaire sera facturé {$price} TND en fin de mois. Vos check-ins ne sont jamais bloqués.",
+            }
+            : match ($locale) {
+                'en' => "Each additional bundle of {$bundle} check-ins started will be billed {$price} TND at the end of the month. Your check-ins are never blocked.",
+                'ar' => "كل شريحة إضافية من {$bundle} تسجيل وصول يبدأ استخدامها ستُفوتر بـ {$price} دينار في نهاية الشهر. لن يتم حظر تسجيلات الوصول أبدًا.",
+                default => "Chaque tranche supplémentaire de {$bundle} check-ins entamée sera facturée {$price} TND en fin de mois. Vos check-ins ne sont jamais bloqués.",
+            };
 
         return '<div class="warning">'.e($text).'</div>';
     }
