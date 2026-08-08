@@ -146,6 +146,72 @@ class AuthSecurityTest extends TestCase
             ->assertOk();
     }
 
+    // ── La 2FA s'arrête aux comptes à privilèges ─────────────────────────────
+
+    /**
+     * La 2FA est obligatoire pour platform_admin et authority_user, et pour EUX
+     * SEULS. C'est une décision produit, pas un oubli : une réceptionniste
+     * enregistre un voyageur au comptoir, souvent sur un poste partagé, parfois
+     * sans smartphone à portée. Lui imposer une TOTP à chaque connexion
+     * remplacerait un risque de compromission par une certitude de contournement
+     * (comptes partagés, codes notés à côté du poste).
+     *
+     * Ces tests existent parce que la frontière est facile à déplacer par
+     * inadvertance : il suffirait d'élargir un middleware à un groupe de routes
+     * trop large pour enfermer dehors tous les hôtels du produit.
+     */
+    public function test_hotel_admin_without_2fa_reaches_the_hotel_area(): void
+    {
+        $hotel = Hotel::factory()->withActiveSubscription()->create();
+        $manager = User::factory()->hotelAdmin($hotel)->create();
+
+        $this->assertNull($manager->fresh()->two_factor_confirmed_at, 'Le manager ne doit pas avoir de 2FA imposée.');
+
+        $this->actingAs($manager)
+            ->getJson('/api/v1/hotel/dashboard')
+            ->assertOk();
+    }
+
+    public function test_receptionist_without_2fa_reaches_the_hotel_area(): void
+    {
+        $hotel = Hotel::factory()->withActiveSubscription()->create();
+        $receptionist = User::factory()->receptionist($hotel)->create();
+
+        $this->assertNull($receptionist->fresh()->two_factor_confirmed_at);
+
+        $this->actingAs($receptionist)
+            ->getJson('/api/v1/hotel/dashboard')
+            ->assertOk();
+    }
+
+    public function test_org_owner_without_2fa_reaches_the_hotel_area(): void
+    {
+        $hotel = Hotel::factory()->withActiveSubscription()->create();
+        $owner = User::factory()->hotelAdmin($hotel)->create(['role_org' => 'owner']);
+
+        $this->assertTrue($owner->fresh()->isOrgOwner());
+        $this->assertNull($owner->fresh()->two_factor_confirmed_at);
+
+        $this->actingAs($owner)
+            ->getJson('/api/v1/hotel/dashboard')
+            ->assertOk();
+    }
+
+    public function test_hotel_roles_can_log_in_without_a_totp_step(): void
+    {
+        $hotel = Hotel::factory()->withActiveSubscription()->create();
+        $manager = User::factory()->hotelAdmin($hotel)->create();
+
+        $login = $this->postJson('/api/v1/auth/login', [
+            'email' => $manager->email,
+            'password' => 'Password1!Test',
+        ])->assertOk();
+
+        // Un token complet dès le mot de passe : aucune étape TOTP imposée.
+        $this->assertNotNull($login->json('data.token'));
+        $this->assertNotTrue($login->json('data.requires_2fa'));
+    }
+
     // ── XSS stocké dans l'export autorité ────────────────────────────────────
 
     /**
