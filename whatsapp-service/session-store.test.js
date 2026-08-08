@@ -516,17 +516,44 @@ test('le marqueur de révocation ne contient ni secret ni identifiant', () => {
   assert.doesNotMatch(brut, /token|secret|creds|\d{8,}/i);
 });
 
-test('une révocation suivie d\'un nouvel appairage redonne une session valide', () => {
+/*
+ * Ce test existait déjà mais retirait le marqueur de révocation À LA MAIN
+ * avant d'appeler markPaired() : il validait l'état final souhaité sans jamais
+ * exercer le chemin réel. Il est passé au vert pendant que la production
+ * refusait d'archiver une session fraîchement réparée (2026-08-08, 15:54).
+ * Il n'appelle plus que markPaired(), comme le worker sur « ready ».
+ */
+test('un nouvel appairage lève la révocation, sans intervention', () => {
   const dir = tmpRoot('reappairage');
   makePairedSession(dir);
   store.markRevoked(dir, { reason: 'LOGOUT' });
 
   assert.equal(store.localSessionState(dir).usable, false);
 
-  // Le QR est scanné : « ready » repose le marqueur d'appairage. La révocation
-  // doit cesser de peser, sinon le service resterait bloqué après réparation.
-  fs.rmSync(path.join(dir, 'session', store.REVOKED_MARKER), { force: true });
+  // Le QR est scanné : c'est TOUT ce que fait le worker sur « ready ».
   store.markPaired(dir);
 
-  assert.equal(store.localSessionState(dir).usable, true);
+  const state = store.localSessionState(dir);
+  assert.equal(state.revoked, false, 'le marqueur de révocation doit être levé par l\'appairage');
+  assert.equal(state.paired, true);
+  assert.equal(state.usable, true);
+});
+
+test('une session réparée est bien déposée au coffre', async () => {
+  const dir = tmpRoot('reappairage-depot');
+  makePairedSession(dir);
+  store.markRevoked(dir, { reason: 'LOGOUT' });
+
+  const vault = fakeVault();
+
+  // Pendant la panne : aucun dépôt, l'archive éventuelle est protégée.
+  assert.equal(await store.snapshot({ api: vault.api, dataPath: dir, log: silent }), 'skipped');
+
+  // Après le scan du QR : le dépôt DOIT repartir. Sans cela, la session
+  // réparée n'aurait jamais de copie durable et la panne suivante repartirait
+  // d'une archive morte — exactement ce qui s'est produit en production.
+  store.markPaired(dir);
+
+  assert.equal(await store.snapshot({ api: vault.api, dataPath: dir, log: silent }), 'stored');
+  assert.equal(vault.posts, 1);
 });

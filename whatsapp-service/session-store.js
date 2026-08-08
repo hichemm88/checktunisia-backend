@@ -171,6 +171,22 @@ function markPaired(dataPath, { clientId } = {}) {
     fs.mkdirSync(root, { recursive: true });
     // Horodatage seul — aucun identifiant, aucun secret.
     fs.writeFileSync(path.join(root, PAIRED_MARKER), JSON.stringify({ paired_at: new Date().toISOString() }));
+
+    /*
+     * Lever la révocation fait PARTIE de l'appairage.
+     *
+     * Constaté en production le 2026-08-08 à 15:54 : le QR venait d'être
+     * scanné, la session était « prête »… et le dépôt au coffre a été refusé
+     * — « aucune session locale exploitable ». Le marqueur de révocation posé
+     * pendant l'incident était toujours là, et rendait `usable` faux malgré
+     * un appairage tout neuf. La session réparée n'aurait JAMAIS été archivée,
+     * et la panne suivante serait repartie d'une archive morte.
+     *
+     * WhatsApp vient de confirmer la session : c'est la seule preuve qui
+     * compte, et elle prime sur toute révocation antérieure.
+     */
+    fs.rmSync(path.join(root, REVOKED_MARKER), { force: true });
+
     return true;
   } catch (err) {
     return false;
