@@ -7,6 +7,7 @@ use App\Mail\SystemMail;
 use App\Models\DeviceToken;
 use App\Models\User;
 use App\Models\WhatsappSendLog;
+use App\Models\WhatsappSessionState;
 use App\Services\Email\SystemMailer;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -24,23 +25,64 @@ use Illuminate\Support\Facades\Mail;
 class WhatsappAlertService
 {
     /** Session tombée (QR expiré, téléphone hors ligne, ban, auth échouée). */
-    public function sessionDown(string $status, ?string $reason): void
+    /**
+     * Perte de session.
+     *
+     * L'alerte distingue désormais les deux situations, parce qu'elles
+     * n'appellent pas la même action — et que les confondre coûtait cher : on
+     * réclamait un QR pour une coupure passagère (déplacement inutile jusqu'au
+     * téléphone émetteur), et on ne disait rien quand il en fallait vraiment un.
+     *
+     *  • logged_out → WhatsApp a révoqué l'appareil. RIEN ne repartira sans un
+     *    ré-appairage humain.
+     *  • le reste → incident technique, la reconnexion est automatique ; on
+     *    donne quand même le lien, sans en faire une consigne.
+     */
+    public function sessionDown(string $status, ?string $reason, ?WhatsappSessionState $state = null): void
     {
         // Le QR lui-même ne peut pas être joint : il tourne toutes les ~30 s et
         // serait expiré à l'ouverture. On pointe vers la page /qr, qui affiche
         // toujours le QR frais et se rafraîchit seule.
         $qrUrl = (string) config('whatsapp.qr_url');
+        $state ??= WhatsappSessionState::current();
+        $needsPairing = $status === WhatsappSessionState::STATUS_LOGGED_OUT;
+
+        $pending = WhatsappSendLog::where('status', WhatsappSendLog::STATUS_PENDING)->count();
+
+        $context = [];
+        if ($state->last_ready_at) {
+            $context[] = 'Dernière session active : '.$state->last_ready_at->timezone('Africa/Tunis')->format('d/m/Y H:i');
+        }
+        if ($state->heartbeat_at) {
+            $context[] = 'Dernier signe de vie du worker : '.$state->heartbeat_at->timezone('Africa/Tunis')->format('d/m/Y H:i');
+        }
+        $context[] = 'Fiches en attente : '.$pending;
+
+        $subject = $needsPairing
+            ? 'WhatsApp Qayed — ré-appairage nécessaire (QR)'
+            : 'WhatsApp Qayed — session temporairement déconnectée';
+
+        $body = $needsPairing
+            ? 'WhatsApp a révoqué l\'appareil lié du relais police. Aucune reconnexion automatique n\'est '
+                .'possible : le service restera en attente tant qu\'un QR n\'aura pas été scanné avec le '
+                .'téléphone émetteur Qayed.'
+            : 'La session WhatsApp du relais police est momentanément interrompue. Aucune action n\'est '
+                .'requise : la reconnexion se fait automatiquement. Les check-ins continuent normalement et '
+                .'les envois en attente repartiront seuls.';
+
+        $body .= ($reason ? "\n\nRaison : {$reason}" : '')
+            ."\n\n".implode("\n", $context);
+
+        if ($needsPairing) {
+            $body .= "\n\nPour reconnecter : ouvrez la page ci-dessous et scannez le QR avec le téléphone émetteur "
+                .'Qayed (WhatsApp → Appareils connectés → Connecter un appareil).'
+                .($qrUrl === '' ? "\n\nPage de reconnexion : voir le service WhatsApp sur Railway (URL /qr)." : '');
+        }
 
         $this->dispatch(
-            "WhatsApp Qayed — session {$status}",
-            "La session WhatsApp du relais police est « {$status} ». "
-            .'Les check-ins continuent normalement, les envois s\'accumulent en attente et reprendront '
-            .'automatiquement à la reconnexion.'
-            .($reason ? "\n\nRaison : {$reason}" : '')
-            ."\n\nPour reconnecter : ouvrez la page ci-dessous et scannez le QR avec le téléphone émetteur Qayed "
-            .'(WhatsApp → Appareils connectés → Connecter un appareil).'
-            .($qrUrl === '' ? "\n\nPage de reconnexion : voir le service WhatsApp sur Railway (URL /qr)." : ''),
-            $qrUrl !== '' ? SystemMailer::ctaButton($qrUrl, 'Reconnecter (scanner le QR)') : null,
+            $subject,
+            $body,
+            $needsPairing && $qrUrl !== '' ? SystemMailer::ctaButton($qrUrl, 'Reconnecter (scanner le QR)') : null,
         );
     }
 

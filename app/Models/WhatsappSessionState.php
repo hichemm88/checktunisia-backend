@@ -30,10 +30,18 @@ class WhatsappSessionState extends Model
 
     public const STATUS_DISCONNECTED = 'disconnected';
 
+    /**
+     * WhatsApp a révoqué l'appareil lié (événement « LOGOUT »). Contrairement à
+     * `disconnected`, aucune reconnexion automatique n'est possible : seul un
+     * ré-appairage par QR rétablit le service. Cet état est DURABLE — il
+     * survit aux redémarrages du worker tant qu'une session n'est pas reprise.
+     */
+    public const STATUS_LOGGED_OUT = 'logged_out';
+
     public const STATUS_AUTH_FAILURE = 'auth_failure';
 
     protected $fillable = [
-        'key', 'status', 'reason', 'paused', 'last_ready_at', 'heartbeat_at',
+        'key', 'status', 'reason', 'paused', 'last_ready_at', 'heartbeat_at', 'revoked_at',
     ];
 
     protected function casts(): array
@@ -42,7 +50,14 @@ class WhatsappSessionState extends Model
             'paused' => 'boolean',
             'last_ready_at' => 'datetime',
             'heartbeat_at' => 'datetime',
+            'revoked_at' => 'datetime',
         ];
+    }
+
+    /** Un ré-appairage humain est-il réellement nécessaire ? */
+    public function needsPairing(): bool
+    {
+        return $this->status === self::STATUS_LOGGED_OUT;
     }
 
     /** Récupère (ou crée) la ligne d'état unique. */

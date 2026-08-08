@@ -258,8 +258,13 @@ class WhatsappSessionVaultTest extends TestCase
         $this->assertTrue($meta['configured']);
         $this->assertGreaterThan(0, $meta['bytes']);
         $this->assertNotNull($meta['stored_at']);
+        // `revoked_at` accompagne les métadonnées depuis l'incident du
+        // 2026-08-08 : le worker compare cette date à celle de l'archive pour
+        // savoir si la restaurer a encore un sens. C'est un horodatage, pas un
+        // secret.
+        $this->assertNull($meta['revoked_at'], 'aucune révocation ici');
         // Rien d'autre : pas d'extrait, pas de chemin de bucket, pas de clé.
-        $this->assertSame(['configured', 'exists', 'bytes', 'stored_at'], array_keys($meta));
+        $this->assertSame(['configured', 'revoked_at', 'exists', 'bytes', 'stored_at'], array_keys($meta));
     }
 
     // ── Dégradation propre ───────────────────────────────────────────────────

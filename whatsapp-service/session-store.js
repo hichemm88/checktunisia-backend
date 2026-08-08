@@ -80,6 +80,24 @@ const EXCLUDED_GLOBS = ['Singleton*', '*.lock', 'lockfile'];
  */
 const PAIRED_MARKER = '.qayed-paired.json';
 
+/*
+ * Marqueur de RÉVOCATION, posé quand WhatsApp a réellement invalidé l'appareil
+ * lié (événement « LOGOUT »).
+ *
+ * Il répond au piège constaté le 2026-08-08 : le marqueur d'appairage prouve
+ * qu'un profil a UN JOUR été accepté, pas qu'il l'est ENCORE. Après une
+ * révocation côté WhatsApp, le profil restait donc « exploitable » aux yeux du
+ * worker — qui le restaurait du coffre à chaque démarrage, se voyait refuser,
+ * affichait un QR, et recommençait indéfiniment en se déclarant « en cours
+ * d'initialisation ». Les fiches s'accumulaient sans que rien ne signale qu'un
+ * ré-appairage humain était devenu indispensable.
+ *
+ * Un profil révoqué n'est plus « usable » : il n'est ni déposé dans le coffre
+ * (on n'écrase pas la dernière archive avec des credentials morts) ni considéré
+ * comme une session au démarrage.
+ */
+const REVOKED_MARKER = '.qayed-revoked.json';
+
 /**
  * État de la session sur le disque local.
  *
@@ -97,17 +115,49 @@ function localSessionState(dataPath, { clientId } = {}) {
   const exists = safeIsDir(root);
   const stores = ['IndexedDB', 'Local Storage'].filter((s) => safeIsDir(path.join(profile, s)));
   const paired = safeIsFile(path.join(root, PAIRED_MARKER));
+  const revoked = safeIsFile(path.join(root, REVOKED_MARKER));
 
   return {
     root,
     exists,
     stores,
     paired,
-    // Les deux magasins ET le marqueur d'appairage. Les magasins seuls ne
-    // prouvent rien : un profil né d'un QR jamais scanné les possède aussi.
-    usable: exists && stores.length === 2 && paired,
+    revoked,
+    // Les deux magasins, le marqueur d'appairage, ET l'absence de révocation.
+    //  • Les magasins seuls ne prouvent rien : un profil né d'un QR jamais
+    //    scanné les possède aussi.
+    //  • Le marqueur d'appairage seul ne prouve rien non plus : il dit qu'on a
+    //    été appairé un jour, pas qu'on l'est encore. Sans la condition de
+    //    révocation, un profil que WhatsApp a invalidé continuait de passer
+    //    pour une session valide, indéfiniment.
+    usable: exists && stores.length === 2 && paired && !revoked,
     bytes: exists ? directoryBytes(root) : 0,
   };
+}
+
+/**
+ * Marque le profil comme révoqué par WhatsApp et retire le marqueur
+ * d'appairage : à partir de là, plus rien ne le prend pour une session valide.
+ *
+ * @returns {boolean} true si le marqueur a pu être posé
+ */
+function markRevoked(dataPath, { clientId, reason = 'LOGOUT' } = {}) {
+  const root = path.join(dataPath, clientId ? `session-${clientId}` : 'session');
+
+  try {
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, REVOKED_MARKER),
+      JSON.stringify({ revoked_at: new Date().toISOString(), reason: String(reason).slice(0, 200) }),
+    );
+    // Retirer l'appairage est ce qui rend la révocation effective même si le
+    // marqueur de révocation venait à disparaître d'une archive plus ancienne.
+    try { fs.rmSync(path.join(root, PAIRED_MARKER), { force: true }); } catch { /* au mieux */ }
+
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -209,7 +259,7 @@ async function extractArchive(archivePath, dataPath) {
  * qui est précisément le cas au moment où l'on démarre) ne doit pas empêcher
  * le worker de tourner avec ce qu'il a.
  *
- * @returns {Promise<'local'|'restored'|'empty'|'unavailable'|'disabled'>}
+ * @returns {Promise<'local'|'restored'|'empty'|'unavailable'|'disabled'|'revoked'>}
  */
 async function restoreIfMissing({ api, dataPath, log = console, enabled = true, attempts = 3, delayMs = 5000, sleep = defaultSleep, tmpDir = os.tmpdir() }) {
   const state = localSessionState(dataPath);
@@ -222,6 +272,21 @@ async function restoreIfMissing({ api, dataPath, log = console, enabled = true, 
   if (!enabled) {
     log.warn('[wa-session] coffre désactivé : démarrage sans session (un QR sera demandé).');
     return 'disabled';
+  }
+
+  /*
+   * Restaurer une archive que WhatsApp a déjà révoquée ne sert à RIEN — et
+   * c'est exactement la boucle observée le 2026-08-08 : à chaque démarrage le
+   * worker remettait en place des credentials morts, WhatsApp les refusait, un
+   * QR s'affichait, et le système se déclarait « en cours d'initialisation »
+   * pendant que les fiches s'empilaient. Le backend, lui, sait DEPUIS QUAND la
+   * session est révoquée : si l'archive lui est antérieure, on ne la restaure
+   * pas et on le dit franchement.
+   */
+  const revocation = await revocationState(api, log);
+  if (revocation.revoked_at && revocation.stored_at && revocation.stored_at <= revocation.revoked_at) {
+    log.warn(`[wa-session] l'archive du coffre (${revocation.stored_at}) est antérieure à la révocation WhatsApp (${revocation.revoked_at}) — restauration inutile, un ré-appairage par QR est nécessaire.`);
+    return 'revoked';
   }
 
   log.log('[wa-session] aucune session locale exploitable — tentative de restauration depuis le coffre…');
@@ -361,6 +426,27 @@ async function snapshot({ api, dataPath, log = console, enabled = true, reason =
   }
 }
 
+/**
+ * Date de révocation connue du backend et date de l'archive du coffre.
+ *
+ * Ne lève jamais : si le backend est injoignable (il redéploie souvent au même
+ * moment que nous), on préfère TENTER la restauration plutôt que refuser une
+ * session peut-être parfaitement valide.
+ *
+ * @returns {Promise<{revoked_at:?string, stored_at:?string}>}
+ */
+async function revocationState(api, log = console) {
+  try {
+    const meta = (await api.get('/internal/whatsapp/session-archive/meta')).data.data;
+
+    return { revoked_at: meta?.revoked_at ?? null, stored_at: meta?.stored_at ?? null };
+  } catch (err) {
+    log.warn(`[wa-session] état de révocation indisponible (${err.message}) — on tente la restauration.`);
+
+    return { revoked_at: null, stored_at: null };
+  }
+}
+
 // ── Utilitaires ──────────────────────────────────────────────────────────────
 
 /**
@@ -443,8 +529,11 @@ function defaultSleep(ms) {
 module.exports = {
   EXCLUDED,
   PAIRED_MARKER,
+  REVOKED_MARKER,
   localSessionState,
   markPaired,
+  markRevoked,
+  revocationState,
   shouldRestore,
   shouldSnapshot,
   shouldWipeOnStartupTimeout,

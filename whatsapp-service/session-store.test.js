@@ -89,9 +89,16 @@ function fakeVault({ contents = null } = {}) {
   const vault = {
     contents,
     posts: 0,
+    // Date de révocation connue du backend, et date de l'archive : c'est la
+    // comparaison des deux qui décide si restaurer a encore un sens.
+    revokedAt: null,
+    storedAt: null,
     api: {
       async get(url) {
         assert.match(url, /session-archive/);
+        if (url.endsWith('/meta')) {
+          return { data: { data: { revoked_at: vault.revokedAt, stored_at: vault.storedAt } } };
+        }
         if (vault.contents === null) {
           const err = new Error('Request failed with status code 404');
           err.response = { status: 404 };
@@ -391,4 +398,135 @@ test('un échec de dépôt est signalé sans divulguer la session', async () => 
 
   assert.equal(outcome, 'failed');
   assert.ok(log.lines.join('\n').includes('dépôt impossible'));
+});
+
+// ── Révocation WhatsApp (incident du 2026-08-08) ─────────────────────────────
+//
+// Le marqueur d'appairage prouve qu'un profil a UN JOUR été accepté, pas qu'il
+// l'est ENCORE. Après un LOGOUT, le profil restait donc « exploitable » : le
+// worker le restaurait du coffre à chaque démarrage, WhatsApp le refusait, un
+// QR s'affichait, et le système se déclarait « en cours d'initialisation »
+// pendant que les fiches s'accumulaient — sans que rien ne signale qu'un
+// ré-appairage humain était devenu indispensable.
+
+test('un profil révoqué par WhatsApp cesse d\'être pris pour une session valide', () => {
+  const dir = tmpRoot('revoque');
+  makePairedSession(dir);
+
+  assert.equal(store.localSessionState(dir).usable, true, 'départ : session valide');
+
+  store.markRevoked(dir, { reason: 'LOGOUT' });
+  const state = store.localSessionState(dir);
+
+  assert.equal(state.revoked, true);
+  assert.equal(state.paired, false, 'la révocation retire l\'appairage');
+  assert.equal(state.usable, false);
+});
+
+test('un profil révoqué n\'écrase JAMAIS la dernière archive du coffre', async () => {
+  const dir = tmpRoot('revoque-depot');
+  makePairedSession(dir);
+
+  const vault = fakeVault();
+  await store.snapshot({ api: vault.api, dataPath: dir, log: silent, reason: 'bonne session' });
+  const bonneArchive = vault.contents;
+
+  assert.equal(vault.posts, 1);
+  assert.ok(bonneArchive && bonneArchive.length > 0);
+
+  // WhatsApp révoque l'appareil, puis un arrêt déclenche un dépôt.
+  store.markRevoked(dir, { reason: 'LOGOUT' });
+  const verdict = await store.snapshot({ api: vault.api, dataPath: dir, log: silent, reason: 'arrêt' });
+
+  assert.equal(verdict, 'skipped');
+  assert.equal(vault.posts, 1, 'aucun second dépôt');
+  assert.equal(vault.contents, bonneArchive, 'l\'archive saine est intacte');
+});
+
+test('une archive antérieure à la révocation n\'est pas restaurée en boucle', async () => {
+  const dir = tmpRoot('restore-revoque');
+  makeEmptyMount(dir); // rien d'exploitable en local
+
+  const vault = fakeVault({ contents: Buffer.from('archive-morte') });
+  vault.storedAt = '2026-08-08T10:00:00+00:00';
+  vault.revokedAt = '2026-08-08T12:30:00+00:00'; // révoquée APRÈS l'archive
+
+  const log = capturingLog();
+  const verdict = await store.restoreIfMissing({ api: vault.api, dataPath: dir, log, attempts: 1 });
+
+  assert.equal(verdict, 'revoked');
+  assert.match(log.lines.join('\n'), /ré-appairage par QR/);
+  // Et surtout : le disque n'a pas été touché.
+  assert.equal(store.localSessionState(dir).usable, false);
+});
+
+test('une archive POSTÉRIEURE à la révocation est bien restaurée', async () => {
+  const source = tmpRoot('source-neuve');
+  makePairedSession(source);
+
+  const vault = fakeVault();
+  await store.snapshot({ api: vault.api, dataPath: source, log: silent });
+
+  const cible = tmpRoot('cible-neuve');
+  makeEmptyMount(cible);
+  vault.revokedAt = '2026-08-08T12:30:00+00:00';
+  vault.storedAt = '2026-08-08T14:00:00+00:00'; // ré-appairage postérieur
+
+  const verdict = await store.restoreIfMissing({ api: vault.api, dataPath: cible, log: silent, attempts: 1 });
+
+  assert.equal(verdict, 'restored');
+  assert.equal(store.localSessionState(cible).usable, true);
+});
+
+test('un backend injoignable ne bloque pas la restauration', async () => {
+  const source = tmpRoot('source-repli');
+  makePairedSession(source);
+
+  const vault = fakeVault();
+  await store.snapshot({ api: vault.api, dataPath: source, log: silent });
+
+  // Le backend redéploie souvent au moment même où le worker démarre : ne pas
+  // pouvoir lire l'état de révocation ne doit pas refuser une session peut-être
+  // parfaitement valide.
+  const cible = tmpRoot('cible-repli');
+  makeEmptyMount(cible);
+  const api = {
+    get: async (url) => {
+      if (url.endsWith('/meta')) throw new Error('backend indisponible');
+      return vault.api.get(url);
+    },
+    post: vault.api.post,
+  };
+
+  const verdict = await store.restoreIfMissing({ api, dataPath: cible, log: silent, attempts: 1 });
+
+  assert.equal(verdict, 'restored');
+});
+
+test('le marqueur de révocation ne contient ni secret ni identifiant', () => {
+  const dir = tmpRoot('revoque-contenu');
+  makePairedSession(dir);
+  store.markRevoked(dir, { reason: 'LOGOUT' });
+
+  const brut = fs.readFileSync(path.join(dir, 'session', store.REVOKED_MARKER), 'utf8');
+  const contenu = JSON.parse(brut);
+
+  assert.deepEqual(Object.keys(contenu).sort(), ['reason', 'revoked_at']);
+  assert.equal(contenu.reason, 'LOGOUT');
+  assert.doesNotMatch(brut, /token|secret|creds|\d{8,}/i);
+});
+
+test('une révocation suivie d\'un nouvel appairage redonne une session valide', () => {
+  const dir = tmpRoot('reappairage');
+  makePairedSession(dir);
+  store.markRevoked(dir, { reason: 'LOGOUT' });
+
+  assert.equal(store.localSessionState(dir).usable, false);
+
+  // Le QR est scanné : « ready » repose le marqueur d'appairage. La révocation
+  // doit cesser de peser, sinon le service resterait bloqué après réparation.
+  fs.rmSync(path.join(dir, 'session', store.REVOKED_MARKER), { force: true });
+  store.markPaired(dir);
+
+  assert.equal(store.localSessionState(dir).usable, true);
 });

@@ -47,11 +47,22 @@ class WhatsappWorkerController extends Controller
     | n'est jamais journalisé, ni inclus dans un message d'erreur.
     */
 
-    /** GET internal/whatsapp/session-archive/meta — taille et date, jamais le contenu. */
+    /**
+     * GET internal/whatsapp/session-archive/meta — taille et date, jamais le contenu.
+     *
+     * `revoked_at` accompagne les métadonnées : le worker compare cette date à
+     * celle de l'archive pour savoir si la restaurer a encore un sens. Une
+     * archive antérieure à la révocation ne contient que des credentials morts
+     * — la restaurer produisait une boucle « restaure → QR → redémarre »
+     * silencieuse.
+     */
     public function sessionArchiveMeta(): JsonResponse
     {
+        $state = WhatsappSessionState::current();
+
         return response()->json(['data' => [
             'configured' => $this->vault->isConfigured(),
+            'revoked_at' => $state->revoked_at?->toAtomString(),
         ] + $this->vault->metadata()]);
     }
 
@@ -250,25 +261,47 @@ class WhatsappWorkerController extends Controller
     public function session(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'status' => 'required|in:initializing,ready,disconnected,auth_failure',
+            'status' => 'required|in:initializing,ready,disconnected,logged_out,auth_failure',
             'reason' => 'nullable|string',
         ]);
 
         $state = WhatsappSessionState::current();
         $previous = $state->status;
 
-        $state->status = $data['status'];
-        $state->reason = $data['reason'] ?? null;
+        // Une révocation ne se laisse pas effacer par le simple redémarrage qui
+        // la suit. Tant que la session n'est pas reprise (« ready »), le
+        // « initializing » d'un worker qui reboote ne doit pas masquer le fait
+        // qu'un ré-appairage est attendu — c'est précisément ce silence qui a
+        // laissé les fiches s'accumuler sans alerte le 2026-08-08.
+        $stickyLogout = $previous === WhatsappSessionState::STATUS_LOGGED_OUT
+            && $data['status'] === WhatsappSessionState::STATUS_INITIALIZING;
+
+        if (! $stickyLogout) {
+            $state->status = $data['status'];
+            $state->reason = $data['reason'] ?? null;
+        }
+
         $state->heartbeat_at = now();
+
         if ($data['status'] === WhatsappSessionState::STATUS_READY) {
             $state->last_ready_at = now();
+            $state->revoked_at = null; // ré-appairage réussi : la révocation est levée
         }
+
+        if ($data['status'] === WhatsappSessionState::STATUS_LOGGED_OUT && ! $state->revoked_at) {
+            $state->revoked_at = now();
+        }
+
         $state->save();
 
         // Alerte uniquement à la TRANSITION vers un état « tombé » (pas de spam).
-        $down = [WhatsappSessionState::STATUS_DISCONNECTED, WhatsappSessionState::STATUS_AUTH_FAILURE];
+        $down = [
+            WhatsappSessionState::STATUS_DISCONNECTED,
+            WhatsappSessionState::STATUS_LOGGED_OUT,
+            WhatsappSessionState::STATUS_AUTH_FAILURE,
+        ];
         if (in_array($data['status'], $down, true) && $previous !== $data['status']) {
-            $this->alerts->sessionDown($data['status'], $data['reason'] ?? null);
+            $this->alerts->sessionDown($data['status'], $data['reason'] ?? null, $state);
         }
 
         return response()->json(['data' => [

@@ -58,7 +58,7 @@ const api = axios.create({
 
 // ── État courant (exposé sur /health) ────────────────────────────────────────
 const state = {
-  session: 'initializing', // initializing | ready | disconnected | auth_failure
+  session: 'initializing', // initializing | ready | disconnected | logged_out | auth_failure
   reason: null,
   lastSendAt: null,
   lastPollAt: null,
@@ -105,8 +105,76 @@ function wipeSession(dir) {
   }
 }
 
+/*
+ * Stratégie d'authentification NON DESTRUCTIVE.
+ *
+ * whatsapp-web.js 1.34.7, Client.js:495-501 :
+ *
+ *     this.pupPage.on('framenavigated', async (frame) => {
+ *       if (frame.url().includes('post_logout=1') || this.lastLoggedOut) {
+ *         this.emit(Events.DISCONNECTED, 'LOGOUT');
+ *         await this.authStrategy.logout();      // <— rm -rf du profil
+ *
+ * et LocalAuth.logout() fait un fs.rm(userDataDir, { recursive: true }).
+ * C'est le SEUL endroit de la bibliothèque qui produit la chaîne « LOGOUT »,
+ * celle-là même que portait l'alerte. La suppression a lieu AVANT que notre
+ * gestionnaire 'disconnected' ne s'exécute : quand notre code apprend la
+ * nouvelle, le profil n'existe déjà plus.
+ *
+ * On ne peut pas empêcher la bibliothèque d'appeler logout(), mais on peut
+ * décider de ce que logout() FAIT. Ici : on écarte le profil au lieu de le
+ * détruire, et on pose le marqueur de révocation. Rien n'est perdu — ni pour
+ * l'analyse d'incident, ni pour une éventuelle récupération — et surtout le
+ * profil révoqué cesse d'être pris pour une session valide.
+ */
+class NonDestructiveLocalAuth extends LocalAuth {
+  async logout() {
+    const dir = this.userDataDir;
+    if (!dir) return;
+
+    // La révocation d'abord : même si le déplacement échoue, le profil ne doit
+    // plus jamais passer pour une session exploitable.
+    sessionStore.markRevoked(SESSION_PATH);
+    loggedOutForReal = true;
+
+    try {
+      const parked = `${dir}.revoked-${Date.now()}`;
+      fs.renameSync(dir, parked);
+      fs.mkdirSync(dir, { recursive: true }); // la bibliothèque le rouvre juste après
+      console.warn(`[whatsapp] LOGOUT WhatsApp — profil ÉCARTÉ (non supprimé) sous « ${path.basename(parked)} ».`);
+      pruneRevokedProfiles(SESSION_PATH);
+    } catch (err) {
+      console.warn('[whatsapp] mise à l\'écart du profil révoqué impossible :', err.message);
+    }
+  }
+}
+
+/**
+ * Ne garder que les deux profils révoqués les plus récents : le volume est
+ * plafonné (500 Mo) et un profil pèse ~100 Mo. Sans ce ménage, une série de
+ * révocations saturerait le disque et empêcherait toute nouvelle session.
+ */
+function pruneRevokedProfiles(dataPath, keep = 2) {
+  try {
+    const parked = fs.readdirSync(dataPath)
+      .filter((n) => /^session\.revoked-\d+$/.test(n))
+      .sort()
+      .reverse();
+
+    for (const name of parked.slice(keep)) {
+      fs.rmSync(path.join(dataPath, name), { recursive: true, force: true });
+      console.log('[whatsapp] ancien profil révoqué purgé :', name);
+    }
+  } catch (err) {
+    console.warn('[whatsapp] purge des profils révoqués :', err.message);
+  }
+}
+
+/** Vrai dès qu'un LOGOUT WhatsApp a été constaté : un QR devient indispensable. */
+let loggedOutForReal = false;
+
 const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
+  authStrategy: new NonDestructiveLocalAuth({ dataPath: SESSION_PATH }),
   puppeteer: {
     headless: true,
     // Chromium en conteneur (Railway) répond lentement sous charge : sans ce
@@ -193,15 +261,47 @@ function disarmWatchdog(signal) {
   console.log(`[whatsapp] démarrage confirmé (${signal}).`);
 }
 
+/*
+ * Cadence d'impression du QR dans les journaux.
+ *
+ * WhatsApp régénère le QR toutes les ~20 s. Chaque impression occupe ~35
+ * lignes : une session non appairée produisait donc ~100 lignes/minute de
+ * damier. Lors de l'analyse de l'incident du 2026-08-08, ce flot avait évincé
+ * TOUT l'historique exploitable des journaux Railway en une quinzaine de
+ * minutes — impossible de reconstituer la séquence qui avait mené au LOGOUT.
+ * Le QR reste disponible en permanence, et à jour, sur la page /qr.
+ */
+const QR_LOG_INTERVAL_MS = parseInt(process.env.WHATSAPP_QR_LOG_INTERVAL_MS || '300000', 10);
+let lastQrLoggedAt = 0;
+let qrCount = 0;
+
 client.on('qr', (qr) => {
   disarmWatchdog('QR émis');
+  qrCount += 1;
+
+  // Un QR demandé alors qu'on croyait avoir une session : c'est la preuve que
+  // les credentials restaurés ne valent plus rien. On le signale une fois, au
+  // lieu de rester indéfiniment en « initialisation » pendant que les fiches
+  // s'accumulent sans que personne ne sache qu'un QR est attendu.
+  if (!loggedOutForReal && restoredFromStoredSession && qrCount === 1) {
+    loggedOutForReal = true;
+    console.error('[whatsapp] un QR est demandé alors qu\'une session existait : ces credentials sont révoqués.');
+    sessionStore.markRevoked(SESSION_PATH, { reason: 'QR demandé malgré une session restaurée' });
+    reportSession('logged_out', 'Session existante refusée par WhatsApp — ré-appairage par QR nécessaire.');
+  }
+
   // Premier démarrage : scanner ce QR avec la SIM dédiée Qayed (jamais un numéro perso).
   // 1) dans les logs (ASCII) ; 2) en image sur la page /qr (scannable depuis un téléphone).
-  console.log('[whatsapp] Scannez ce QR avec le téléphone émetteur Qayed (ou ouvrez /qr) :');
-  qrcode.generate(qr, { small: true });
   QRCode.toDataURL(qr, { margin: 2, width: 320 })
     .then((url) => { state.qrDataUrl = url; })
     .catch((err) => console.warn('[whatsapp] QR image error:', err.message));
+
+  const now = Date.now();
+  if (lastQrLoggedAt && now - lastQrLoggedAt < QR_LOG_INTERVAL_MS) return;
+  lastQrLoggedAt = now;
+
+  console.log(`[whatsapp] Scannez ce QR avec le téléphone émetteur Qayed (ou ouvrez /qr) — QR n° ${qrCount}, réimprimé au plus toutes les ${Math.round(QR_LOG_INTERVAL_MS / 60000)} min :`);
+  qrcode.generate(qr, { small: true });
 });
 
 client.on('authenticated', () => {
@@ -324,9 +424,31 @@ client.on('auth_failure', (msg) => {
   reportSession('auth_failure', String(msg || 'auth_failure'));
 });
 
+/*
+ * Une déconnexion n'est pas l'autre, et les confondre était le vrai problème
+ * d'exploitation : le système annonçait « scannez un QR » pour une coupure
+ * réseau de trente secondes, et restait muet — « en cours d'initialisation » —
+ * quand un ré-appairage était réellement devenu obligatoire.
+ *
+ *  • LOGOUT  → WhatsApp a révoqué l'appareil lié. Aucune reconnexion possible,
+ *              un QR est INDISPENSABLE. C'est un état durable, qui doit
+ *              survivre aux redémarrages.
+ *  • le reste (CONFLICT, UNPAIRED, TIMEOUT, NAVIGATION…) → incident technique,
+ *              la session reste valide, la reconnexion se fait toute seule.
+ */
 client.on('disconnected', (reason) => {
   ready = false;
-  console.warn('[whatsapp] déconnecté:', reason);
+  const isLogout = String(reason || '').toUpperCase() === 'LOGOUT';
+
+  if (isLogout) {
+    loggedOutForReal = true;
+    console.error('[whatsapp] LOGOUT : WhatsApp a révoqué cet appareil lié — un ré-appairage par QR est nécessaire.');
+    reportSession('logged_out', 'WhatsApp a révoqué l\'appareil lié (LOGOUT) — ré-appairage par QR nécessaire.');
+
+    return;
+  }
+
+  console.warn('[whatsapp] déconnecté (incident technique, reconnexion attendue) :', reason);
   reportSession('disconnected', String(reason || 'disconnected'));
 });
 
@@ -615,8 +737,16 @@ async function shutdown(signal) {
   shuttingDown = true;
   console.log(`[whatsapp] ${signal} reçu — arrêt propre.`);
 
+  /*
+   * Budget d'arrêt tenu SOUS le délai de grâce.
+   *
+   * Railway envoie SIGKILL une trentaine de secondes après SIGTERM. L'ancien
+   * budget (15 s de fermeture + 20 s de dépôt = 35 s) pouvait donc dépasser :
+   * le conteneur était tué en plein téléversement d'archive, soit exactement
+   * pendant l'écriture qu'on cherchait à sécuriser. On garde une marge.
+   */
   try {
-    await withTimeout(client.destroy(), 15000, 'fermeture de Chromium');
+    await withTimeout(client.destroy(), 8000, 'fermeture de Chromium');
     console.log('[whatsapp] Chromium fermé proprement.');
   } catch (err) {
     console.warn('[whatsapp] fermeture de Chromium :', err.message);
@@ -627,7 +757,7 @@ async function shutdown(signal) {
     try {
       await withTimeout(
         sessionStore.snapshot({ api, dataPath: SESSION_PATH, enabled: VAULT_ENABLED, reason: 'arrêt' }),
-        20000,
+        15000,
         'dépôt de session',
       );
     } catch (err) {
@@ -644,6 +774,13 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // ── Démarrage ────────────────────────────────────────────────────────────────
 process.on('unhandledRejection', (err) => console.warn('[whatsapp] unhandledRejection:', err?.message || err));
 
+/**
+ * Vrai quand on démarre avec une session déjà constituée (présente sur le
+ * volume ou restaurée du coffre). Dans ce cas, un QR n'est pas une étape
+ * normale du démarrage : c'est le signe que les credentials sont révoqués.
+ */
+let restoredFromStoredSession = false;
+
 async function start() {
   reportSession('initializing');
   cleanupStaleLocks(SESSION_PATH); // retire les verrous Chromium périmés avant de démarrer
@@ -651,7 +788,17 @@ async function start() {
   // AVANT d'initialiser le client : s'il n'y a pas de session exploitable sur
   // le volume, on la réclame au coffre. Une session locale valide n'est jamais
   // remplacée — le volume reste le chemin nominal.
-  await sessionStore.restoreIfMissing({ api, dataPath: SESSION_PATH, enabled: VAULT_ENABLED });
+  const outcome = await sessionStore.restoreIfMissing({ api, dataPath: SESSION_PATH, enabled: VAULT_ENABLED });
+
+  restoredFromStoredSession = outcome === 'local' || outcome === 'restored';
+
+  if (outcome === 'revoked') {
+    // Le coffre ne contient que des credentials déjà révoqués : inutile de
+    // laisser croire que le service « démarre ». On l'annonce tout de suite,
+    // le QR reste servi sur /qr pour le ré-appairage.
+    loggedOutForReal = true;
+    await reportSession('logged_out', 'Coffre antérieur à la révocation WhatsApp — ré-appairage par QR nécessaire.');
+  }
 
   client.initialize();
   loop();
