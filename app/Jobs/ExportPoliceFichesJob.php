@@ -25,6 +25,23 @@ class ExportPoliceFichesJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    /**
+     * Politique de reprise portée par le job, pas par la ligne de commande.
+     *
+     * Elle ne dépendait jusqu'ici que du `--tries=3` du drainage par le
+     * planificateur : un worker lancé autrement (service dédié, exécution
+     * manuelle) aurait fait échouer le job à la première erreur réseau du SMTP,
+     * sans aucune reprise. Le manager n'aurait jamais reçu son export et
+     * personne n'aurait été prévenu.
+     */
+    public $tries = 3;
+
+    /** Attente croissante : 10 s, 1 min, 5 min — laisse le temps à un SMTP ou une base de revenir. */
+    public $backoff = [10, 60, 300];
+
+    /** Génération PDF d'une longue plage : le défaut de 60 s est trop court. */
+    public $timeout = 300;
+
     public function __construct(
         public readonly string $hotelId,
         public readonly string $dateFrom,
@@ -79,5 +96,26 @@ class ExportPoliceFichesJob implements ShouldQueue
             Log::warning('[export-fiches] envoi email échoué ('.$this->email.') : '.$e->getMessage());
             throw $e; // laisse la file retenter
         }
+    }
+
+    /**
+     * Appelé après épuisement des tentatives, quand le job part en dead-letter.
+     *
+     * Sans ceci, un export définitivement perdu ne laissait qu'une ligne dans
+     * `failed_jobs` : le manager attend un email qui n'arrivera jamais, et rien
+     * ne le signale. La trace ici porte de quoi rejouer manuellement le job
+     * (établissement, plage), et le compteur d'échecs remonte dans
+     * GET /admin/health.
+     */
+    public function failed(\Throwable $e): void
+    {
+        Log::error('[export-fiches] abandon définitif après '.$this->tries.' tentatives', [
+            'hotel_id'  => $this->hotelId,
+            'date_from' => $this->dateFrom,
+            'date_to'   => $this->dateTo,
+            'error'     => $e->getMessage(),
+            // Pas d'adresse email dans les logs : c'est une donnée personnelle
+            // (§ journalisation PII du rapport d'audit).
+        ]);
     }
 }
