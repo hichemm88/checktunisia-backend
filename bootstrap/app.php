@@ -4,9 +4,11 @@ use App\Http\Middleware\AuditRequestMiddleware;
 use App\Http\Middleware\EnsureActiveSubscription;
 use App\Http\Middleware\EnsureAuthorityCredentialValid;
 use App\Http\Middleware\EnsureOrgOwner;
+use App\Http\Middleware\EnsurePlatformAdmin2FA;
 use App\Http\Middleware\Require2FA;
 use App\Http\Middleware\ResolveTenant;
 use App\Http\Middleware\SecurityHeaders;
+use App\Http\Middleware\SentryContext;
 use App\Http\Middleware\VerifyAiTrackingSecret;
 use App\Http\Middleware\VerifyWhatsappWorker;
 use Illuminate\Auth\AuthenticationException;
@@ -14,7 +16,9 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Validation\ValidationException;
+use Sentry\Laravel\Integration as SentryIntegration;
 use Spatie\Permission\Exceptions\UnauthorizedException;
 use Spatie\Permission\Middleware\PermissionMiddleware;
 use Spatie\Permission\Middleware\RoleMiddleware;
@@ -30,8 +34,14 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware) {
         // Conservative security headers on every API response (defence in depth).
+        // throttle:api — repli global (API-01). Le périmètre /hotel/* n'avait
+        // AUCUNE limitation, upload de scans compris. Les groupes qui ont déjà
+        // leur propre throttle (auth, autorité, admin) conservent le leur : les
+        // deux s'appliquent, le plus strict l'emporte de fait.
         $middleware->api(append: [
             SecurityHeaders::class,
+            ThrottleRequests::class.':api',
+            SentryContext::class,
         ]);
 
         $middleware->alias([
@@ -39,6 +49,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'subscription.active' => EnsureActiveSubscription::class,
             'authority.credential' => EnsureAuthorityCredentialValid::class,
             'org.owner' => EnsureOrgOwner::class,
+            'admin.2fa' => EnsurePlatformAdmin2FA::class,
             'require.2fa' => Require2FA::class,
             'audit' => AuditRequestMiddleware::class,
             'role' => RoleMiddleware::class,
@@ -51,6 +62,11 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
+        // Remontée des exceptions vers Sentry. Inerte tant que
+        // SENTRY_LARAVEL_DSN n'est pas défini (cas du local et des tests).
+        // Le filtrage des données personnelles est dans config/sentry.php.
+        SentryIntegration::handles($exceptions);
+
         $exceptions->render(function (NotFoundHttpException $e, Request $request) {
             if ($request->is('api/*')) {
                 return response()->json([

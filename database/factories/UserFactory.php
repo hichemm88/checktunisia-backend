@@ -7,6 +7,7 @@ use App\Models\AuthorityUserProfile;
 use App\Models\Hotel;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Hash;
 
 /**
@@ -15,6 +16,21 @@ use Illuminate\Support\Facades\Hash;
 class UserFactory extends Factory
 {
     protected $model = User::class;
+
+    /**
+     * Secret TOTP de test, en base32.
+     *
+     * Il était stocké EN CLAIR par cette factory, alors que TwoFactorController
+     * fait Crypt::decryptString() : toute tentative de vérification TOTP dans
+     * un test levait DecryptException (HTTP 500). Conséquence — le vrai chemin
+     * de vérification à deux facteurs n'était couvert par AUCUN test, alors que
+     * les tests semblaient valider la 2FA (ils ne testaient que le middleware,
+     * qui ne regarde que two_factor_confirmed_at).
+     *
+     * Chiffré ici comme en production, pour que les tests puissent exercer le
+     * code réel. Exposé pour permettre de générer un code valide.
+     */
+    public const TOTP_SECRET = 'JBSWY3DPEHPK3PXP';
 
     public function definition(): array
     {
@@ -66,7 +82,7 @@ class UserFactory extends Factory
             // A usable authority account is therefore one that has already confirmed
             // TOTP — otherwise every authority endpoint returns 403 2FA_SETUP_REQUIRED.
             $user->forceFill([
-                'two_factor_secret'       => 'JBSWY3DPEHPK3PXP', // dummy base32 secret
+                'two_factor_secret'       => Crypt::encryptString(self::TOTP_SECRET),
                 'two_factor_confirmed_at' => now(),
             ])->save();
 
@@ -85,6 +101,26 @@ class UserFactory extends Factory
      * Create a platform_admin user.
      */
     public function platformAdmin(): static
+    {
+        return $this->afterCreating(function (User $user) {
+            $user->assignRole('platform_admin');
+
+            // Comme les comptes autorité, les routes /admin/* exigent une 2FA
+            // confirmée (EnsurePlatformAdmin2FA) : le compte platform_admin n'a
+            // aucun scoping tenant. Un admin utilisable est donc un admin ayant
+            // déjà activé sa TOTP — sinon tout endpoint admin renvoie
+            // 403 2FA_SETUP_REQUIRED.
+            $user->forceFill([
+                'two_factor_secret'       => Crypt::encryptString(self::TOTP_SECRET),
+                'two_factor_confirmed_at' => now(),
+            ])->save();
+        });
+    }
+
+    /**
+     * platform_admin n'ayant PAS configuré sa 2FA — pour tester le blocage.
+     */
+    public function platformAdminWithout2FA(): static
     {
         return $this->afterCreating(function (User $user) {
             $user->assignRole('platform_admin');

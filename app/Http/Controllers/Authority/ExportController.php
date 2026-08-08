@@ -33,14 +33,23 @@ class ExportController extends Controller
 
         $guest = $query->findOrFail($id);
 
+        // Tout ce qui vient de la base est saisi par l'hôtel (nom du voyageur,
+        // numéro de document, nom d'établissement) et atterrit ici dans un
+        // document servi en text/html, ouvert par le navigateur d'un agent des
+        // forces de l'ordre. Sans échappement, un nom de voyageur du type
+        // <img src=x onerror=...> s'exécute dans la session de l'agent : XSS
+        // stocké, déclenchable par n'importe qui pouvant créer une fiche
+        // (l'inscription est ouverte, avec 7 jours d'essai).
+        $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
         $docsHtml = '';
         foreach ($guest->documents as $doc) {
             $expiry = $doc->expiry_date ? date('d/m/Y', strtotime($doc->expiry_date)) : '—';
             $docsHtml .= "<tr>
-                <td>{$doc->type}</td>
-                <td>{$doc->document_number}</td>
-                <td>{$doc->issuing_country_code}</td>
-                <td>{$expiry}</td>
+                <td>{$e($doc->type)}</td>
+                <td>{$e($doc->document_number)}</td>
+                <td>{$e($doc->issuing_country_code)}</td>
+                <td>{$e($expiry)}</td>
             </tr>";
         }
 
@@ -51,17 +60,18 @@ class ExportController extends Controller
             $checkIn   = $ci->check_in_date  ? date('d/m/Y', strtotime($ci->check_in_date))           : '—';
             $checkOut  = $ci->actual_check_out_date ? date('d/m/Y', strtotime($ci->actual_check_out_date)) : ($ci->expected_check_out_date ? date('d/m/Y', strtotime($ci->expected_check_out_date)) . '*' : '—');
             $staysHtml .= "<tr>
-                <td>{$hotel}</td>
-                <td>{$city}</td>
-                <td>{$checkIn}</td>
-                <td>{$checkOut}</td>
+                <td>{$e($hotel)}</td>
+                <td>{$e($city)}</td>
+                <td>{$e($checkIn)}</td>
+                <td>{$e($checkOut)}</td>
             </tr>";
         }
 
-        $dob  = $guest->date_of_birth  ? date('d/m/Y', strtotime($guest->date_of_birth))  : '—';
-        $sex  = match($guest->sex) { 'M' => 'Masculin', 'F' => 'Féminin', default => '—' };
-        $name = strtoupper("{$guest->last_name} {$guest->first_name}");
-        $date = now()->format('d/m/Y H:i');
+        $dob         = $e($guest->date_of_birth ? date('d/m/Y', strtotime($guest->date_of_birth)) : '—');
+        $sex         = match($guest->sex) { 'M' => 'Masculin', 'F' => 'Féminin', default => '—' };
+        $name        = $e(strtoupper("{$guest->last_name} {$guest->first_name}"));
+        $nationality = $e($guest->nationality_code);
+        $date        = $e(now()->format('d/m/Y H:i'));
 
         $html = <<<HTML
 <!DOCTYPE html>
@@ -96,7 +106,7 @@ class ExportController extends Controller
     <div class="field"><label>Nom complet</label><span>{$name}</span></div>
     <div class="field"><label>Date de naissance</label><span>{$dob}</span></div>
     <div class="field"><label>Sexe</label><span>{$sex}</span></div>
-    <div class="field"><label>Nationalité</label><span>{$guest->nationality_code}</span></div>
+    <div class="field"><label>Nationalité</label><span>{$nationality}</span></div>
   </div>
 </div>
 
@@ -127,6 +137,12 @@ HTML;
         return response($html, 200, [
             'Content-Type'        => 'text/html; charset=UTF-8',
             'Content-Disposition' => "inline; filename=\"fiche-voyageur-{$guest->id}.html\"",
+            // Défense en profondeur derrière l'échappement : le document n'a
+            // besoin que de son <style> inline. Aucun script ne doit pouvoir
+            // s'exécuter ici, même si un échappement était un jour oublié.
+            'Content-Security-Policy' => "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+            'X-Content-Type-Options'  => 'nosniff',
+            'Cache-Control'           => 'no-store, private',
         ]);
     }
 

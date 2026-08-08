@@ -41,9 +41,13 @@ class AuthController extends Controller
 
         AuditLogger::log('user.login', $user, actor: $user);
 
-        // Authority users with confirmed 2FA → issue a short-lived partial token
-        // that can only be used on POST /auth/2fa/verify to complete login.
-        if ($user->hasRole('authority_user') && $user->two_factor_confirmed_at) {
+        // TOUT compte ayant confirmé sa 2FA → token partiel courte durée,
+        // utilisable uniquement sur POST /auth/2fa/verify pour finir le login.
+        // Historiquement conditionné à hasRole('authority_user') : un
+        // platform_admin pouvait donc activer la TOTP, voir le QR code, et se
+        // connecter ensuite avec son seul mot de passe — la 2FA était purement
+        // décorative pour le rôle le plus privilégié de la plateforme.
+        if ($user->two_factor_confirmed_at) {
             $partial = $user->createToken('api-token-2fa', ['2fa-pending'], now()->addMinutes(15));
 
             return response()->json([
@@ -92,6 +96,18 @@ class AuthController extends Controller
         $user = $request->user();
         $old = $user->currentAccessToken();
 
+        // Un token 2fa-pending ne doit JAMAIS pouvoir se transformer en token
+        // complet ici : sinon le mot de passe seul suffit à ouvrir la session
+        // (login → partial_token → refresh → token ['*']), et le TOTP n'est
+        // jamais présenté. Le middleware require.2fa couvre déjà la route ;
+        // cette garde est la défense en profondeur au point d'émission.
+        if ($old->can('2fa-pending') && !$old->can('*')) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => '2FA_PENDING', 'message' => 'Two-factor authentication required. POST /api/v1/auth/2fa/verify', 'field' => null]],
+            ], 403);
+        }
+
         // Only allow refresh within 24h after expiry (grace window)
         if ($old->expires_at && $old->expires_at->lt(now()->subHours(24))) {
             return response()->json([
@@ -100,7 +116,11 @@ class AuthController extends Controller
             ], 401);
         }
 
-        $newToken = $user->createToken('api-token', ['*'], now()->addHours(8));
+        // On reconduit les capacités du token courant plutôt qu'un ['*'] codé
+        // en dur : un refresh ne doit jamais élargir le périmètre du token.
+        $abilities = $old->abilities ?: ['*'];
+
+        $newToken = $user->createToken('api-token', $abilities, now()->addHours(8));
         $old->delete();
 
         return response()->json([
@@ -242,7 +262,27 @@ class AuthController extends Controller
         }
 
         $user->update(['password' => Hash::make($validated['password'])]);
-        $user->tokens()->where('id', '!=', $user->currentAccessToken()->id)->delete();
+
+        // Révoquer les AUTRES sessions : un changement de mot de passe doit
+        // chasser un éventuel intrus, sans déconnecter celui qui le change.
+        //
+        // currentAccessToken() ne renvoie un PersonalAccessToken que sous
+        // authentification par jeton. Sous authentification par session
+        // (Sanctum stateful), il renvoie un TransientToken qui n'a PAS de
+        // propriété `id` : lire ->id levait alors une ErrorException et
+        // renvoyait 500 — le mot de passe était changé mais aucune session
+        // n'était révoquée, et l'utilisateur voyait une erreur serveur.
+        // Aucun test ne couvrait ce chemin, d'où un défaut passé inaperçu.
+        $current = $user->currentAccessToken();
+        $query = $user->tokens();
+
+        if ($current instanceof \Laravel\Sanctum\PersonalAccessToken) {
+            $query->where('id', '!=', $current->id);
+        }
+
+        // Sous session, aucun jeton n'est « le courant » : on les révoque tous,
+        // ce qui est le comportement le plus sûr.
+        $query->delete();
 
         AuditLogger::log('profile.password_changed', $user);
 

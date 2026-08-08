@@ -13,6 +13,7 @@
         "league/flysystem-aws-s3-v3": "^3.0",
         "pragmarx/google2fa": "^9.0",
         "resend/resend-php": "^1.4",
+        "sentry/sentry-laravel": "^4.27",
         "spatie/laravel-permission": "^6.10"
     },
     "require-dev": {

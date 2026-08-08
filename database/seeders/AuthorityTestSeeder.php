@@ -12,6 +12,15 @@ class AuthorityTestSeeder extends Seeder
 {
     public function run(): void
     {
+        // Comptes de test à mots de passe faibles et publiés dans le dépôt :
+        // ils ne doivent jamais exister en production, où ils donneraient un
+        // accès autorité (recherche nationale sur les voyageurs) à quiconque
+        // lit le code source.
+        if (app()->environment('production')) {
+            $this->command->warn('AuthorityTestSeeder ignoré en production (comptes de test).');
+            return;
+        }
+
         // ── 1. Ministère de l'Intérieur (national, pas de gouvernorat) ────────
         $ministry = AuthorityOrganization::updateOrCreate(
             ['code' => 'MIN_INT'],

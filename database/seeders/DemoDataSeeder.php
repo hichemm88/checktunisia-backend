@@ -16,6 +16,13 @@ use Illuminate\Support\Facades\Hash;
 class DemoDataSeeder extends Seeder {
     public function run(): void {
 
+        // Comptes de démo à mots de passe faibles publiés dans le dépôt, et
+        // recréés par updateOrCreate à chaque passage : jamais en production.
+        if (app()->environment('production')) {
+            $this->command->warn('DemoDataSeeder ignoré en production (comptes de démo).');
+            return;
+        }
+
         // Skip entirely once the demo hotel exists in any state (including soft-deleted).
         // This seeder runs on every boot (see Dockerfile CMD); withTrashed() here matters
         // because a plain updateOrCreate() ignores soft-deleted rows and would otherwise try

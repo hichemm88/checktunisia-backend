@@ -3,6 +3,7 @@
 use App\Http\Controllers\Admin\AiCostController;
 use App\Http\Controllers\Admin\AiPricingController;
 use App\Http\Controllers\Admin\AuditLogController;
+use App\Http\Controllers\Admin\HealthController;
 use App\Http\Controllers\Admin\AuthorityAdminController;
 use App\Http\Controllers\Admin\EmailTemplateAdminController;
 use App\Http\Controllers\Admin\CouponController;
@@ -91,7 +92,7 @@ Route::get('health/whatsapp', [WhatsappAdminController::class, 'health']);
 // API interne consommée uniquement par le service Node (whatsapp-service/),
 // authentifiée par secret partagé — pas de session utilisateur.
 Route::prefix('internal/whatsapp')
-    ->middleware('whatsapp.worker')
+    ->middleware(['whatsapp.worker', 'throttle:internal-worker'])
     ->group(function () {
         Route::get('next', [WhatsappWorkerController::class, 'next']);
         Route::get('control', [WhatsappWorkerController::class, 'control']);
@@ -112,10 +113,18 @@ Route::post('internal/ai-usage', [AiUsageIngestController::class, 'store'])
 */
 Route::middleware(['auth:sanctum', 'audit'])->group(function () {
 
-    // Auth (no require.2fa here — these must be reachable with partial tokens too)
+    // Seul logout reste joignable avec un token partiel : annuler une connexion
+    // en cours doit toujours être possible sans avoir passé le TOTP.
     Route::post('auth/logout', [AuthController::class, 'logout']);
-    Route::post('auth/refresh', [AuthController::class, 'refresh']);
-    Route::get('auth/me', [AuthController::class, 'me']);
+
+    // refresh et me exigent un token complet. refresh émettait un token ['*']
+    // sans vérifier les capacités du token présenté : un token 2fa-pending
+    // suffisait donc à contourner entièrement la 2FA. me exposait le profil
+    // complet et la liste des permissions à ce même token partiel.
+    Route::middleware('require.2fa')->group(function () {
+        Route::post('auth/refresh', [AuthController::class, 'refresh']);
+        Route::get('auth/me', [AuthController::class, 'me']);
+    });
 
     // 2FA — verify accepts partial token; setup/disable require full token.
     // Throttled: a TOTP code is only 6 digits (1M possibilities) — without a
@@ -124,9 +133,17 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     Route::middleware('require.2fa')->group(function () {
         Route::get('auth/2fa/setup', [TwoFactorController::class, 'setup']);
         Route::post('auth/2fa/setup/confirm', [TwoFactorController::class, 'confirmSetup'])->middleware('throttle:5,1');
-        Route::delete('auth/2fa/setup', [TwoFactorController::class, 'disable']);
-        Route::patch('profile', [AuthController::class, 'updateProfile']);
-        Route::post('profile/password', [AuthController::class, 'changePassword']);
+        Route::delete('auth/2fa/setup', [TwoFactorController::class, 'disable'])->middleware('throttle:5,1');
+
+        // Ces deux routes VÉRIFIENT le mot de passe courant : sans limiteur
+        // dédié, elles n'étaient couvertes que par le repli global à 120/min,
+        // là où /auth/login est à 5/min. Une session volée permettait donc de
+        // deviner le mot de passe à 172 000 essais/jour — et le deviner ouvre
+        // le changement d'adresse e-mail, donc la prise de compte complète.
+        Route::patch('profile', [AuthController::class, 'updateProfile'])
+            ->middleware('throttle:credential-check');
+        Route::post('profile/password', [AuthController::class, 'changePassword'])
+            ->middleware('throttle:credential-check');
     });
 
     /*
@@ -203,7 +220,10 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
                 Route::post('check-ins/{check_in_id}/guests', [GuestController::class, 'store']);
                 Route::patch('check-ins/{check_in_id}/guests/{guest_id}', [GuestController::class, 'update']);
                 Route::delete('check-ins/{check_in_id}/guests/{guest_id}', [GuestController::class, 'destroy']);
-                Route::post('check-ins/{check_in_id}/scans', [ScanController::class, 'store']);
+                // 10 Mo par requête + un appel au modèle de vision derrière :
+                // limité plus strictement que le reste du périmètre hôtel.
+                Route::post('check-ins/{check_in_id}/scans', [ScanController::class, 'store'])
+                    ->middleware('throttle:scan-upload');
             });
 
             // Hotel profile (read) — both roles need this to print fiches de police
@@ -285,9 +305,14 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
         ->group(function () {
             Route::get('invoices', [SubscriptionController::class, 'invoices']);
             Route::get('invoices/{id}/pdf', [SubscriptionController::class, 'downloadInvoicePdf']);
-            Route::post('payments/initiate', [PaymentController::class, 'initiate']);
-            Route::get('payments/{id}/verify', [PaymentController::class, 'verify']);
-            Route::post('payments/declare-virement', [PaymentController::class, 'declareVirement']);
+            // Opérations d'argent : limitées bas. Le contrôle de doublon de
+            // paiement n'étant pas verrouillé en base (SEC-12), réduire le
+            // rythme réduit mécaniquement la fenêtre de course.
+            Route::middleware('throttle:payments')->group(function () {
+                Route::post('payments/initiate', [PaymentController::class, 'initiate']);
+                Route::get('payments/{id}/verify', [PaymentController::class, 'verify']);
+                Route::post('payments/declare-virement', [PaymentController::class, 'declareVirement']);
+            });
         });
 
     // Onboarding + org management — hotel_admin only, no tenant needed
@@ -358,8 +383,12 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     | Platform Admin Routes
     |----------------------------------------------------------------------
     */
+    // admin.2fa : le compte platform_admin n'a aucun scoping tenant — la 2FA y
+    // est obligatoire, comme pour les comptes autorité. Un admin sans TOTP
+    // configurée reçoit 403 2FA_SETUP_REQUIRED et est redirigé vers la page de
+    // configuration (joignable, elle, avec un token complet sans 2FA).
     Route::prefix('admin')
-        ->middleware(['role:platform_admin', 'throttle:60,1'])
+        ->middleware(['role:platform_admin', 'admin.2fa', 'throttle:60,1'])
         ->group(function () {
 
             Route::get('dashboard', [HotelAdminController::class, 'dashboard']);
@@ -438,6 +467,15 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::delete('authority-organizations/{id}', [AuthorityAdminController::class, 'destroyOrganization']);
 
             // Audit logs
+            // Santé d'exploitation : profondeur de file, jobs échoués,
+            // battement du planificateur, outbox WhatsApp. Compteurs seulement,
+            // aucune donnée personnelle. /up ne dit que « le processus vit ».
+            Route::get('health', [HealthController::class, 'index']);
+
+            // Dead-letter : jobs définitivement abandonnés + rejeu.
+            Route::get('health/failed-jobs', [HealthController::class, 'failedJobs']);
+            Route::post('health/failed-jobs/{uuid}/retry', [HealthController::class, 'retryFailedJob']);
+
             Route::get('audit-logs', [AuditLogController::class, 'index']);
             Route::get('audit-logs/actions', [AuditLogController::class, 'actions']);
             Route::get('audit-logs/export', [AuditLogController::class, 'export']);
