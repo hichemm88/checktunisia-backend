@@ -85,6 +85,20 @@ class WhatsappOutboxService
             foreach ($guests as $guest) {
                 // Une fiche par (voyageur × destinataire).
                 foreach ($recipients as $recipient) {
+                    // Garde-fou anti-doublon, identique à enqueueForGuest() : une
+                    // fiche déjà journalisée pour ce couple (voyageur, destinataire)
+                    // ne doit JAMAIS repartir. Sans lui, toute finalisation rejouée
+                    // — retry après timeout, worker relancé, ou simplement une
+                    // fiche ré-enfilée — renvoyait la fiche de police au poste.
+                    $already = WhatsappSendLog::where('check_in_id', $checkIn->id)
+                        ->where('guest_id', $guest->id)
+                        ->where('recipient', $recipient)
+                        ->exists();
+
+                    if ($already) {
+                        continue;
+                    }
+
                     if ($this->createJob($checkIn, $guest, $recipient)) {
                         $count++;
                     }

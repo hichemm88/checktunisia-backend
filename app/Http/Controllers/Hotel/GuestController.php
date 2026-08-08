@@ -47,7 +47,12 @@ class GuestController extends Controller
 
         $guest = $this->service->addGuest($checkIn, $request->user(), $validated);
 
-        return response()->json(['data' => $this->format($guest, $checkIn->id)], 201);
+        // Le rapprochement n'est plus silencieux : la réception voit si elle
+        // vient de réutiliser un dossier existant, quels champs d'identité
+        // divergent de sa saisie, et quelles fiches ressemblantes existent déjà.
+        return response()->json([
+            'data' => $this->format($guest, $checkIn->id) + $this->service->lastGuestMatch,
+        ], 201);
     }
 
     public function update(Request $request, string $checkInId, string $guestId): JsonResponse
@@ -80,7 +85,14 @@ class GuestController extends Controller
             'document.expiry_date' => ['nullable', 'date'],
         ]);
 
-        $guest = $this->service->updateGuest($checkIn, $guest, $validated);
+        try {
+            $guest = $this->service->updateGuest($checkIn, $guest, $validated);
+        } catch (\DomainException $e) {
+            return response()->json([
+                'data' => null,
+                'errors' => [['code' => 'DOCUMENT_ALREADY_USED', 'message' => $e->getMessage(), 'field' => 'document.document_number']],
+            ], 422);
+        }
 
         return response()->json(['data' => $this->format($guest, $checkIn->id)]);
     }

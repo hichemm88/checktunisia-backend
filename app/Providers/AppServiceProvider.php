@@ -11,7 +11,14 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        //
+        // OcrService n'était lié nulle part : le conteneur le construisait avec
+        // la valeur par défaut du constructeur (« mock »), et config('ocr.driver')
+        // n'avait donc AUCUN effet. Définir OCR_DRIVER en production n'aurait
+        // rien changé — le pilote factice serait resté aux commandes.
+        $this->app->bind(
+            \App\Services\OCR\OcrService::class,
+            fn () => new \App\Services\OCR\OcrService((string) config('ocr.driver', 'mock')),
+        );
     }
 
     public function boot(): void

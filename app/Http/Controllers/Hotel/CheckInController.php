@@ -5,10 +5,12 @@ namespace App\Http\Controllers\Hotel;
 use App\Http\Controllers\Controller;
 use App\Models\CheckIn;
 use App\Models\Hotel;
+use App\Models\Room;
 use App\Services\CheckIn\CheckInService;
 use App\Services\Notifications\PushNotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class CheckInController extends Controller
@@ -84,13 +86,26 @@ class CheckInController extends Controller
             'notes'                   => ['nullable', 'string', 'max:1000'],
         ]);
 
-        if ($validated['room_id'] ?? null) {
-            if ($error = $this->roomConflictError($validated['room_id'])) {
-                return $error;
-            }
-        }
+        // Le test d'occupation et la création DOIVENT être dans la même
+        // transaction, derrière un verrou sur la chambre : deux réceptionnistes
+        // attribuant la 204 au même instant passaient tous les deux le test
+        // `exists()` et créaient deux séjours actifs sur la même chambre.
+        $conflict = null;
+        $checkIn = DB::transaction(function () use ($hotel, $request, $validated, &$conflict) {
+            if ($roomId = $validated['room_id'] ?? null) {
+                Room::whereKey($roomId)->lockForUpdate()->first();
 
-        $checkIn = $this->service->create($hotel, $request->user(), $validated);
+                if ($conflict = $this->roomConflictError($roomId)) {
+                    return null;
+                }
+            }
+
+            return $this->service->create($hotel, $request->user(), $validated);
+        });
+
+        if ($conflict) {
+            return $conflict;
+        }
 
         // Alertes quota (80 % / 100 %) après la réponse — la création de la
         // fiche n'est JAMAIS bloquée ni ralentie par le quota (obligation
@@ -149,14 +164,27 @@ class CheckInController extends Controller
             'children_count'          => ['sometimes', 'integer', 'min:0'],
         ]);
 
-        if (($validated['room_id'] ?? null) && $validated['room_id'] !== $checkIn->room_id) {
-            if ($error = $this->roomConflictError($validated['room_id'], $checkIn->id)) {
-                return $error;
+        // Même verrou qu'à la création : changer de chambre passe par le même
+        // test d'occupation, donc par la même course.
+        $conflict = null;
+        $old = $checkIn->toArray();
+
+        DB::transaction(function () use ($checkIn, $validated, &$conflict) {
+            if (($validated['room_id'] ?? null) && $validated['room_id'] !== $checkIn->room_id) {
+                Room::whereKey($validated['room_id'])->lockForUpdate()->first();
+
+                if ($conflict = $this->roomConflictError($validated['room_id'], $checkIn->id)) {
+                    return;
+                }
             }
+
+            $checkIn->update($validated);
+        });
+
+        if ($conflict) {
+            return $conflict;
         }
 
-        $old = $checkIn->toArray();
-        $checkIn->update($validated);
         \App\Services\Audit\AuditLogger::log('check_in.updated', $checkIn, $old, $checkIn->fresh()->toArray(), hotelId: $checkIn->hotel_id);
 
         app(PushNotificationService::class)
@@ -193,7 +221,14 @@ class CheckInController extends Controller
             'actual_check_out_date' => ['required', 'date', 'after_or_equal:' . $checkIn->check_in_date],
         ]);
 
-        $result = $this->service->checkout($checkIn, $validated['actual_check_out_date'], $request->user());
+        try {
+            $result = $this->service->checkout($checkIn, $validated['actual_check_out_date'], $request->user());
+        } catch (\DomainException $e) {
+            return response()->json([
+                'data' => null,
+                'errors' => [['code' => 'INVALID_STATUS', 'message' => $e->getMessage(), 'field' => 'status']],
+            ], 409);
+        }
 
         return response()->json(['data' => ['id' => $result->id, 'status' => $result->status, 'actual_check_out_date' => $result->actual_check_out_date]]);
     }
@@ -206,7 +241,15 @@ class CheckInController extends Controller
             'reason' => ['required', 'string', 'max:500'],
         ]);
 
-        $result = $this->service->cancel($checkIn, $validated['reason'], $request->user());
+        try {
+            $result = $this->service->cancel($checkIn, $validated['reason'], $request->user());
+        } catch (\DomainException $e) {
+            return response()->json([
+                'data' => null,
+                'errors' => [['code' => 'INVALID_STATUS', 'message' => $e->getMessage(), 'field' => 'status']],
+            ], 409);
+        }
+
         return response()->json(['data' => ['id' => $result->id, 'status' => $result->status]]);
     }
 

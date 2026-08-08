@@ -20,6 +20,20 @@ use Intervention\Image\ImageManager;
 
 class CheckInService
 {
+    /**
+     * Renseigné par le dernier addGuest() : indique à l'appelant si le voyageur
+     * a été rapproché d'une fiche existante, et quels champs d'identité
+     * divergent de ce qui vient d'être saisi. Remonté tel quel dans la réponse
+     * API pour que la réception voie qu'elle réutilise un dossier connu.
+     *
+     * @var array{matched_existing:bool,identity_mismatch:array<int,string>,possible_duplicates:array<int,array<string,mixed>>}
+     */
+    public array $lastGuestMatch = [
+        'matched_existing' => false,
+        'identity_mismatch' => [],
+        'possible_duplicates' => [],
+    ];
+
     public function __construct(private OcrService $ocrService) {}
 
     /**
@@ -58,6 +72,8 @@ class CheckInService
      */
     public function addGuest(CheckIn $checkIn, User $addedBy, array $data): Guest
     {
+        $this->lastGuestMatch = ['matched_existing' => false, 'identity_mismatch' => [], 'possible_duplicates' => []];
+
         return DB::transaction(function () use ($checkIn, $addedBy, $data) {
             // Upsert guest: if same document exists, reuse the guest record
             $guest = $this->findOrCreateGuest($data);
@@ -152,7 +168,37 @@ class CheckInService
             if (! empty($data['document'])) {
                 $doc = $guest->primaryDocument;
                 if ($doc) {
-                    $doc->update(array_filter($data['document'], fn ($v) => ! is_null($v)));
+                    $changes = array_filter($data['document'], fn ($v) => ! is_null($v));
+
+                    // Même normalisation qu'à la création, sinon une correction
+                    // manuelle ré-introduisait les formes non canoniques
+                    // (« tn », « AB 123 ») que le rapprochement ne sait plus voir.
+                    if (array_key_exists('document_number', $changes)) {
+                        $changes['document_number'] = DocumentIdentity::normalizeNumber($changes['document_number']);
+                    }
+                    if (array_key_exists('issuing_country_code', $changes)) {
+                        $changes['issuing_country_code'] = DocumentIdentity::normalizeCountry($changes['issuing_country_code']);
+                    }
+
+                    // Corriger un numéro vers celui d'un document DÉJÀ enregistré
+                    // violait la contrainte d'unicité et remontait en erreur 500.
+                    // On refuse explicitement, avec une cause lisible.
+                    $target = array_merge(
+                        ['type' => $doc->type, 'document_number' => $doc->document_number, 'issuing_country_code' => $doc->issuing_country_code],
+                        array_intersect_key($changes, array_flip(['type', 'document_number', 'issuing_country_code'])),
+                    );
+
+                    $taken = TravelDocument::where('type', $target['type'])
+                        ->where('document_number', $target['document_number'])
+                        ->where('issuing_country_code', $target['issuing_country_code'])
+                        ->whereKeyNot($doc->id)
+                        ->exists();
+
+                    if ($taken) {
+                        throw new \DomainException('Ce numéro de document est déjà enregistré pour un autre voyageur.');
+                    }
+
+                    $doc->update($changes);
                 }
             }
 
@@ -201,15 +247,23 @@ class CheckInService
      */
     public function complete(CheckIn $checkIn, User $completedBy): CheckIn
     {
-        if (! $checkIn->isDraft()) {
-            throw new \DomainException('Only draft check-ins can be completed.');
-        }
-
-        if ($checkIn->guests()->count() === 0) {
-            throw new \DomainException('At least one guest is required before completing a check-in.');
-        }
-
         return DB::transaction(function () use ($checkIn, $completedBy) {
+            // Le contrôle du statut DOIT être fait sous verrou, dans la même
+            // transaction que l'écriture. Vérifié avant la transaction, deux
+            // requêtes concurrentes (double clic, retry après timeout réseau,
+            // deux réceptionnistes) voyaient toutes les deux « draft » et
+            // finalisaient toutes les deux : double contrôle watchlist, double
+            // notification, et surtout DEUX fiches de police envoyées.
+            $checkIn = $this->lockFresh($checkIn);
+
+            if (! $checkIn->isDraft()) {
+                throw new \DomainException('Only draft check-ins can be completed.');
+            }
+
+            if ($checkIn->guests()->count() === 0) {
+                throw new \DomainException('At least one guest is required before completing a check-in.');
+            }
+
             $checkIn->update([
                 'status' => 'active',
                 'completed_by' => $completedBy->id,
@@ -243,6 +297,16 @@ class CheckInService
     public function checkout(CheckIn $checkIn, string $checkOutDate, ?User $actor = null): CheckIn
     {
         return DB::transaction(function () use ($checkIn, $checkOutDate, $actor) {
+            // Même verrou que complete() : sans lui, un double clic enregistrait
+            // deux fois le départ et envoyait deux notifications « check-out » aux
+            // managers. Un séjour déjà clôturé ou annulé n'a pas de départ à
+            // enregistrer.
+            $checkIn = $this->lockFresh($checkIn);
+
+            if (! in_array($checkIn->status, ['draft', 'active'], true)) {
+                throw new \DomainException('Only an open (draft or active) check-in can be checked out.');
+            }
+
             $old = ['status' => $checkIn->status, 'actual_check_out_date' => null];
             $checkIn->update([
                 'status' => 'completed',
@@ -272,6 +336,14 @@ class CheckInService
         }
 
         return DB::transaction(function () use ($checkIn) {
+            // Re-contrôle SOUS VERROU : le test ci-dessus a pu être franchi par
+            // deux requêtes simultanées.
+            $checkIn = $this->lockFresh($checkIn);
+
+            if ($checkIn->status !== 'completed') {
+                throw new \DomainException('Only a completed (checked-out) check-in can be reverted to active.');
+            }
+
             $old = ['status' => $checkIn->status, 'actual_check_out_date' => $checkIn->actual_check_out_date];
 
             $checkIn->update([
@@ -297,6 +369,14 @@ class CheckInService
     public function cancel(CheckIn $checkIn, string $reason, ?User $actor = null): CheckIn
     {
         return DB::transaction(function () use ($checkIn, $reason, $actor) {
+            // Annuler deux fois écrasait le motif initial et renotifiait les
+            // managers ; annuler un séjour déjà clôturé effaçait un départ réel.
+            $checkIn = $this->lockFresh($checkIn);
+
+            if (! in_array($checkIn->status, ['draft', 'active'], true)) {
+                throw new \DomainException('Only an open (draft or active) check-in can be cancelled.');
+            }
+
             $checkIn->update([
                 'status' => 'cancelled',
                 'metadata' => array_merge($checkIn->metadata ?? [], ['cancel_reason' => $reason]),
@@ -317,6 +397,22 @@ class CheckInService
     public function uploadScan(CheckIn $checkIn, User $uploader, UploadedFile $file): DocumentScan
     {
         $hash = hash_file('sha256', $file->getRealPath());
+
+        // Idempotence du téléversement : un double clic sur « prendre la photo »,
+        // ou un retry après un timeout réseau côté réception, renvoyait
+        // exactement le même fichier et créait un second scan. La fiche de
+        // police pouvait alors partir avec la copie orpheline (celle qui n'est
+        // rattachée à aucun voyageur), et le quota de scans du pack était
+        // décompté deux fois. Même octet + même séjour = même scan.
+        $existing = DocumentScan::where('check_in_id', $checkIn->id)
+            ->where('file_hash', $hash)
+            ->latest('created_at')
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
         $path = $file->store("scans/{$checkIn->hotel_id}/{$checkIn->id}", config('filesystems.passport_scan_disk', 'local'));
 
         // MODULE PROVISOIRE — relais WhatsApp : copie compressée en base (base64).
@@ -346,17 +442,33 @@ class CheckInService
 
         AuditLogger::log('scan.uploaded', $scan, [], ['check_in_id' => $checkIn->id], hotelId: $checkIn->hotel_id);
 
-        // Process synchronously in mock mode; dispatch job in production
-        if (config('ocr.driver', 'mock') === 'mock') {
-            $this->ocrService->process($scan);
-        } else {
-            // ProcessPassportScan::dispatch($scan);
-        }
+        // Le scan est TOUJOURS traité : l'ancienne branche « sinon, dispatcher un
+        // job » pointait vers un dispatch resté commenté, si bien qu'avec un
+        // pilote OCR réel configuré la ligne restait « pending » indéfiniment —
+        // un état d'attente qui ne se résolvait jamais et que rien ne signalait.
+        // OcrService décide seul de ce qui est honnête selon le pilote et
+        // l'environnement (extraction, échec explicite, ou lecture non effectuée).
+        $this->ocrService->process($scan);
 
         return $scan->fresh();
     }
 
     // ─── Private helpers ──────────────────────────────────────────────
+
+    /**
+     * Relit le séjour SOUS VERROU exclusif (SELECT … FOR UPDATE), à appeler
+     * depuis une transaction avant toute transition d'état.
+     *
+     * Tant que la garde de statut était évaluée hors transaction, deux requêtes
+     * concurrentes la franchissaient toutes les deux : c'est la cause unique du
+     * double check-in, du double check-out et des fiches de police en double.
+     * Ici la seconde requête attend, relit « active » et part en DomainException
+     * (422) — l'opération métier n'est exécutée qu'une fois.
+     */
+    private function lockFresh(CheckIn $checkIn): CheckIn
+    {
+        return CheckIn::whereKey($checkIn->getKey())->lockForUpdate()->firstOrFail();
+    }
 
     private function findOrCreateGuest(array $data): Guest
     {
@@ -368,18 +480,64 @@ class CheckInService
         // exact same triple `upsertDocument()` uses. Matching on number+type alone
         // would wrongly merge two DIFFERENT people from two countries that happen to
         // share a document number.
+        //
+        // Le triplet est NORMALISÉ (cf. DocumentIdentity) : sans ça « TN »/« TUN »
+        // ou « ab 123 »/« AB123 » désignaient deux documents, donc deux voyageurs,
+        // pour une seule et même personne.
         if (! empty($data['document']['document_number'])) {
-            $doc = TravelDocument::where('type', $data['document']['type'] ?? 'passport')
-                ->where('document_number', $data['document']['document_number'])
-                ->where('issuing_country_code', $data['document']['issuing_country_code'] ?? 'TN')
+            $key = DocumentIdentity::key($data['document']);
+
+            $doc = TravelDocument::where('type', $key['type'])
+                ->where('document_number', $key['document_number'])
+                ->where('issuing_country_code', $key['issuing_country_code'])
                 ->first();
 
             // $doc->guest peut être null si l'enregistrement Guest a été supprimé
             // sans cascader sur travel_documents (orphelin). On ignore et on recrée.
             if ($doc && $doc->guest) {
+                // Même document, identité saisie différente : on GARDE le dossier
+                // existant (un document identifie une personne) mais on ne le fait
+                // plus en silence — la réception doit savoir que la fiche partira
+                // au nom déjà enregistré, et l'écart est tracé pour l'audit.
+                $mismatch = DocumentIdentity::identityMismatch($doc->guest, $data);
+
+                $this->lastGuestMatch['matched_existing'] = true;
+                $this->lastGuestMatch['identity_mismatch'] = $mismatch;
+
+                if ($mismatch !== []) {
+                    AuditLogger::log(
+                        action: 'guest.identity_mismatch',
+                        subject: $doc->guest,
+                        oldValues: [
+                            'first_name' => $doc->guest->first_name,
+                            'last_name' => $doc->guest->last_name,
+                            'date_of_birth' => (string) $doc->guest->date_of_birth,
+                        ],
+                        newValues: [
+                            'document_number' => $key['document_number'],
+                            'diverging_fields' => $mismatch,
+                            'submitted_first_name' => $data['first_name'] ?? null,
+                            'submitted_last_name' => $data['last_name'] ?? null,
+                        ],
+                    );
+                }
+
                 return $doc->guest;
             }
         }
+
+        // Nouveau voyageur : on signale (sans jamais bloquer) les fiches déjà en
+        // base qui lui ressemblent fortement — même nom, prénom et date de
+        // naissance. Cas typique : la même personne re-scannée avec un document
+        // d'un autre type, ou saisie à la main après un scan raté.
+        $this->lastGuestMatch['possible_duplicates'] = DocumentIdentity::similarGuests($data)
+            ->map(fn (Guest $g) => [
+                'id' => $g->id,
+                'first_name' => $g->first_name,
+                'last_name' => $g->last_name,
+                'date_of_birth' => (string) $g->date_of_birth,
+            ])
+            ->all();
 
         return Guest::create([
             'first_name' => $data['first_name'],
@@ -396,20 +554,24 @@ class CheckInService
 
     private function upsertDocument(Guest $guest, array $docData): TravelDocument
     {
+        $key = DocumentIdentity::key($docData);
+
+        // Ne JAMAIS écraser une date déjà connue par un null : un second scan du
+        // même passeport dont le MRZ ne rend pas l'expiration effaçait la valeur
+        // saisie/lue au premier passage — la fiche de police repartait sans date.
+        $optional = array_filter([
+            'issue_date' => $docData['issue_date'] ?? null,
+            'expiry_date' => $docData['expiry_date'] ?? null,
+            'mrz_line1' => $docData['mrz_line1'] ?? null,
+            'mrz_line2' => $docData['mrz_line2'] ?? null,
+        ], fn ($v) => ! is_null($v) && $v !== '');
+
         return TravelDocument::updateOrCreate(
-            [
-                'type' => $docData['type'] ?? 'passport',
-                'document_number' => $docData['document_number'],
-                'issuing_country_code' => $docData['issuing_country_code'] ?? 'TN',
-            ],
-            [
+            $key,
+            array_merge($optional, [
                 'guest_id' => $guest->id,
-                'issue_date' => $docData['issue_date'] ?? null,
-                'expiry_date' => $docData['expiry_date'] ?? null,
-                'mrz_line1' => $docData['mrz_line1'] ?? null,
-                'mrz_line2' => $docData['mrz_line2'] ?? null,
                 'is_verified' => true,
-            ]
+            ])
         );
     }
 }
