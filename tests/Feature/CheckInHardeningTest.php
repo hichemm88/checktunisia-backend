@@ -285,6 +285,43 @@ class CheckInHardeningTest extends TestCase
     }
 
     /**
+     * Rotation de chambre le même jour : le client part, la chambre est
+     * relouée dans la foulée. Le verrou d'occupation ne doit pas transformer
+     * une chambre libérée en chambre bloquée.
+     */
+    public function test_a_room_can_be_relet_once_the_previous_guest_has_left(): void
+    {
+        $room = Room::factory()->for($this->hotel)->create(['number' => '101']);
+
+        $first = $this->actingAs($this->receptionist)
+            ->postJson('/api/v1/hotel/check-ins', [
+                'check_in_date' => now()->subDay()->toDateString(),
+                'expected_check_out_date' => now()->toDateString(),
+                'room_id' => $room->id,
+            ])->assertCreated()->json('data.id');
+
+        // Tant que le client est là, la chambre est bien refusée.
+        $second = [
+            'check_in_date' => now()->toDateString(),
+            'expected_check_out_date' => now()->addDays(2)->toDateString(),
+            'room_id' => $room->id,
+        ];
+        $this->actingAs($this->receptionist2)
+            ->postJson('/api/v1/hotel/check-ins', $second)->assertStatus(422);
+
+        $this->actingAs($this->receptionist)
+            ->postJson("/api/v1/hotel/check-ins/{$first}/checkout", ['actual_check_out_date' => now()->toDateString()])
+            ->assertOk();
+
+        // Départ enregistré : la chambre redevient disponible immédiatement.
+        $this->actingAs($this->receptionist2)
+            ->postJson('/api/v1/hotel/check-ins', $second)->assertCreated();
+
+        $this->assertSame(2, CheckIn::where('room_id', $room->id)->count());
+        $this->assertSame(1, CheckIn::where('room_id', $room->id)->whereIn('status', ['draft', 'active'])->count());
+    }
+
+    /**
      * Le même cliché téléversé deux fois (double appui sur le déclencheur, ou
      * retry après timeout) ne doit produire qu'un scan : sinon la fiche peut
      * partir avec la copie orpheline et le quota de scans est décompté deux fois.
