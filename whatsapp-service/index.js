@@ -242,6 +242,14 @@ client.on('ready', () => {
   reportSession('ready');
   attachPageDiagnostics();
   startPageLivenessWatchdog();
+
+  // Marqueur d'appairage : c'est ICI, et nulle part avant, qu'on sait que le
+  // profil sur le volume correspond à une session réellement acceptée par
+  // WhatsApp. Un démarrage qui affiche un QR fabrique un profil complet lui
+  // aussi — sans ce marqueur, il passerait pour une session valide et
+  // masquerait la copie saine du coffre.
+  sessionStore.markPaired(SESSION_PATH);
+
   startSessionSnapshots();
 });
 
@@ -503,6 +511,7 @@ app.get('/session-vault', requireToken, async (_req, res) => {
     local: {
       exists: local.exists,
       usable: local.usable,
+      paired: local.paired,
       stores: local.stores,
       megabytes: +(local.bytes / 1048576).toFixed(1),
     },

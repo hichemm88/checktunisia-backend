@@ -64,6 +64,22 @@ const EXCLUDED = [
 /** Fichiers de verrou Chromium : jamais archivés, ils bloqueraient la restauration. */
 const EXCLUDED_GLOBS = ['Singleton*', '*.lock', 'lockfile'];
 
+/*
+ * Marqueur d'appairage, posé par le worker quand WhatsApp confirme la session.
+ *
+ * Il répond à un piège constaté en production le 2026-08-08 : un démarrage qui
+ * affiche un QR fabrique lui aussi un profil Chromium complet, avec IndexedDB
+ * et Local Storage — 112 Mo de fichiers parfaitement formés, mais appairés à
+ * personne. La seule présence des magasins ne distingue donc PAS une session
+ * valide d'un profil né d'un QR jamais scanné.
+ *
+ * Sans marqueur, ce profil fantôme passerait pour une session et masquerait la
+ * copie saine du coffre à chaque démarrage suivant.
+ *
+ * Ne contient aucun secret : un horodatage, rien d'autre.
+ */
+const PAIRED_MARKER = '.qayed-paired.json';
+
 /**
  * État de la session sur le disque local.
  *
@@ -80,17 +96,35 @@ function localSessionState(dataPath, { clientId } = {}) {
 
   const exists = safeIsDir(root);
   const stores = ['IndexedDB', 'Local Storage'].filter((s) => safeIsDir(path.join(profile, s)));
+  const paired = safeIsFile(path.join(root, PAIRED_MARKER));
 
   return {
     root,
     exists,
-    // Les deux magasins sont exigés : WhatsApp Web répartit l'état d'appairage
-    // entre les deux, et un profil qui n'aurait que l'un des deux est un
-    // profil à moitié écrit — il repartirait sur un QR de toute façon.
-    usable: exists && stores.length === 2,
     stores,
+    paired,
+    // Les deux magasins ET le marqueur d'appairage. Les magasins seuls ne
+    // prouvent rien : un profil né d'un QR jamais scanné les possède aussi.
+    usable: exists && stores.length === 2 && paired,
     bytes: exists ? directoryBytes(root) : 0,
   };
+}
+
+/**
+ * Pose le marqueur d'appairage. Appelé quand WhatsApp confirme la session
+ * (« ready »), jamais avant : c'est ce qui donne au marqueur sa valeur.
+ */
+function markPaired(dataPath, { clientId } = {}) {
+  const root = path.join(dataPath, clientId ? `session-${clientId}` : 'session');
+
+  try {
+    fs.mkdirSync(root, { recursive: true });
+    // Horodatage seul — aucun identifiant, aucun secret.
+    fs.writeFileSync(path.join(root, PAIRED_MARKER), JSON.stringify({ paired_at: new Date().toISOString() }));
+    return true;
+  } catch (err) {
+    return false;
+  }
 }
 
 /**
@@ -198,8 +232,41 @@ async function restoreIfMissing({ api, dataPath, log = console, enabled = true, 
       const archive = path.join(tmpDir, `wa-session-restore-${process.pid}.tar.gz`);
       fs.writeFileSync(archive, Buffer.from(res.data));
 
+      /*
+       * Écarter le profil orphelin AVANT d'extraire, plutôt qu'extraire
+       * par-dessus : tar écrase les entrées de l'archive et laisse le reste,
+       * ce qui produirait un profil hybride — mélange de deux sessions
+       * Chromium, cas où l'on perdrait les deux.
+       *
+       * Écarter, pas supprimer : le profil est déplacé sous « .orphan » et
+       * remis en place si l'extraction échoue. Un orphelin précédent est en
+       * revanche remplacé — c'est un profil qu'on a déjà jugé non appairé, et
+       * en garder une collection remplirait le volume.
+       */
+      const orphan = `${state.root}.orphan`;
+      let setAside = false;
+
+      if (state.exists) {
+        try {
+          fs.rmSync(orphan, { recursive: true, force: true });
+          fs.renameSync(state.root, orphan);
+          setAside = true;
+          log.warn(`[wa-session] profil local non appairé écarté sous « ${path.basename(orphan)} » (conservé, non supprimé).`);
+        } catch (err) {
+          log.warn(`[wa-session] impossible d'écarter le profil local : ${err.message} — restauration abandonnée, rien n'est touché.`);
+          safeUnlink(archive);
+          return 'unavailable';
+        }
+      }
+
       try {
         await extractArchive(archive, dataPath);
+      } catch (err) {
+        if (setAside) {
+          // Remise en l'état : mieux vaut le profil d'avant que rien.
+          try { fs.rmSync(state.root, { recursive: true, force: true }); fs.renameSync(orphan, state.root); } catch { /* au mieux */ }
+        }
+        throw err;
       } finally {
         safeUnlink(archive);
       }
@@ -332,6 +399,10 @@ function safeIsDir(p) {
   try { return fs.statSync(p).isDirectory(); } catch { return false; }
 }
 
+function safeIsFile(p) {
+  try { return fs.statSync(p).isFile(); } catch { return false; }
+}
+
 function safeUnlink(p) {
   try { fs.rmSync(p, { force: true }); } catch { /* le fichier temporaire disparaîtra avec le conteneur */ }
 }
@@ -358,7 +429,9 @@ function defaultSleep(ms) {
 
 module.exports = {
   EXCLUDED,
+  PAIRED_MARKER,
   localSessionState,
+  markPaired,
   shouldRestore,
   shouldSnapshot,
   shouldWipeOnStartupTimeout,

@@ -74,9 +74,33 @@ Ils comptent plus que le mécanisme, parce que la panne qu'ils préviennent est 
 | Un **transfert tronqué** remplace une archive saine | Empreinte SHA-256 annoncée par le worker et vérifiée avant tout stockage |
 | Un **dépôt valide mais inutilisable** (profil pris au mauvais moment) | La version précédente est conservée sous `…​.previous` |
 | Le coffre **restaure une session périmée** par-dessus une session locale valide | Le coffre n'est sollicité que si le disque local n'a **rien** d'exploitable |
+| Un **profil fantôme** (né d'un QR jamais scanné) passe pour une session et masque la copie saine | Marqueur d'appairage `.qayed-paired.json`, posé uniquement sur `ready`. Voir ci-dessous |
+| Un profil restauré se **mélange** au profil déjà présent | L'ancien est écarté sous `session.orphan` — conservé, pas supprimé — avant extraction, et remis en place si l'extraction échoue |
 | Le coffre est **injoignable au démarrage** (backend en plein redéploiement — le cas normal) | Trois tentatives, puis démarrage avec ce qu'on a. Rien n'est jamais effacé |
 | La session finit **en clair** dans le stockage objet | Sans clé de chiffrement, le coffre refuse de stocker plutôt que de déposer en clair |
 | Un secret **fuit dans les journaux** | Les traces ne portent que des tailles, des préfixes d'empreinte et des identifiants de clé. Testé |
+
+## Le marqueur d'appairage
+
+Constaté en production le 8 août 2026, en observant le premier démarrage du
+nouveau code : **un démarrage qui affiche un QR fabrique lui aussi un profil
+Chromium complet.** IndexedDB, Local Storage, 112 Mo de fichiers parfaitement
+formés — appairés à personne.
+
+La seule présence des magasins ne distingue donc pas une session valide d'un
+profil né d'un QR jamais scanné. Sans correctif, ce profil fantôme aurait
+compté comme « session locale exploitable » et masqué la copie saine du coffre
+à chaque démarrage suivant. Le filet aurait été là, et on ne serait jamais
+tombé dedans.
+
+Le worker écrit donc `<session>/.qayed-paired.json` — un horodatage, rien
+d'autre, aucun secret — **au moment précis** où WhatsApp confirme la session
+(`ready`), et nulle part avant. C'est ce marqueur, et non l'existence des
+fichiers, qui fait foi. Il voyage dans l'archive : une session restaurée est
+appairée par construction.
+
+Un profil sans marqueur n'est jamais déposé au coffre, et jamais préféré à une
+archive saine.
 
 ## Variables
 
@@ -102,7 +126,7 @@ GET https://<worker>/session-vault?token=<WHATSAPP_QR_TOKEN>
 {
   "ready": true,
   "session": "ready",
-  "local":  { "usable": true, "stores": ["IndexedDB", "Local Storage"], "megabytes": 312.4 },
+  "local":  { "usable": true, "paired": true, "stores": ["IndexedDB", "Local Storage"], "megabytes": 312.4 },
   "vault":  { "exists": true, "bytes": 18234112, "stored_at": "2026-08-08T…" }
 }
 ```

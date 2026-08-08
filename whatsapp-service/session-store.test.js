@@ -48,6 +48,26 @@ function makePairedSession(dataPath) {
 
   // Verrou Chromium — ne doit jamais être archivé.
   fs.writeFileSync(path.join(dataPath, 'session', 'SingletonLock'), 'verrou');
+
+  // Marqueur posé par le worker sur « ready » : ce profil est appairé.
+  store.markPaired(dataPath);
+}
+
+/**
+ * Profil né d'un QR jamais scanné : Chromium a tout écrit (IndexedDB, Local
+ * Storage, des dizaines de Mo), mais la session n'est appairée à personne.
+ * Constaté en production le 2026-08-08.
+ */
+function makeUnpairedProfile(dataPath) {
+  const profile = path.join(dataPath, 'session', 'Default');
+
+  for (const dir of ['IndexedDB', 'Local Storage']) {
+    fs.mkdirSync(path.join(profile, dir), { recursive: true });
+  }
+
+  fs.writeFileSync(path.join(profile, 'IndexedDB', 'vide.ldb'), crypto.randomBytes(4096));
+  fs.writeFileSync(path.join(profile, 'Local Storage', 'leveldb.log'), crypto.randomBytes(2048));
+  // Aucun appel à markPaired : c'est toute la différence.
 }
 
 /** Point de montage de volume vide : le piège qui a coûté la session. */
@@ -106,6 +126,65 @@ test('un point de montage vide n\'est PAS pris pour une session', () => {
   assert.equal(state.usable, false);
   assert.equal(store.shouldSnapshot(state), false);
   assert.equal(store.shouldRestore(state), true);
+});
+
+test('un profil né d\'un QR jamais scanné n\'est PAS pris pour une session', () => {
+  const dir = tmpRoot('non-appaire');
+  makeUnpairedProfile(dir);
+
+  const state = store.localSessionState(dir);
+
+  // Le piège de production : les magasins sont là, complets, et pourtant la
+  // session n'existe pas. Sans le marqueur, ce profil masquerait la copie
+  // saine du coffre à chaque démarrage.
+  assert.deepEqual(state.stores, ['IndexedDB', 'Local Storage']);
+  assert.equal(state.paired, false);
+  assert.equal(state.usable, false);
+  assert.equal(store.shouldSnapshot(state), false, 'un profil non appairé ne doit jamais partir au coffre');
+  assert.equal(store.shouldRestore(state), true);
+});
+
+test('le marqueur d\'appairage ne contient aucun secret', () => {
+  const dir = tmpRoot('marqueur');
+  fs.mkdirSync(path.join(dir, 'session'), { recursive: true });
+  store.markPaired(dir);
+
+  const contenu = JSON.parse(fs.readFileSync(path.join(dir, 'session', store.PAIRED_MARKER), 'utf8'));
+
+  assert.deepEqual(Object.keys(contenu), ['paired_at']);
+  assert.ok(!Number.isNaN(Date.parse(contenu.paired_at)));
+});
+
+test('un profil non appairé est ÉCARTÉ, pas supprimé, avant restauration', async () => {
+  const origine = tmpRoot('orphelin-origine');
+  makePairedSession(origine);
+  const attendu = fs.readFileSync(path.join(origine, 'session', 'Default', 'IndexedDB', 'creds.ldb'));
+
+  const vault = fakeVault();
+  await store.snapshot({ api: vault.api, dataPath: origine, log: silent });
+
+  // Instance qui a affiché un QR : un profil complet mais orphelin traîne.
+  const cible = tmpRoot('orphelin-cible');
+  makeUnpairedProfile(cible);
+  const orphelinAvant = fs.readFileSync(path.join(cible, 'session', 'Default', 'IndexedDB', 'vide.ldb'));
+
+  const outcome = await store.restoreIfMissing({ api: vault.api, dataPath: cible, log: silent });
+
+  assert.equal(outcome, 'restored');
+  assert.equal(store.localSessionState(cible).usable, true);
+  assert.deepEqual(
+    fs.readFileSync(path.join(cible, 'session', 'Default', 'IndexedDB', 'creds.ldb')),
+    attendu,
+    'la session du coffre doit avoir remplacé le profil orphelin',
+  );
+  // Aucun fichier hybride : le profil orphelin n'a pas été mélangé au restauré.
+  assert.ok(!fs.existsSync(path.join(cible, 'session', 'Default', 'IndexedDB', 'vide.ldb')));
+  // Et il est conservé à côté, pas détruit.
+  assert.deepEqual(
+    fs.readFileSync(path.join(cible, 'session.orphan', 'Default', 'IndexedDB', 'vide.ldb')),
+    orphelinAvant,
+    'le profil écarté doit rester récupérable',
+  );
 });
 
 test('un profil appairé est reconnu comme exploitable', () => {
