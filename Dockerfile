@@ -78,6 +78,14 @@ COPY . .
 # de l'environnement au runtime.
 RUN cp .env.example .env
 
+# bootstrap/cache AVANT le dump : `composer dump-autoload` déclenche
+# `artisan package:discover`, qui refuse de démarrer si le répertoire est
+# absent (« The /app/bootstrap/cache directory must be present and writable »).
+# Le mkdir plus bas arrive trop tard. Le répertoire existait jusqu'ici par
+# accident — deux fichiers de cache y étaient suivis par git ; le build ne doit
+# pas dépendre de ça.
+RUN mkdir -p bootstrap/cache && chmod 775 bootstrap/cache
+
 RUN composer dump-autoload --optimize --no-dev --classmap-authoritative
 
 # storage/app manquait : git ne versionne pas les répertoires vides, et rien ne
