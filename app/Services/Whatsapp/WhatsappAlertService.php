@@ -74,6 +74,27 @@ class WhatsappAlertService
             return;
         }
 
+        /*
+         * Plancher de fréquence pour les coupures techniques — la clé
+         * d'événement ne suffit pas quand les événements se succèdent.
+         *
+         * Une session qui tombe, revient, retombe fabrique à chaque cycle un
+         * `last_ready_at` neuf, donc une clé neuve, donc un email de plus. Les
+         * administrateurs recevaient une rafale de messages « aucune action
+         * n'est requise » — le meilleur moyen de leur apprendre à ne plus les
+         * lire, y compris le jour où l'un d'eux compte vraiment.
+         *
+         * Le plancher ne couvre QUE les coupures : un ré-appairage demande un
+         * geste humain, il doit passer sans condition. Et une panne qui dure
+         * n'est pas perdue de vue pour autant — `whatsapp:check-health` la
+         * reprend toutes les 10 minutes.
+         */
+        if (! $needsPairing && ! Cache::add('whatsapp:alerted:floor', true, now()->addHour())) {
+            Log::info('[whatsapp] coupure signalée il y a moins d\'une heure — email supprimé (la panne reste suivie).');
+
+            return;
+        }
+
         $pending = WhatsappSendLog::where('status', WhatsappSendLog::STATUS_PENDING)->count();
 
         $context = [];

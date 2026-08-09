@@ -388,6 +388,13 @@ async function restoreIfMissing({ api, dataPath, log = console, enabled = true, 
     }
   }
 
+  // Toutes les tentatives ont échoué : ne pas laisser derrière soi une
+  // extraction partielle. Sur un volume de 500 Mo, ce résidu d'une centaine de
+  // mégaoctets restait à demeure et rapprochait d'autant le disque plein.
+  try {
+    fs.rmSync(path.join(dataPath, '.restore-staging'), { recursive: true, force: true });
+  } catch { /* au mieux */ }
+
   return 'unavailable';
 }
 
@@ -522,6 +529,158 @@ function safeUnlink(p) {
   try { fs.rmSync(p, { force: true }); } catch { /* le fichier temporaire disparaîtra avec le conteneur */ }
 }
 
+// ── Place sur le volume ──────────────────────────────────────────────────────
+
+/*
+ * LE VOLUME SE REMPLIT, ET RIEN NE LE VIDAIT.
+ *
+ * Le volume Railway est plafonné à 500 Mo et un profil Chromium en pèse ~100.
+ * Or trois choses s'y accumulaient sans que personne ne les reprenne :
+ *
+ *  1. Les caches de Chromium DANS le profil vivant. Ils sont exclus de
+ *     l'archive (EXCLUDED) parce qu'ils sont volumineux et reconstructibles —
+ *     mais rien ne les effaçait du disque. Ils grossissent tant que la session
+ *     tourne. C'est le terme dominant.
+ *  2. Les profils écartés (`session.revoked-*`, `session.orphan`). Le ménage
+ *     n'avait lieu qu'au moment d'en créer un nouveau : après une révocation
+ *     isolée, les ~100 Mo restaient là pour toujours.
+ *  3. `.restore-staging`, laissé en place quand toutes les tentatives de
+ *     restauration échouent.
+ *
+ * Un volume plein, c'est Chromium qui n'écrit plus son IndexedDB : la page
+ * WhatsApp Web se met à échouer sans raison apparente, et les envois avec elle.
+ * Constaté à 87 % le 2026-08-09, le soir même de l'incident d'envoi.
+ *
+ * On récupère donc l'espace AU DÉMARRAGE, Chromium à l'arrêt — sous Linux,
+ * effacer un fichier qu'un processus tient ouvert ne rend aucun octet.
+ */
+
+/**
+ * Efface les caches reconstructibles d'un profil.
+ *
+ * La règle n° 1 du fichier (« ne jamais supprimer une session locale ») tient
+ * toujours : la liste est un ALLOWLIST fixe de sous-dossiers de cache, jamais
+ * un motif. IndexedDB et Local Storage — où vivent les credentials — n'y
+ * figurent pas et ne peuvent pas y arriver par accident.
+ *
+ * @returns {number} octets libérés
+ */
+function pruneCaches(profileRoot) {
+  let freed = 0;
+
+  for (const relative of EXCLUDED) {
+    const target = path.join(profileRoot, relative);
+    if (!safeIsDir(target)) continue;
+
+    const bytes = directoryBytes(target);
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      freed += bytes;
+    } catch { /* la place sera reprise au prochain démarrage */ }
+  }
+
+  return freed;
+}
+
+/** Profils mis de côté (révoqués ou orphelins), du plus récent au plus ancien. */
+function parkedProfiles(dataPath) {
+  try {
+    return fs.readdirSync(dataPath)
+      .filter((name) => /^session\.revoked-\d+$/.test(name) || name === 'session.orphan')
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Reprend la place perdue sur le volume. Appelée au démarrage, avant Chromium.
+ *
+ * Par ordre croissant de valeur — on ne sacrifie jamais plus que nécessaire :
+ * le dossier de travail d'abord, puis les caches (reconstructibles par
+ * définition), puis les profils écartés au-delà de ceux qu'on garde pour
+ * l'analyse d'incident. Le profil vivant n'est JAMAIS touché, ni ses magasins.
+ *
+ * @returns {{freedBytes:number, removed:string[]}}
+ */
+function reclaimSpace({ dataPath, keepParked = 1, log = console } = {}) {
+  const removed = [];
+  let freedBytes = 0;
+
+  if (!safeIsDir(dataPath)) return { freedBytes, removed };
+
+  // 1. Dossier de travail d'une restauration interrompue : sans valeur.
+  const staging = path.join(dataPath, '.restore-staging');
+  if (safeIsDir(staging)) {
+    freedBytes += directoryBytes(staging);
+    try {
+      fs.rmSync(staging, { recursive: true, force: true });
+      removed.push('.restore-staging');
+    } catch { /* au mieux */ }
+  }
+
+  // 2. Caches du profil vivant : le terme dominant, et le moins coûteux à perdre.
+  const live = path.join(dataPath, 'session');
+  if (safeIsDir(live)) {
+    const bytes = pruneCaches(live);
+    if (bytes > 0) {
+      freedBytes += bytes;
+      removed.push(`session/caches (${mb(bytes)})`);
+    }
+  }
+
+  // 3. Profils écartés : caches d'abord pour ceux qu'on garde, puis suppression
+  //    complète des plus anciens.
+  const parked = parkedProfiles(dataPath);
+  parked.slice(0, keepParked).forEach((name) => {
+    const bytes = pruneCaches(path.join(dataPath, name));
+    if (bytes > 0) {
+      freedBytes += bytes;
+      removed.push(`${name}/caches (${mb(bytes)})`);
+    }
+  });
+
+  for (const name of parked.slice(keepParked)) {
+    const full = path.join(dataPath, name);
+    const bytes = directoryBytes(full);
+    try {
+      fs.rmSync(full, { recursive: true, force: true });
+      freedBytes += bytes;
+      removed.push(`${name} (${mb(bytes)})`);
+    } catch { /* au mieux */ }
+  }
+
+  if (freedBytes > 0) {
+    log.log(`[wa-session] place reprise sur le volume : ${mb(freedBytes)} — ${removed.join(', ')}.`);
+  }
+
+  return { freedBytes, removed };
+}
+
+/**
+ * Place restante sur le volume.
+ *
+ * Le worker n'avait aucun moyen de savoir qu'il manquait de place : le seul
+ * endroit où le voir était la console Railway, et il fallait déjà soupçonner
+ * quelque chose pour aller regarder.
+ *
+ * @returns {{totalBytes:number, freeBytes:number, usedRatio:number}|null}
+ */
+function volumeSpace(dataPath) {
+  try {
+    if (typeof fs.statfsSync !== 'function') return null;
+    const { bsize, blocks, bavail } = fs.statfsSync(dataPath);
+    const totalBytes = bsize * blocks;
+    const freeBytes = bsize * bavail;
+    if (!totalBytes) return null;
+
+    return { totalBytes, freeBytes, usedRatio: 1 - freeBytes / totalBytes };
+  } catch {
+    return null;
+  }
+}
+
 function directoryBytes(dir) {
   let total = 0;
   try {
@@ -557,4 +716,8 @@ module.exports = {
   extractArchive,
   restoreIfMissing,
   snapshot,
+  parkedProfiles,
+  pruneCaches,
+  reclaimSpace,
+  volumeSpace,
 };
