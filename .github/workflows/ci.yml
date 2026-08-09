@@ -66,12 +66,13 @@ jobs:
         run: composer install --no-interaction --prefer-dist --no-progress
 
       # APP_KEY est VIDE dans .env.example, et doit le rester : une clé
-      # d'application committée serait un secret publié. Il faut donc en
-      # générer une jetable ici — sans elle, tout appel à Crypt lève
-      # « Unsupported cipher or incorrect key length », et la moitié de la
-      # suite tombe (la factory chiffre les secrets TOTP comme en production).
-      # C'est la cause des 152 erreurs qui rendaient ce job rouge depuis sa
-      # création.
+      # d'application committée serait un secret publié. On en génère donc une
+      # jetable, pour que toute commande artisan lancée ici puisse démarrer.
+      #
+      # Ce n'est PAS ce qui alimente la suite : phpunit.xml impose sa propre
+      # clé de test, et Dotenv n'écrase pas une variable déjà posée. C'était
+      # d'ailleurs la vraie cause des 152 erreurs — cette clé-là ne faisait
+      # que 31 octets. Voir le commentaire dans phpunit.xml.
       - name: Générer une clé d'application jetable
         run: php artisan key:generate
 
