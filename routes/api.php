@@ -295,12 +295,28 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::get('subscription', [SubscriptionController::class, 'current']);
         });
 
-    // Grille V2 : demande d'upgrade vers un plan supérieur — notifie l'admin
-    // plateforme (le billing en place ne gère pas le self-service ni le
-    // prorata ; effet appliqué par l'admin, au cycle suivant par défaut).
+    // Lecture des offres et simulation d'un changement : sans effet de bord,
+    // donc ouvert au même niveau que la lecture de l'abonnement.
     Route::prefix('hotel')
-        ->middleware(['role:hotel_admin', 'org.owner', 'throttle:5,10'])
+        ->middleware(['role:hotel_admin|receptionist'])
         ->group(function () {
+            Route::get('subscription/plans', [SubscriptionController::class, 'plans']);
+            Route::get('subscription/history', [SubscriptionController::class, 'history']);
+        });
+
+    // Gestion de l'abonnement en self-service — écritures réservées au
+    // gestionnaire de l'organisation (mêmes garde-fous que la facturation :
+    // hotel_admin + propriétaire de l'organisation). Un réceptionniste voit
+    // son abonnement, il ne le modifie pas.
+    Route::prefix('hotel')
+        ->middleware(['role:hotel_admin', 'org.owner', 'throttle:10,10'])
+        ->group(function () {
+            Route::post('subscription/preview-change', [SubscriptionController::class, 'previewChange']);
+            Route::post('subscription/change', [SubscriptionController::class, 'changePlan']);
+            Route::post('subscription/change/cancel', [SubscriptionController::class, 'cancelChange']);
+            Route::post('subscription/cancel', [SubscriptionController::class, 'cancelSubscription']);
+            Route::post('subscription/reactivate', [SubscriptionController::class, 'reactivateSubscription']);
+            // Déprécié — conservé pour les clients mobiles déjà déployés.
             Route::post('subscription/upgrade-request', [SubscriptionController::class, 'requestUpgrade']);
         });
 

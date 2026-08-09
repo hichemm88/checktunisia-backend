@@ -390,12 +390,23 @@ class BillingService
      * À appeler chaque fois qu'une facture vient d'être payée, quel que soit
      * le canal (Flouci, virement validé, saisie admin) :
      *  1. garantit la trace dans l'historique des paiements ;
-     *  2. réactive et/ou prolonge l'abonnement ;
-     *  3. envoie l'email « Paiement reçu ».
+     *  2. applique un changement de plan si la facture en portait un ;
+     *  3. réactive et/ou prolonge l'abonnement ;
+     *  4. envoie l'email « Paiement reçu ».
+     *
+     * Point de convergence UNIQUE de tous les canaux de paiement : c'est ce
+     * qui garantit qu'un upgrade s'active de la même façon qu'il ait été
+     * réglé par Flouci, par virement validé ou saisi par l'admin — et qu'il
+     * ne s'active JAMAIS sans paiement confirmé.
      */
     public function handleInvoicePaid(Invoice $invoice, ?string $recordedBy = null): void
     {
         $this->ensurePaymentRecord($invoice, $recordedBy);
+
+        // Avant la prolongation : l'upgrade ouvre lui-même une période
+        // complète, il ne faut pas que les deux se cumulent.
+        app(\App\Services\Subscription\PlanChangeService::class)->applyPaidUpgrade($invoice);
+
         $this->applyPaymentToSubscription($invoice);
         $this->sendPaymentReceived($invoice->fresh());
     }
@@ -437,7 +448,14 @@ class BillingService
      */
     private function applyPaymentToSubscription(Invoice $invoice): void
     {
-        $sub = $invoice->subscription;
+        // Une facture de changement de plan a déjà ouvert sa propre période
+        // complète (PlanChangeService::applyChange). Prolonger ici en plus
+        // offrirait un second mois pour un seul paiement.
+        if (!empty($invoice->metadata['plan_change'])) {
+            return;
+        }
+
+        $sub = $invoice->subscription()->first();
         if (!$sub || $sub->status === 'cancelled') {
             return;
         }

@@ -118,6 +118,33 @@ HTML,
 {{cta_button}}
 HTML,
         ],
+        'plan_change_applied' => [
+            'subject' => "Votre plan Qayed a changé — {{plan_name}}",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>Votre changement de plan est effectif : votre compte est désormais sur le plan <strong>{{plan_name}}</strong>.</p>
+<p>Votre période en cours court jusqu'au <strong>{{expires_at}}</strong>. Vos check-ins, vos fiches et vos factures sont inchangés.</p>
+{{cta_button}}
+HTML,
+        ],
+        'subscription_cancelled' => [
+            'subject' => "Renouvellement arrêté — votre accès Qayed reste ouvert jusqu'au {{expires_at}}",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>Nous avons bien enregistré l'arrêt du renouvellement de votre abonnement <strong>{{plan_name}}</strong>.</p>
+<p><strong>Votre accès reste ouvert jusqu'au {{expires_at}}.</strong> D'ici là, rien ne change : vous continuez à enregistrer vos voyageurs normalement.</p>
+<p>Vos fiches, vos factures et votre historique sont conservés. Vous pouvez rétablir le renouvellement à tout moment depuis votre espace.</p>
+{{cta_button}}
+HTML,
+        ],
+        'subscription_reactivated' => [
+            'subject' => "Renouvellement rétabli — Qayed",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>Votre abonnement <strong>{{plan_name}}</strong> se renouvellera bien à l'échéance du <strong>{{expires_at}}</strong>. Il n'y a rien d'autre à faire.</p>
+{{cta_button}}
+HTML,
+        ],
     ];
 
     /**
@@ -231,6 +258,33 @@ HTML,
 {{cta_button}}
 HTML,
             ],
+            'plan_change_applied' => [
+                'subject' => 'Your Qayed plan has changed — {{plan_name}}',
+                'body_html' => <<<'HTML'
+<p>Hello <strong>{{name}}</strong>,</p>
+<p>Your plan change is now effective: your account is on the <strong>{{plan_name}}</strong> plan.</p>
+<p>Your current period runs until <strong>{{expires_at}}</strong>. Your check-ins, records and invoices are unchanged.</p>
+{{cta_button}}
+HTML,
+            ],
+            'subscription_cancelled' => [
+                'subject' => 'Renewal stopped — your Qayed access stays open until {{expires_at}}',
+                'body_html' => <<<'HTML'
+<p>Hello <strong>{{name}}</strong>,</p>
+<p>We have recorded the cancellation of the renewal for your <strong>{{plan_name}}</strong> subscription.</p>
+<p><strong>Your access stays open until {{expires_at}}.</strong> Until then nothing changes: you keep registering your travellers as usual.</p>
+<p>Your records, invoices and history are kept. You can restore the renewal at any time from your account.</p>
+{{cta_button}}
+HTML,
+            ],
+            'subscription_reactivated' => [
+                'subject' => 'Renewal restored — Qayed',
+                'body_html' => <<<'HTML'
+<p>Hello <strong>{{name}}</strong>,</p>
+<p>Your <strong>{{plan_name}}</strong> subscription will renew on <strong>{{expires_at}}</strong> as expected. Nothing else to do.</p>
+{{cta_button}}
+HTML,
+            ],
         ],
         'ar' => [
             'welcome' => [
@@ -334,6 +388,33 @@ HTML,
 <p>تجاوزت مؤسستكم حصتها من تسجيلات الوصول لشهرين متتاليين. إليكم ما يمثله ذلك مقارنة بالباقة الأعلى:</p>
 {{comparison_box}}
 <p>بالانتقال إلى باقة <strong>{{suggested_plan}}</strong>، لن تكون لديكم تجاوزات لتسديدها وستستفيدون من المزايا الإضافية للباقة.</p>
+{{cta_button}}
+HTML,
+            ],
+            'plan_change_applied' => [
+                'subject' => 'تغيّرت باقتكم في قيد — {{plan_name}}',
+                'body_html' => <<<'HTML'
+<p>مرحبًا <strong>{{name}}</strong>،</p>
+<p>أصبح تغيير الباقة ساريًا: حسابكم الآن على باقة <strong>{{plan_name}}</strong>.</p>
+<p>تمتد فترتكم الحالية حتى <strong>{{expires_at}}</strong>. تسجيلات الوصول والبطاقات والفواتير لديكم دون تغيير.</p>
+{{cta_button}}
+HTML,
+            ],
+            'subscription_cancelled' => [
+                'subject' => 'تم إيقاف التجديد — يبقى وصولكم إلى قيد مفتوحًا حتى {{expires_at}}',
+                'body_html' => <<<'HTML'
+<p>مرحبًا <strong>{{name}}</strong>،</p>
+<p>سجّلنا إيقاف تجديد اشتراككم <strong>{{plan_name}}</strong>.</p>
+<p><strong>يبقى وصولكم مفتوحًا حتى {{expires_at}}.</strong> حتى ذلك الحين لا يتغيّر شيء: تواصلون تسجيل مسافريكم كالمعتاد.</p>
+<p>تُحفظ بطاقاتكم وفواتيركم وسجلّكم. يمكنكم استعادة التجديد في أي وقت من مساحتكم.</p>
+{{cta_button}}
+HTML,
+            ],
+            'subscription_reactivated' => [
+                'subject' => 'تمت استعادة التجديد — قيد',
+                'body_html' => <<<'HTML'
+<p>مرحبًا <strong>{{name}}</strong>،</p>
+<p>سيتم تجديد اشتراككم <strong>{{plan_name}}</strong> في <strong>{{expires_at}}</strong> كما هو متوقع. لا شيء آخر للقيام به.</p>
 {{cta_button}}
 HTML,
             ],

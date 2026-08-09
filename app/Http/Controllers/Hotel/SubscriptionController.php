@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Hotel;
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
 use App\Models\Subscription;
+use App\Models\SubscriptionPlanChange;
+use App\Services\Subscription\PlanChangeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -60,18 +62,298 @@ class SubscriptionController extends Controller
                 // Grandfathering : le compte conserve les conditions de
                 // l'ancienne grille (affichage + demande d'upgrade).
                 'is_legacy_plan' => (bool) $sub->is_legacy_plan,
+                // Conditions particulières que le client perdrait en changeant
+                // de plan — affichées avant toute confirmation.
+                'historic_conditions' => app(PlanChangeService::class)->historicConditions($sub),
+                // Résiliation programmée : le service court jusqu'à expires_at.
+                'cancellation'   => [
+                    'requested_at' => $sub->cancellation_requested_at,
+                    'scheduled'    => $sub->isCancellationScheduled(),
+                    'ends_at'      => $sub->expires_at,
+                ],
+                // Changement de plan en cours (attente de paiement ou programmé).
+                'pending_change' => $this->pendingChangePayload($sub),
             ],
         ]);
     }
 
+    /** Le changement en cours, tel que le client doit le voir (null s'il n'y en a pas). */
+    private function pendingChangePayload(Subscription $sub): ?array
+    {
+        $change = SubscriptionPlanChange::with(['toPlan', 'fromPlan', 'invoice'])
+            ->where('subscription_id', $sub->id)
+            ->whereIn('status', SubscriptionPlanChange::IN_FLIGHT)
+            ->latest('created_at')
+            ->first();
+
+        if (!$change) {
+            return null;
+        }
+
+        return [
+            'id'                  => $change->id,
+            'kind'                => $change->kind,
+            'status'              => $change->status,
+            'to_plan'             => $change->toPlan?->only(['id', 'slug', 'name', 'price_monthly']),
+            'from_plan'           => $change->fromPlan?->only(['id', 'slug', 'name', 'price_monthly']),
+            'effective_at'        => $change->effective_at,
+            'amount_due'          => (float) $change->amount_due,
+            'credit_applied'      => (float) $change->credit_applied,
+            'next_renewal_amount' => (float) $change->next_renewal_amount,
+            'invoice'             => $change->invoice ? [
+                'id'             => $change->invoice->id,
+                'invoice_number' => $change->invoice->invoice_number,
+                'total_amount'   => $change->invoice->total_amount,
+                'status'         => $change->invoice->status,
+            ] : null,
+        ];
+    }
+
+    // ─── Self-service : choisir, simuler, changer ────────────────────────────
+
     /**
-     * Demande d'upgrade vers un plan supérieur de la grille publique.
+     * Les plans souscriptibles, chacun accompagné de la SIMULATION complète
+     * du changement pour CE client (montant dû, crédit, date d'effet, effet
+     * sur le quota, conditions historiques perdues).
      *
-     * Le billing en place (Flouci par facture + renouvellements) ne gère ni
-     * le changement de plan self-service ni le prorata en cours de cycle :
-     * la demande notifie l'admin plateforme, qui applique le changement
-     * depuis la fiche hébergeur — effet au cycle suivant (ou immédiat si
-     * l'admin le décide). Choix documenté (chantier grille V2).
+     * Le client compare des offres déjà chiffrées pour sa situation — le
+     * front n'a aucun calcul à faire, et ne pourrait pas en faire un juste.
+     */
+    public function plans(Request $request): JsonResponse
+    {
+        $sub = $this->resolveSubscription($request);
+        if (!$sub) {
+            return response()->json(['data' => ['current' => null, 'plans' => []]]);
+        }
+
+        $service = app(PlanChangeService::class);
+
+        $plans = \App\Models\SubscriptionPlan::where('is_active', true)
+            ->where('is_public', true)
+            ->orderBy('sort_order')
+            ->get()
+            ->map(function (\App\Models\SubscriptionPlan $plan) use ($sub, $service) {
+                $isCurrent = $plan->id === $sub->plan_id;
+
+                return [
+                    'id'                  => $plan->id,
+                    'slug'                => $plan->slug,
+                    'name'                => $plan->name,
+                    'marketing'           => $plan->marketing,
+                    'price_monthly'       => $plan->price_monthly,
+                    'features'            => $plan->features,
+                    'overage_price'       => $plan->overage_price,
+                    'overage_bundle_size' => $plan->overage_bundle_size,
+                    'is_current'          => $isCurrent,
+                    // Pas de simulation pour le plan déjà souscrit.
+                    'change'              => $isCurrent ? null : $service->preview($sub, $plan),
+                ];
+            });
+
+        return response()->json(['data' => [
+            'current' => [
+                'plan_id'       => $sub->plan_id,
+                'plan_slug'     => $sub->plan?->slug,
+                'billing_cycle' => $sub->billing_cycle,
+                'expires_at'    => $sub->expires_at,
+            ],
+            'plans' => $plans,
+        ]]);
+    }
+
+    /** Simulation d'un changement précis — le contenu exact de l'écran de confirmation. */
+    public function previewChange(Request $request): JsonResponse
+    {
+        $v   = $request->validate(['plan_id' => ['required', 'integer', 'exists:subscription_plans,id']]);
+        $sub = $this->resolveSubscriptionOrFail($request);
+
+        $target = \App\Models\SubscriptionPlan::findOrFail($v['plan_id']);
+
+        return response()->json(['data' => app(PlanChangeService::class)->preview($sub, $target)]);
+    }
+
+    /**
+     * Demande de changement de plan.
+     *
+     * Upgrade   → facture émise, plan inchangé jusqu'au paiement confirmé.
+     * Downgrade → programmé à la fin de la période déjà payée.
+     *
+     * `idempotency_key` est fournie par le client (une par intention) :
+     * double clic, rejeu réseau ou deux onglets retombent sur la même
+     * demande, donc sur la même facture.
+     */
+    public function changePlan(Request $request): JsonResponse
+    {
+        $v = $request->validate([
+            'plan_id'                    => ['required', 'integer', 'exists:subscription_plans,id'],
+            'idempotency_key'            => ['required', 'string', 'min:8', 'max:100'],
+            'accept_conditions_change'   => ['sometimes', 'boolean'],
+        ]);
+
+        $sub    = $this->resolveSubscriptionOrFail($request);
+        $target = \App\Models\SubscriptionPlan::findOrFail($v['plan_id']);
+
+        $change = app(PlanChangeService::class)->request(
+            $sub,
+            $target,
+            $request->user(),
+            // La clé est cloisonnée par abonnement : deux tenants ne peuvent
+            // pas se télescoper en envoyant la même chaîne.
+            hash('sha256', $sub->id.'|'.$v['idempotency_key']),
+            (bool) ($v['accept_conditions_change'] ?? false),
+        );
+
+        return response()->json(['data' => [
+            'id'             => $change->id,
+            'kind'           => $change->kind,
+            'status'         => $change->status,
+            'effective_at'   => $change->effective_at,
+            'amount_due'     => (float) $change->amount_due,
+            'credit_applied' => (float) $change->credit_applied,
+            'applied_at'     => $change->applied_at,
+            'invoice'        => $change->invoice ? [
+                'id'             => $change->invoice->id,
+                'invoice_number' => $change->invoice->invoice_number,
+                'total_amount'   => $change->invoice->total_amount,
+                'status'         => $change->invoice->status,
+            ] : null,
+        ]], 201);
+    }
+
+    /** Annule le changement en cours (facture d'upgrade non réglée annulée avec). */
+    public function cancelChange(Request $request): JsonResponse
+    {
+        $sub    = $this->resolveSubscriptionOrFail($request);
+        $change = app(PlanChangeService::class)->cancelPending($sub, $request->user());
+
+        if (!$change) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'NO_PENDING_CHANGE', 'message' => 'Aucun changement de plan en cours.', 'field' => null]],
+            ], 422);
+        }
+
+        return response()->json(['data' => ['id' => $change->id, 'status' => $change->status]]);
+    }
+
+    /**
+     * Résiliation : arrêt du renouvellement. Le service reste ouvert jusqu'au
+     * terme déjà payé, aucune donnée n'est supprimée.
+     */
+    public function cancelSubscription(Request $request): JsonResponse
+    {
+        $v   = $request->validate(['reason' => ['nullable', 'string', 'max:500']]);
+        $sub = $this->resolveSubscriptionOrFail($request);
+
+        $sub = app(PlanChangeService::class)->cancelRenewal($sub, $request->user(), $v['reason'] ?? null);
+
+        return response()->json(['data' => [
+            'auto_renew'                => $sub->auto_renew,
+            'cancellation_requested_at' => $sub->cancellation_requested_at,
+            'ends_at'                   => $sub->expires_at,
+        ]]);
+    }
+
+    /** Reprise du renouvellement. */
+    public function reactivateSubscription(Request $request): JsonResponse
+    {
+        $sub = app(PlanChangeService::class)
+            ->reactivateRenewal($this->resolveSubscriptionOrFail($request), $request->user());
+
+        return response()->json(['data' => [
+            'auto_renew'                => $sub->auto_renew,
+            'cancellation_requested_at' => $sub->cancellation_requested_at,
+            'ends_at'                   => $sub->expires_at,
+        ]]);
+    }
+
+    /**
+     * Historique des mouvements d'abonnement — ce que le client doit pouvoir
+     * relire pour comprendre sa facturation sans appeler personne.
+     */
+    public function history(Request $request): JsonResponse
+    {
+        $sub = $this->resolveSubscription($request);
+        if (!$sub) {
+            return response()->json(['data' => []]);
+        }
+
+        $events = \App\Models\SubscriptionEvent::with(['performer:id,first_name,last_name'])
+            ->where('subscription_id', $sub->id)
+            ->orderByDesc('created_at')
+            ->limit(100)
+            ->get();
+
+        $plans = \App\Models\SubscriptionPlan::whereIn(
+            'id',
+            $events->pluck('previous_plan_id')->merge($events->pluck('new_plan_id'))->filter()->unique(),
+        )->pluck('name', 'id');
+
+        return response()->json(['data' => $events->map(fn ($e) => [
+            'id'            => $e->id,
+            'event_type'    => $e->event_type,
+            'created_at'    => $e->created_at,
+            'previous_plan' => $e->previous_plan_id ? ($plans[$e->previous_plan_id] ?? null) : null,
+            'new_plan'      => $e->new_plan_id ? ($plans[$e->new_plan_id] ?? null) : null,
+            'notes'         => $e->notes,
+            'by'            => $e->performer ? trim($e->performer->first_name.' '.$e->performer->last_name) : null,
+        ])]);
+    }
+
+    // ─── Résolution de l'abonnement du CALLER (jamais celui d'un autre) ──────
+
+    /**
+     * L'abonnement de l'organisation de l'appelant. Aucun identifiant
+     * d'abonnement n'est jamais accepté depuis la requête : c'est la session
+     * qui détermine le périmètre, donc un tenant ne peut pas en désigner un
+     * autre.
+     *
+     * Le repli sur un abonnement NON actif est délibéré : un compte expiré ou
+     * suspendu doit pouvoir se reprendre en main tout seul (c'est justement
+     * là que le self-service compte le plus). Un abonnement résilié
+     * définitivement, lui, sort du parcours — `eligibility` le refuse.
+     */
+    private function resolveSubscription(Request $request): ?Subscription
+    {
+        $user = $request->user();
+
+        if ($org = $user->organization) {
+            return $org->activeSubscription()->with('plan', 'organization')->first()
+                ?? Subscription::where('organization_id', $org->id)
+                    ->with('plan', 'organization')
+                    ->latest('started_at')
+                    ->first();
+        }
+
+        $hotel = $user->hotel();
+
+        return $hotel
+            ? Subscription::where('hotel_id', $hotel->id)
+                ->with('plan', 'organization')
+                ->orderByRaw("CASE WHEN status IN ('active','trial') THEN 0 ELSE 1 END")
+                ->latest('started_at')
+                ->first()
+            : null;
+    }
+
+    private function resolveSubscriptionOrFail(Request $request): Subscription
+    {
+        $sub = $this->resolveSubscription($request);
+
+        if (!$sub) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'NO_SUBSCRIPTION', 'message' => "Aucun abonnement actif — contactez contact@qayed.tn.", 'field' => null]],
+            ], 422));
+        }
+
+        return $sub;
+    }
+
+    /**
+     * @deprecated Remplacé par le self-service (`POST subscription/change`).
+     * Conservé pour les clients mobiles déjà déployés : notifie l'admin sans
+     * rien modifier. À retirer quand le parc mobile aura basculé.
      */
     public function requestUpgrade(Request $request): JsonResponse
     {

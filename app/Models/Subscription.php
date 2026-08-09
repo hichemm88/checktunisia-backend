@@ -20,6 +20,7 @@ class Subscription extends Model
         'hotel_id', 'organization_id', 'plan_id', 'custom_price', 'is_legacy_plan', 'status', 'billing_cycle',
         'started_at', 'expires_at', 'cancelled_at', 'suspended_at',
         'suspended_reason', 'auto_renew', 'metadata', 'created_by',
+        'cancellation_requested_at', 'cancellation_reason',
     ];
 
     protected function casts(): array
@@ -29,6 +30,7 @@ class Subscription extends Model
             'expires_at'    => 'datetime',
             'cancelled_at'  => 'datetime',
             'suspended_at'  => 'datetime',
+            'cancellation_requested_at' => 'datetime',
             'auto_renew'     => 'boolean',
             'is_legacy_plan' => 'boolean',
             'metadata'       => 'array',
@@ -41,6 +43,13 @@ class Subscription extends Model
     public function creator(): BelongsTo { return $this->belongsTo(User::class, 'created_by'); }
     public function events(): HasMany  { return $this->hasMany(SubscriptionEvent::class); }
     public function invoices(): HasMany { return $this->hasMany(Invoice::class); }
+    public function planChanges(): HasMany { return $this->hasMany(SubscriptionPlanChange::class); }
+
+    /** Résilié = renouvellement arrêté par le client ; le service court jusqu'à expires_at. */
+    public function isCancellationScheduled(): bool
+    {
+        return $this->cancellation_requested_at !== null && !$this->auto_renew;
+    }
 
     public function isActive(): bool       { return $this->status === 'active'; }
     public function isExpired(): bool      { return $this->status === 'expired'; }
