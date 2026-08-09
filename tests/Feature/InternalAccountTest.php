@@ -296,6 +296,49 @@ class InternalAccountTest extends TestCase
         $this->assertSame(0, Invoice::count());
     }
 
+    /**
+     * L'entonnoir commercial du tableau de bord admin (essais en cours,
+     * conversion, échéances à surveiller) mesure une activité de VENTE. Un
+     * compte à nous n'a jamais été vendu : l'y compter fait lire une
+     * conversion et des relances qui n'existent pas, et contredit les KPI de
+     * l'écran voisin, qui l'excluent déjà.
+     */
+    public function test_the_admin_funnel_never_counts_an_internal_account(): void
+    {
+        $this->account('Interne En Essai', Organization::BILLING_INTERNAL, 'essentiel', [
+            'status'     => 'trial',
+            'expires_at' => now()->addDays(3),
+            'metadata'   => ['trial' => true],
+        ]);
+        $this->account('Interne Actif', Organization::BILLING_INTERNAL, 'essentiel', [
+            'status'     => 'active',
+            'expires_at' => now()->addDays(10),
+        ]);
+
+        $data = $this->actingAs($this->platformAdmin())
+            ->getJson('/api/v1/admin/dashboard')->assertOk()->json('data');
+
+        $this->assertSame(0, $data['trials']['in_progress'], 'aucun essai commercial');
+        $this->assertSame([], $data['trials']['expiring_soon'], 'aucune fin d\'essai à relancer');
+        $this->assertNull($data['trials']['conversion_rate'], 'aucune cohorte commerciale : pas de taux');
+        $this->assertSame([], $data['alerts']['expiring_subscriptions'], 'aucune échéance commerciale à surveiller');
+    }
+
+    public function test_the_admin_funnel_still_counts_a_real_customer(): void
+    {
+        $this->account('Vrai Client', Organization::BILLING_COMMERCIAL, 'essentiel', [
+            'status'     => 'trial',
+            'expires_at' => now()->addDays(3),
+            'metadata'   => ['trial' => true],
+        ]);
+
+        $data = $this->actingAs($this->platformAdmin())
+            ->getJson('/api/v1/admin/dashboard')->assertOk()->json('data');
+
+        $this->assertSame(1, $data['trials']['in_progress']);
+        $this->assertCount(1, $data['trials']['expiring_soon']);
+    }
+
     // ── Historique et isolation ──────────────────────────────────────────────
 
     public function test_historic_invoices_of_an_internal_account_are_preserved_and_readable(): void

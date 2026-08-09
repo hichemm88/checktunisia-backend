@@ -231,7 +231,13 @@ class HotelAdminController extends Controller
 
     public function dashboard(): JsonResponse
     {
+        // Tout ce bloc décrit l'entonnoir COMMERCIAL : échéances à relancer,
+        // essais en cours, conversion. Un compte interne n'y a pas sa place —
+        // il n'a rien acheté, on ne le relance pas et il ne « convertit »
+        // rien. Même règle que /admin/metrics/kpis, qui l'exclut déjà : sans
+        // ça, deux écrans du même back-office donnaient deux chiffres.
         $expiringSoon = \App\Models\Subscription::with(['organization', 'hotel', 'plan'])
+            ->commercial()
             ->where('status', 'active')
             ->whereBetween('expires_at', [now(), now()->addDays(30)])
             ->orderBy('expires_at')
@@ -273,6 +279,7 @@ class HotelAdminController extends Controller
             ->get(['id', 'name', 'updated_at']);
 
         $trialsExpiringSoon = \App\Models\Subscription::with('organization')
+            ->commercial()
             ->where('status', 'trial')
             ->whereBetween('expires_at', [now(), now()->addDays(7)])
             ->orderBy('expires_at')
@@ -284,7 +291,8 @@ class HotelAdminController extends Controller
         // active (paid) one — checked at the org level rather than assuming the
         // same subscription row flips status in place, since an admin manually
         // upgrading a customer may instead create a fresh subscription row.
-        $orgsWithTrial = \App\Models\Organization::whereHas('subscriptions', fn($q) => $q->whereRaw("metadata->>'trial' = 'true'"))->pluck('id');
+        $orgsWithTrial = \App\Models\Organization::commercial()
+            ->whereHas('subscriptions', fn($q) => $q->whereRaw("metadata->>'trial' = 'true'"))->pluck('id');
         $convertedTrialOrgs = $orgsWithTrial->isNotEmpty()
             ? \App\Models\Organization::whereIn('id', $orgsWithTrial)->whereHas('subscriptions', fn($q) => $q->where('status', 'active'))->count()
             : 0;
@@ -344,7 +352,7 @@ class HotelAdminController extends Controller
                     'this_month' => \App\Models\CheckIn::whereMonth('created_at', now()->month)->whereYear('created_at', now()->year)->count(),
                 ],
                 'trials' => [
-                    'in_progress'     => \App\Models\Subscription::where('status', 'trial')->count(),
+                    'in_progress'     => \App\Models\Subscription::commercial()->where('status', 'trial')->count(),
                     'expiring_soon'   => $trialsExpiringSoon,
                     'conversion_rate' => $orgsWithTrial->isNotEmpty() ? round($convertedTrialOrgs / $orgsWithTrial->count() * 100) : null,
                 ],

@@ -95,8 +95,11 @@ class PublicRegistrationController extends Controller
             $trialEnds = now()->addDays(7);
             $sub = Subscription::create([
                 'organization_id' => $org->id,
-                // hotel_id is intentionally omitted (nullable since migration 2026_07_03_200001)
-                // it will be back-filled when the first property is created in onboarding
+                // hotel_id volontairement absent (nullable depuis la migration
+                // 2026_07_03_200001) et JAMAIS renseigné ensuite : l'abonnement
+                // appartient à l'organisation, qui peut détenir plusieurs
+                // établissements. Tout code qui lit un abonnement doit donc
+                // supporter hotel_id null — c'est le cas nominal, pas l'exception.
                 'plan_id'         => $plan->id,
                 'status'          => 'trial',
                 // The cycle chosen at sign-up (yearly = one month free) — used when the trial converts to paid.

@@ -180,6 +180,38 @@ class ObservabilityTest extends TestCase
         $this->assertGreaterThanOrEqual(0, $response->json('data.queue.failed_total'));
     }
 
+    /**
+     * Le battement du planificateur est le SEUL signal qui distingue « tout
+     * va bien » de « la file n'est plus drainée et les fiches ne partent
+     * plus ». S'il ne bascule jamais en « stale », l'incident le plus grave
+     * du système reste invisible : le serveur web répond, l'écran est vert,
+     * et rien ne s'exécute.
+     */
+    public function test_a_silent_scheduler_is_reported_as_stale(): void
+    {
+        $admin = User::factory()->platformAdmin()->create();
+
+        // Dernier battement il y a 20 minutes : le seuil est de 5.
+        cache()->put('scheduler:last_run_at', now()->subMinutes(20)->toIso8601String(), now()->addHour());
+
+        $this->assertTrue(
+            $this->actingAs($admin)->getJson('/api/v1/admin/health')->assertOk()->json('data.scheduler.stale'),
+            'un planificateur muet depuis 20 minutes doit être signalé',
+        );
+    }
+
+    public function test_a_beating_scheduler_is_not_reported_as_stale(): void
+    {
+        $admin = User::factory()->platformAdmin()->create();
+
+        cache()->put('scheduler:last_run_at', now()->subMinute()->toIso8601String(), now()->addHour());
+
+        $this->assertFalse(
+            $this->actingAs($admin)->getJson('/api/v1/admin/health')->assertOk()->json('data.scheduler.stale'),
+            'un planificateur qui bat depuis une minute ne doit pas déclencher d\'alerte',
+        );
+    }
+
     public function test_health_endpoint_exposes_no_personal_data(): void
     {
         $admin = User::factory()->platformAdmin()->create();

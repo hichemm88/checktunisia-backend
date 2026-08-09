@@ -2,8 +2,8 @@
 
 namespace App\Notifications;
 
-use App\Models\Hotel;
 use App\Models\Subscription;
+use App\Services\Email\SystemMailer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -13,8 +13,16 @@ class SubscriptionExpiringNotification extends Notification implements ShouldQue
 {
     use Queueable;
 
+    /**
+     * Le rappel porte le NOM DU COMPTE, pas un établissement.
+     *
+     * L'abonnement appartient à l'organisation : exiger un établissement
+     * rendait cette notification impossible à construire pour un abonnement
+     * porté par l'organisation (le cas normal depuis l'inscription publique),
+     * et faisait tomber la commande planifiée entière.
+     */
     public function __construct(
-        private Hotel        $hotel,
+        private string       $accountName,
         private Subscription $subscription,
         private int          $daysRemaining,
     ) {}
@@ -33,9 +41,11 @@ class SubscriptionExpiringNotification extends Notification implements ShouldQue
         return (new MailMessage)
             ->subject("{$urgency}[Qayed] Votre abonnement expire dans {$this->daysRemaining} jour(s)")
             ->greeting("Bonjour,")
-            ->line("L'abonnement **{$planName}** de **{$this->hotel->name}** expire le **{$expiresAt}** ({$this->daysRemaining} jour(s) restant(s)).")
+            ->line("L'abonnement **{$planName}** de **{$this->accountName}** expire le **{$expiresAt}** ({$this->daysRemaining} jour(s) restant(s)).")
             ->line("Pour continuer à utiliser Qayed et rester en conformité avec la réglementation tunisienne, veuillez renouveler votre abonnement.")
-            ->action('Renouveler mon abonnement', url('/hotel/settings'))
+            // `url()` compose une adresse sur APP_URL — le domaine de l'API,
+            // où cette page n'existe pas. Le client cliquait dans le vide.
+            ->action('Renouveler mon abonnement', SystemMailer::frontendUrl('/hotel/subscription'))
             ->line("Sans renouvellement, l'accès aux fonctionnalités de check-in sera suspendu à l'expiration.")
             ->salutation("L'équipe Qayed");
     }

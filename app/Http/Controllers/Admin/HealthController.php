@@ -20,6 +20,9 @@ use Illuminate\Support\Facades\Redis;
  */
 class HealthController extends Controller
 {
+    /** Au-delà, le planificateur est considéré muet (il bat chaque minute). */
+    private const SCHEDULER_STALE_MINUTES = 5;
+
     public function index(): JsonResponse
     {
         return response()->json([
@@ -195,9 +198,19 @@ class HealthController extends Controller
     {
         $last = cache()->get('scheduler:last_run_at');
 
+        // Carbon 3 rend une différence SIGNÉE : `now()->diffInMinutes($passé)`
+        // vaut -20, jamais 20, et la comparaison « > 5 » était donc toujours
+        // fausse — un planificateur mort se déclarait sain. On mesure dans le
+        // sens du temps (dernier battement → maintenant), comme partout
+        // ailleurs dans le code.
+        $minutesSince = $last === null
+            ? null
+            : \Illuminate\Support\Carbon::parse($last)->diffInMinutes(now());
+
         return [
-            'last_run_at'   => $last,
-            'stale'         => $last === null || now()->diffInMinutes(\Illuminate\Support\Carbon::parse($last)) > 5,
+            'last_run_at'    => $last,
+            'minutes_since'  => $minutesSince === null ? null : round($minutesSince, 1),
+            'stale'          => $minutesSince === null || $minutesSince > self::SCHEDULER_STALE_MINUTES,
         ];
     }
 
