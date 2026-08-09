@@ -109,7 +109,16 @@ class ObservabilityTest extends TestCase
     {
         // État par défaut en local, en test et tant que la variable n'est pas
         // posée en production : aucun envoi, aucune dépendance réseau.
-        $this->assertNull(config('sentry.dsn'));
+        //
+        // « Non posée » prend deux formes selon l'environnement : absente
+        // (null) quand la ligne n'existe pas, ou vide ('') quand elle existe
+        // sans valeur — c'est le cas de .env.example, donc de la CI. Les deux
+        // sont inertes ; exiger strictement null faisait échouer la CI sur un
+        // détail de forme, sans rien dire de la sécurité du produit.
+        $this->assertTrue(
+            blank(config('sentry.dsn')),
+            'Sentry doit rester inerte tant qu\'aucun DSN n\'est réellement configuré.',
+        );
     }
 
     public function test_configuration_is_serializable_for_config_cache(): void

@@ -17,7 +17,12 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        # PostgreSQL 18, comme la production Railway. Le service tournait en 16 :
+        # DatabaseBackupTest vérifie explicitement cette parité, parce qu'un
+        # pg_dump plus ancien que le serveur REFUSE de travailler — une sauvegarde
+        # validée sur un couple de versions qui n'existe nulle part ne prouverait
+        # rien.
+        image: postgres:18-alpine
         env:
           POSTGRES_DB: qayed_test
           POSTGRES_USER: qayed
@@ -47,6 +52,20 @@ jobs:
           # redimensionnement d'images des médias CMS.
           extensions: pdo, pdo_pgsql, pgsql, zip, bcmath, mbstring, exif, pcntl, intl, gd, redis
           coverage: none
+
+      # Le runner Ubuntu fournit pg_dump 16 ; la production est en 18. Sans ce
+      # client, les 14 tests de sauvegarde échouent — et la seule protection du
+      # registre (Railway n'offre ni sauvegarde native ni PITR) ne serait
+      # vérifiée nulle part.
+      - name: Client PostgreSQL 18 (parité avec la production)
+        run: |
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-18
+          pg_dump --version
 
       - name: Cache des dépendances Composer
         uses: actions/cache@v4
