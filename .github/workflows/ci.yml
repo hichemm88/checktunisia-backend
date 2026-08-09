@@ -65,6 +65,16 @@ jobs:
       - name: Installer les dépendances
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      # APP_KEY est VIDE dans .env.example, et doit le rester : une clé
+      # d'application committée serait un secret publié. Il faut donc en
+      # générer une jetable ici — sans elle, tout appel à Crypt lève
+      # « Unsupported cipher or incorrect key length », et la moitié de la
+      # suite tombe (la factory chiffre les secrets TOTP comme en production).
+      # C'est la cause des 152 erreurs qui rendaient ce job rouge depuis sa
+      # création.
+      - name: Générer une clé d'application jetable
+        run: php artisan key:generate
+
       # La suite complète : Unit + Feature. Toute régression fait échouer le job.
       - name: Tests
         run: php vendor/bin/phpunit
@@ -118,5 +128,11 @@ jobs:
       # Bloquant : ce produit manipule des données d'identité, une CVE connue
       # dans une dépendance n'a pas à atteindre la production. Remis à zéro le
       # 2026-08-07 (18 avis sur guzzle, dompdf et commonmark corrigés).
+      #
+      # `--locked` audite composer.lock, ce qui est EXACTEMENT l'objet de ce
+      # job : les versions réellement livrées. Sans lui, la commande exigeait
+      # un `composer install` que cette étape ne fait pas — le job échouait
+      # sur « No installed packages found » sans jamais rien auditer, donc
+      # sans jamais rien bloquer non plus.
       - name: Vulnérabilités connues des dépendances
-        run: composer audit --no-dev
+        run: composer audit --no-dev --locked
