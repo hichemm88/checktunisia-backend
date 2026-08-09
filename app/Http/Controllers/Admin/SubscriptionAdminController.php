@@ -183,6 +183,22 @@ class SubscriptionAdminController extends Controller {
 
         $sub = Subscription::where('organization_id', $hostId)->with('plan')->findOrFail($v['subscription_id']);
 
+        // Dernier chemin capable de créer de l'argent, et le seul actionné par
+        // un humain : la règle des comptes internes doit y tenir aussi. Sans
+        // cette garde, un clic suffisait à faire réapparaître un compte à nous
+        // dans le chiffre d'affaires — l'exemption doit être infranchissable,
+        // pas seulement respectée par les tâches automatiques.
+        if ($sub->isInternal()) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [[
+                    'code'    => 'INTERNAL_ACCOUNT_NOT_BILLABLE',
+                    'message' => 'Ce compte est interne : il n\'est pas facturable. Repassez-le en « commercial » si une facture doit réellement être émise.',
+                    'field'   => 'subscription_id',
+                ]],
+            ], 422);
+        }
+
         if (!isset($v['amount'])) {
             // Formule unique base + suppléments par établissement (PlanPricing).
             $v['amount'] = \App\Services\Subscription\PlanPricing::cycleAmount($sub);
@@ -205,6 +221,12 @@ class SubscriptionAdminController extends Controller {
         }
 
         $v['total_amount']   = $v['amount'] + $v['tax_amount'];
+        // La devise n'était pas posée : la colonne restait nulle et l'envoi de
+        // l'email plantait juste après la création (Money::tnd attend une
+        // chaîne). La facture existait, l'admin voyait une erreur 500 et le
+        // client ne recevait rien. Toutes les autres créations de facture
+        // posent 'TND' — celle-ci l'avait simplement oublié.
+        $v['currency']       = 'TND';
         $v['hotel_id']       = null; // org-level invoice — no specific établissement
         $v['invoice_number'] = app(\App\Services\Billing\BillingService::class)->nextInvoiceNumber();
         $v['created_by']     = $request->user()->id;

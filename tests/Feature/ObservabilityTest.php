@@ -109,7 +109,16 @@ class ObservabilityTest extends TestCase
     {
         // État par défaut en local, en test et tant que la variable n'est pas
         // posée en production : aucun envoi, aucune dépendance réseau.
-        $this->assertNull(config('sentry.dsn'));
+        //
+        // « Non posée » prend deux formes selon l'environnement : absente
+        // (null) quand la ligne n'existe pas, ou vide ('') quand elle existe
+        // sans valeur — c'est le cas de .env.example, donc de la CI. Les deux
+        // sont inertes ; exiger strictement null faisait échouer la CI sur un
+        // détail de forme, sans rien dire de la sécurité du produit.
+        $this->assertTrue(
+            blank(config('sentry.dsn')),
+            'Sentry doit rester inerte tant qu\'aucun DSN n\'est réellement configuré.',
+        );
     }
 
     public function test_configuration_is_serializable_for_config_cache(): void
@@ -178,6 +187,38 @@ class ObservabilityTest extends TestCase
         $this->assertTrue($response->json('data.database.reachable'));
         // failed_jobs existe (migration 2026_07_26) : -1 signalerait une table absente.
         $this->assertGreaterThanOrEqual(0, $response->json('data.queue.failed_total'));
+    }
+
+    /**
+     * Le battement du planificateur est le SEUL signal qui distingue « tout
+     * va bien » de « la file n'est plus drainée et les fiches ne partent
+     * plus ». S'il ne bascule jamais en « stale », l'incident le plus grave
+     * du système reste invisible : le serveur web répond, l'écran est vert,
+     * et rien ne s'exécute.
+     */
+    public function test_a_silent_scheduler_is_reported_as_stale(): void
+    {
+        $admin = User::factory()->platformAdmin()->create();
+
+        // Dernier battement il y a 20 minutes : le seuil est de 5.
+        cache()->put('scheduler:last_run_at', now()->subMinutes(20)->toIso8601String(), now()->addHour());
+
+        $this->assertTrue(
+            $this->actingAs($admin)->getJson('/api/v1/admin/health')->assertOk()->json('data.scheduler.stale'),
+            'un planificateur muet depuis 20 minutes doit être signalé',
+        );
+    }
+
+    public function test_a_beating_scheduler_is_not_reported_as_stale(): void
+    {
+        $admin = User::factory()->platformAdmin()->create();
+
+        cache()->put('scheduler:last_run_at', now()->subMinute()->toIso8601String(), now()->addHour());
+
+        $this->assertFalse(
+            $this->actingAs($admin)->getJson('/api/v1/admin/health')->assertOk()->json('data.scheduler.stale'),
+            'un planificateur qui bat depuis une minute ne doit pas déclencher d\'alerte',
+        );
     }
 
     public function test_health_endpoint_exposes_no_personal_data(): void

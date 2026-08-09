@@ -45,7 +45,16 @@ class GuestController extends Controller
             'document.mrz_line2' => ['nullable', 'string', 'max:50'],
         ]);
 
-        $guest = $this->service->addGuest($checkIn, $request->user(), $validated);
+        try {
+            $guest = $this->service->addGuest($checkIn, $request->user(), $validated);
+        } catch (\DomainException $e) {
+            // Conflit sur la pièce d'identité (course entre deux saisies) :
+            // c'est un refus métier, pas une panne serveur.
+            return response()->json([
+                'data' => null,
+                'errors' => [['code' => 'DOCUMENT_ALREADY_USED', 'message' => $e->getMessage(), 'field' => 'document.document_number']],
+            ], 422);
+        }
 
         // Le rapprochement n'est plus silencieux : la réception voit si elle
         // vient de réutiliser un dossier existant, quels champs d'identité

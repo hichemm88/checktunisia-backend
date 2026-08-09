@@ -11,6 +11,7 @@ use App\Services\Audit\AuditLogger;
 use App\Services\Email\SystemMailer;
 use App\Support\Money;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -461,14 +462,51 @@ class BillingService
      */
     public function handleInvoicePaid(Invoice $invoice, ?string $recordedBy = null): void
     {
-        $this->ensurePaymentRecord($invoice, $recordedBy);
+        // Un seul appelant franchit ce portillon, et il est tenu par la BASE.
+        //
+        // Deux vérifications de paiement simultanées (double clic au retour de
+        // Flouci, rejeu réseau, deux onglets) déroulaient chacune la suite :
+        // deux courriels « paiement reçu », deux lignes d'historique. Un
+        // limiteur de débit ne ferme pas cette fenêtre — il la rétrécit — et
+        // ne couvre pas les autres canaux qui convergent ici (virement validé,
+        // saisie admin).
+        //
+        // L'UPDATE conditionnel est atomique : la seconde requête attend le
+        // verrou de ligne, puis PostgreSQL réévalue son WHERE sur la ligne
+        // committée et n'affecte plus rien. Elle repart sans effet de bord.
+        // Placé DANS la transaction avec les effets : si l'un échoue, la
+        // marque disparaît avec lui et le paiement reste rejouable.
+        $settled = DB::transaction(function () use ($invoice, $recordedBy) {
+            $claimed = DB::table('invoices')
+                ->where('id', $invoice->id)
+                ->whereRaw("COALESCE(metadata->>'payment_settled_at', '') = ''")
+                ->update([
+                    'metadata' => DB::raw(
+                        "jsonb_set(COALESCE(metadata, '{}'::jsonb), '{payment_settled_at}', to_jsonb(now()::text), true)"
+                    ),
+                ]);
 
-        // Avant la prolongation : l'upgrade ouvre lui-même une période
-        // complète, il ne faut pas que les deux se cumulent.
-        app(\App\Services\Subscription\PlanChangeService::class)->applyPaidUpgrade($invoice);
+            if ($claimed === 0) {
+                return false; // déjà réglée : rien à refaire, rien à renvoyer
+            }
 
-        $this->applyPaymentToSubscription($invoice);
-        $this->sendPaymentReceived($invoice->fresh());
+            $this->ensurePaymentRecord($invoice, $recordedBy);
+
+            // Avant la prolongation : l'upgrade ouvre lui-même une période
+            // complète, il ne faut pas que les deux se cumulent.
+            app(\App\Services\Subscription\PlanChangeService::class)->applyPaidUpgrade($invoice);
+
+            $this->applyPaymentToSubscription($invoice);
+
+            return true;
+        });
+
+        // Hors transaction, et pour le seul gagnant : un envoi de courriel ne
+        // doit ni être annulé par un rollback, ni empêcher l'encaissement s'il
+        // échoue.
+        if ($settled) {
+            $this->sendPaymentReceived($invoice->fresh());
+        }
     }
 
     /** Jamais de facture payée sans trace : complète le pending ou crée un paiement manuel. */

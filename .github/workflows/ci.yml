@@ -17,7 +17,12 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        # PostgreSQL 18, comme la production Railway. Le service tournait en 16 :
+        # DatabaseBackupTest vérifie explicitement cette parité, parce qu'un
+        # pg_dump plus ancien que le serveur REFUSE de travailler — une sauvegarde
+        # validée sur un couple de versions qui n'existe nulle part ne prouverait
+        # rien.
+        image: postgres:18-alpine
         env:
           POSTGRES_DB: qayed_test
           POSTGRES_USER: qayed
@@ -48,6 +53,24 @@ jobs:
           extensions: pdo, pdo_pgsql, pgsql, zip, bcmath, mbstring, exif, pcntl, intl, gd, redis
           coverage: none
 
+      # Le runner Ubuntu fournit pg_dump 16 ; la production est en 18. Sans ce
+      # client, les 14 tests de sauvegarde échouent — et la seule protection du
+      # registre (Railway n'offre ni sauvegarde native ni PITR) ne serait
+      # vérifiée nulle part.
+      - name: Client PostgreSQL 18 (parité avec la production)
+        run: |
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-18
+          # Installer ne suffit pas : /usr/bin/pg_dump est un pg_wrapper qui a
+          # continué de servir le client 16 préinstallé sur le runner. On place
+          # explicitement les binaires 18 en tête du PATH des étapes suivantes.
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/pg_dump --version
+
       - name: Cache des dépendances Composer
         uses: actions/cache@v4
         with:
@@ -64,6 +87,17 @@ jobs:
 
       - name: Installer les dépendances
         run: composer install --no-interaction --prefer-dist --no-progress
+
+      # APP_KEY est VIDE dans .env.example, et doit le rester : une clé
+      # d'application committée serait un secret publié. On en génère donc une
+      # jetable, pour que toute commande artisan lancée ici puisse démarrer.
+      #
+      # Ce n'est PAS ce qui alimente la suite : phpunit.xml impose sa propre
+      # clé de test, et Dotenv n'écrase pas une variable déjà posée. C'était
+      # d'ailleurs la vraie cause des 152 erreurs — cette clé-là ne faisait
+      # que 31 octets. Voir le commentaire dans phpunit.xml.
+      - name: Générer une clé d'application jetable
+        run: php artisan key:generate
 
       # La suite complète : Unit + Feature. Toute régression fait échouer le job.
       - name: Tests
@@ -118,5 +152,11 @@ jobs:
       # Bloquant : ce produit manipule des données d'identité, une CVE connue
       # dans une dépendance n'a pas à atteindre la production. Remis à zéro le
       # 2026-08-07 (18 avis sur guzzle, dompdf et commonmark corrigés).
+      #
+      # `--locked` audite composer.lock, ce qui est EXACTEMENT l'objet de ce
+      # job : les versions réellement livrées. Sans lui, la commande exigeait
+      # un `composer install` que cette étape ne fait pas — le job échouait
+      # sur « No installed packages found » sans jamais rien auditer, donc
+      # sans jamais rien bloquer non plus.
       - name: Vulnérabilités connues des dépendances
-        run: composer audit --no-dev
+        run: composer audit --no-dev --locked

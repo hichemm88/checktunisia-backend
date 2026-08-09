@@ -14,6 +14,7 @@ use App\Services\Notifications\PushNotificationService;
 use App\Services\OCR\OcrService;
 use App\Services\Watchlist\WatchlistService;
 use App\Services\Whatsapp\WhatsappOutboxService;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Intervention\Image\ImageManager;
@@ -74,6 +75,26 @@ class CheckInService
     {
         $this->lastGuestMatch = ['matched_existing' => false, 'identity_mismatch' => [], 'possible_duplicates' => []];
 
+        try {
+            return $this->addGuestWithin($checkIn, $addedBy, $data);
+        } catch (UniqueConstraintViolationException) {
+            // Le rapprochement fait un SELECT puis un INSERT. Entre les deux,
+            // une autre saisie du comptoir a pu enregistrer la même pièce :
+            // l'index d'unicité (type, numéro, pays) tranche, et il a raison.
+            //
+            // Ce qui n'allait pas, c'est la remontée : une erreur 500 muette
+            // laissait la réception sans savoir si le voyageur était
+            // enregistré. La transaction ayant été annulée, rien n'a été
+            // écrit — on le dit clairement, et l'agent rouvre la fiche.
+            throw new \DomainException(
+                'Ce document vient d\'être enregistré par une autre saisie. Rouvrez la fiche : le voyageur y figure déjà.',
+            );
+        }
+    }
+
+    /** Corps transactionnel de addGuest — voir la traduction du conflit ci-dessus. */
+    private function addGuestWithin(CheckIn $checkIn, User $addedBy, array $data): Guest
+    {
         return DB::transaction(function () use ($checkIn, $addedBy, $data) {
             // Upsert guest: if same document exists, reuse the guest record
             $guest = $this->findOrCreateGuest($data);

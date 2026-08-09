@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Organization;
 use App\Models\Subscription;
+use App\Services\Subscription\CommercialMetrics;
 use App\Services\Subscription\PlanPricing;
 use Illuminate\Http\JsonResponse;
 
@@ -42,18 +43,14 @@ class KpiController extends Controller
         $monthStart = now()->startOfMonth();
 
         // ─── Base payante courante ────────────────────────────────────────
-        // Abonnements actifs, dedupliques par client (org, ou etablissement en
-        // legacy), au prix effectif mensualise (annuel / 12, negocie prioritaire).
-        $activeSubs = Subscription::with(['plan', 'organization'])
-            ->commercial()
-            ->where('status', 'active')
-            ->orderByDesc('started_at')
-            ->get()
-            ->unique(fn ($s) => $s->organization_id ?? 'hotel:' . $s->hotel_id)
-            ->values();
+        // Source UNIQUE, partagee avec /admin/dashboard : deduplication par
+        // client et barème n'existent qu'a un seul endroit (CommercialMetrics).
+        $metrics    = app(CommercialMetrics::class);
+        $activeSubs = $metrics->activeSubscriptions();
 
         $payingCustomers = $activeSubs->count();
-        $mrrCurrent = round($activeSubs->sum(fn ($s) => PlanPricing::monthlyValue($s)), 3);
+        $mrrCurrent = $metrics->mrr($activeSubs);
+        $arrCurrent = $metrics->arr($activeSubs);
 
         // ─── Nouveau MRR du mois ──────────────────────────────────────────
         $newSubs = $activeSubs->filter(fn ($s) => $s->started_at && $s->started_at->gte($monthStart));
@@ -121,6 +118,12 @@ class KpiController extends Controller
                     'new_this_month'     => $mrrNew,
                     'churned_this_month' => $mrrChurned,
                     'net_new_this_month' => round($mrrNew - $mrrChurned, 3),
+                ],
+                // Meme base d'abonnements que le MRR, autre echelle : un
+                // annuel vaut le montant reellement facture, pas douze fois
+                // sa mensualisation arrondie.
+                'arr' => [
+                    'current' => $arrCurrent,
                 ],
                 'arpu' => [
                     'value'            => $arpu,

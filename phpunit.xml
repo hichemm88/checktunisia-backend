@@ -21,7 +21,17 @@
 
     <php>
         <env name="APP_ENV"           value="testing"/>
-        <env name="APP_KEY"           value="base64:testingtestingtestingtestingtestingtesting="/>
+        <!-- Clé de test — 32 octets EXACTEMENT, ce qu'exige AES-256.
+             L'ancienne valeur (« testingtesting… ») n'en faisait que 31 :
+             tout appel à Crypt levait « Unsupported cipher or incorrect key
+             length ». Invisible en local, où le conteneur Docker expose une
+             vraie variable d'environnement APP_KEY que Laravel lit en
+             priorité (même mécanisme que les DB_* ci-dessous) ; fatale en
+             CI, qui n'en a pas — d'où 152 erreurs et un job rouge depuis la
+             création du workflow.
+             Valeur factice et publique : elle ne chiffre que des données de
+             test, jetées à la fin de chaque exécution. -->
+        <env name="APP_KEY"           value="base64:cWF5ZWQtdGVzdGluZy1rZXktMzItYnl0ZXMtbG9uZyE="/>
         <env name="APP_DEBUG"         value="true"/>
         <!-- <server> + force : dans le conteneur Docker, APP_ENV/DB_* existent comme
              vraies variables d'environnement, donc présentes dans $_SERVER — que

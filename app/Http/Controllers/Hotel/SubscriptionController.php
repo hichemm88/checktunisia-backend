@@ -65,6 +65,11 @@ class SubscriptionController extends Controller
                 // Conditions particulières que le client perdrait en changeant
                 // de plan — affichées avant toute confirmation.
                 'historic_conditions' => app(PlanChangeService::class)->historicConditions($sub),
+                // Échéance dépassée, recouvrement en cours : le service
+                // continue jusqu'au terme annoncé. Le client doit le lire —
+                // un statut « actif » avec une date d'échéance passée ne dit
+                // rien de la date à laquelle il sera réellement coupé.
+                'grace'          => $sub->gracePayload(),
                 // Résiliation programmée : le service court jusqu'à expires_at.
                 'cancellation'   => [
                     'requested_at' => $sub->cancellation_requested_at,

@@ -103,6 +103,83 @@ class InternalAccountTest extends TestCase
         );
     }
 
+    /**
+     * Le back-office peut émettre une facture à la main (rattrapage, prestation
+     * ponctuelle). C'est le dernier chemin capable de créer de l'argent, et le
+     * seul actionné par un humain : la règle doit y tenir aussi, sinon un clic
+     * suffit à faire réapparaître un compte à nous dans le chiffre d'affaires.
+     */
+    public function test_an_admin_cannot_hand_write_an_invoice_for_an_internal_account(): void
+    {
+        [$org, , , $sub] = $this->account('Compte Interne', Organization::BILLING_INTERNAL);
+
+        $this->actingAs($this->platformAdmin())
+            ->postJson("/api/v1/admin/hosts/{$org->id}/invoices", [
+                'subscription_id' => $sub->id,
+                'amount'          => 199,
+                'tax_amount'      => 0,
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.0.code', 'INTERNAL_ACCOUNT_NOT_BILLABLE');
+
+        $this->assertSame(0, Invoice::count());
+    }
+
+    public function test_an_admin_can_still_hand_write_an_invoice_for_a_real_customer(): void
+    {
+        Mail::fake();
+        [$org, , , $sub] = $this->account('Vrai Client', Organization::BILLING_COMMERCIAL);
+
+        $this->actingAs($this->platformAdmin())
+            ->postJson("/api/v1/admin/hosts/{$org->id}/invoices", [
+                'subscription_id' => $sub->id,
+                'amount'          => 199,
+                'tax_amount'      => 0,
+            ])
+            ->assertCreated();
+
+        $this->assertSame(1, Invoice::count());
+    }
+
+    /**
+     * La garde de dernier recours, au niveau du MODÈLE.
+     *
+     * Les gardes de service couvrent les chemins connus. Celle-ci couvre ceux
+     * qui n'existent pas encore : un futur script, une commande de rattrapage,
+     * un développeur pressé. Aucun code passant par Eloquent ne peut créer une
+     * facture sur un compte interne — la règle cesse d'être une convention à
+     * respecter pour devenir une impossibilité.
+     */
+    public function test_no_code_path_whatsoever_can_create_an_invoice_for_an_internal_account(): void
+    {
+        [, , , $sub] = $this->account('Compte Interne', Organization::BILLING_INTERNAL);
+
+        $this->expectException(\DomainException::class);
+
+        // Écriture directe, sans passer par le moindre service : c'est
+        // exactement ce que ferait un chemin de facturation ajouté plus tard.
+        Invoice::create([
+            'subscription_id' => $sub->id,
+            'invoice_number'  => 'INV-2026-9999',
+            'amount'          => 199, 'tax_amount' => 0, 'total_amount' => 199,
+            'currency'        => 'TND', 'status' => 'sent',
+        ]);
+    }
+
+    public function test_the_model_guard_leaves_real_customers_alone(): void
+    {
+        [, , , $sub] = $this->account('Vrai Client', Organization::BILLING_COMMERCIAL);
+
+        Invoice::create([
+            'subscription_id' => $sub->id,
+            'invoice_number'  => 'INV-2026-9998',
+            'amount'          => 199, 'tax_amount' => 0, 'total_amount' => 199,
+            'currency'        => 'TND', 'status' => 'sent',
+        ]);
+
+        $this->assertSame(1, Invoice::count());
+    }
+
     public function test_the_guard_holds_even_when_the_invoice_is_asked_for_directly(): void
     {
         // Le filtre de la commande ne suffit pas : n'importe quel appelant
@@ -147,14 +224,18 @@ class InternalAccountTest extends TestCase
     public function test_an_internal_account_is_never_chased_or_suspended(): void
     {
         Mail::fake();
-        [, , , $sub] = $this->account('Compte Interne', Organization::BILLING_INTERNAL);
 
-        // Facture historique restée impayée et largement échue.
+        // Le scénario réel : le compte était un CLIENT, il a reçu une facture,
+        // puis il est passé chez nous. La facture reste impayée et échue.
+        [$org, , , $sub] = $this->account('Ancien Client', Organization::BILLING_COMMERCIAL);
+
         $invoice = Invoice::create([
             'subscription_id' => $sub->id, 'invoice_number' => 'INV-2026-8001',
             'amount' => 59, 'tax_amount' => 0, 'total_amount' => 59, 'currency' => 'TND',
             'status' => 'sent', 'due_at' => now()->subDays(40), 'metadata' => ['renewal' => true],
         ]);
+
+        $org->update(['billing_mode' => Organization::BILLING_INTERNAL]);
 
         $this->artisan('invoices:dunning')->assertSuccessful();
 
@@ -166,11 +247,17 @@ class InternalAccountTest extends TestCase
     public function test_an_internal_account_does_not_expire_commercially(): void
     {
         Mail::fake();
+
+        // Les deux comptes sont aussi en retard l'un que l'autre, et tous deux
+        // au-delà de la période de grâce accordée au recouvrement : seul le
+        // périmètre commercial les distingue.
+        $wellPast = now()->subDays(\App\Services\Billing\BillingService::DUNNING_SUSPEND_DAYS + 1);
+
         [, , , $internal] = $this->account('Compte Interne', Organization::BILLING_INTERNAL, 'essentiel', [
-            'expires_at' => now()->subDays(3),
+            'expires_at' => $wellPast,
         ]);
         [, , , $client] = $this->account('Vrai Client', Organization::BILLING_COMMERCIAL, 'essentiel', [
-            'expires_at' => now()->subDays(3),
+            'expires_at' => $wellPast,
         ]);
 
         $this->artisan('subscriptions:expire-overdue')->assertSuccessful();
@@ -296,18 +383,64 @@ class InternalAccountTest extends TestCase
         $this->assertSame(0, Invoice::count());
     }
 
+    /**
+     * L'entonnoir commercial du tableau de bord admin (essais en cours,
+     * conversion, échéances à surveiller) mesure une activité de VENTE. Un
+     * compte à nous n'a jamais été vendu : l'y compter fait lire une
+     * conversion et des relances qui n'existent pas, et contredit les KPI de
+     * l'écran voisin, qui l'excluent déjà.
+     */
+    public function test_the_admin_funnel_never_counts_an_internal_account(): void
+    {
+        $this->account('Interne En Essai', Organization::BILLING_INTERNAL, 'essentiel', [
+            'status'     => 'trial',
+            'expires_at' => now()->addDays(3),
+            'metadata'   => ['trial' => true],
+        ]);
+        $this->account('Interne Actif', Organization::BILLING_INTERNAL, 'essentiel', [
+            'status'     => 'active',
+            'expires_at' => now()->addDays(10),
+        ]);
+
+        $data = $this->actingAs($this->platformAdmin())
+            ->getJson('/api/v1/admin/dashboard')->assertOk()->json('data');
+
+        $this->assertSame(0, $data['trials']['in_progress'], 'aucun essai commercial');
+        $this->assertSame([], $data['trials']['expiring_soon'], 'aucune fin d\'essai à relancer');
+        $this->assertNull($data['trials']['conversion_rate'], 'aucune cohorte commerciale : pas de taux');
+        $this->assertSame([], $data['alerts']['expiring_subscriptions'], 'aucune échéance commerciale à surveiller');
+    }
+
+    public function test_the_admin_funnel_still_counts_a_real_customer(): void
+    {
+        $this->account('Vrai Client', Organization::BILLING_COMMERCIAL, 'essentiel', [
+            'status'     => 'trial',
+            'expires_at' => now()->addDays(3),
+            'metadata'   => ['trial' => true],
+        ]);
+
+        $data = $this->actingAs($this->platformAdmin())
+            ->getJson('/api/v1/admin/dashboard')->assertOk()->json('data');
+
+        $this->assertSame(1, $data['trials']['in_progress']);
+        $this->assertCount(1, $data['trials']['expiring_soon']);
+    }
+
     // ── Historique et isolation ──────────────────────────────────────────────
 
     public function test_historic_invoices_of_an_internal_account_are_preserved_and_readable(): void
     {
-        [, , $owner, $sub] = $this->account('Compte Interne', Organization::BILLING_INTERNAL);
+        [$org, , $owner, $sub] = $this->account('Ancien Client', Organization::BILLING_COMMERCIAL);
 
-        // Facture émise DU TEMPS où le compte était commercial.
+        // Facture émise DU TEMPS où le compte était commercial — puis le
+        // compte passe chez nous. L'exemption n'efface pas l'histoire.
         Invoice::create([
             'subscription_id' => $sub->id, 'invoice_number' => 'INV-2025-0042',
             'amount' => 59, 'tax_amount' => 0, 'total_amount' => 59, 'currency' => 'TND',
             'status' => 'paid', 'paid_at' => now()->subMonths(3), 'due_at' => now()->subMonths(3),
         ]);
+
+        $org->update(['billing_mode' => Organization::BILLING_INTERNAL]);
 
         $invoices = $this->actingAs($owner)->getJson('/api/v1/hotel/invoices')->assertOk()->json('data');
 

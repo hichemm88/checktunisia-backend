@@ -231,15 +231,32 @@ class HotelAdminController extends Controller
 
     public function dashboard(): JsonResponse
     {
+        // Tout ce bloc décrit l'entonnoir COMMERCIAL : échéances à relancer,
+        // essais en cours, conversion. Un compte interne n'y a pas sa place —
+        // il n'a rien acheté, on ne le relance pas et il ne « convertit »
+        // rien. Même règle que /admin/metrics/kpis, qui l'exclut déjà : sans
+        // ça, deux écrans du même back-office donnaient deux chiffres.
+        // La fenêtre remonte AVANT aujourd'hui, à dessein : un compte dont
+        // l'échéance est passée reste « actif » pendant la période de grâce du
+        // recouvrement. Borner à `now()` le faisait disparaître de la liste
+        // exactement au moment où il faut le surveiller — il réapparaissait
+        // seulement une fois suspendu, c'est-à-dire trop tard pour agir.
         $expiringSoon = \App\Models\Subscription::with(['organization', 'hotel', 'plan'])
+            ->commercial()
             ->where('status', 'active')
-            ->whereBetween('expires_at', [now(), now()->addDays(30)])
+            ->whereBetween('expires_at', [
+                now()->subDays(\App\Services\Billing\BillingService::DUNNING_SUSPEND_DAYS),
+                now()->addDays(30),
+            ])
             ->orderBy('expires_at')
             ->limit(10)
             ->get()
             ->map(fn($s) => [
                 'id' => $s->id, 'name' => $s->organization?->name ?? $s->hotel?->name ?? '—',
                 'plan' => $s->plan?->name, 'expires_at' => $s->expires_at,
+                // Distingue « échéance à venir » de « déjà en retard, sursis
+                // en cours » : ce ne sont pas les mêmes gestes commerciaux.
+                'grace' => $s->gracePayload(),
             ]);
 
         $failedPayments = \App\Models\Payment::with('hotel')
@@ -273,6 +290,7 @@ class HotelAdminController extends Controller
             ->get(['id', 'name', 'updated_at']);
 
         $trialsExpiringSoon = \App\Models\Subscription::with('organization')
+            ->commercial()
             ->where('status', 'trial')
             ->whereBetween('expires_at', [now(), now()->addDays(7)])
             ->orderBy('expires_at')
@@ -284,7 +302,8 @@ class HotelAdminController extends Controller
         // active (paid) one — checked at the org level rather than assuming the
         // same subscription row flips status in place, since an admin manually
         // upgrading a customer may instead create a fresh subscription row.
-        $orgsWithTrial = \App\Models\Organization::whereHas('subscriptions', fn($q) => $q->whereRaw("metadata->>'trial' = 'true'"))->pluck('id');
+        $orgsWithTrial = \App\Models\Organization::commercial()
+            ->whereHas('subscriptions', fn($q) => $q->whereRaw("metadata->>'trial' = 'true'"))->pluck('id');
         $convertedTrialOrgs = $orgsWithTrial->isNotEmpty()
             ? \App\Models\Organization::whereIn('id', $orgsWithTrial)->whereHas('subscriptions', fn($q) => $q->where('status', 'active'))->count()
             : 0;
@@ -298,27 +317,10 @@ class HotelAdminController extends Controller
             return ['date' => $day, 'count' => (int) ($rawDaily[$day] ?? 0)];
         });
 
-        // MRR = somme des abonnements COMMERCIAUX actifs au prix effectif
-        // (négocié si présent), annuels / 12. Un seul abonnement compté par
-        // client (le plus récent) : un vieil abonnement resté « active » à
-        // côté du courant ne doit pas gonfler le chiffre. Les essais (trial)
-        // ne rapportent rien → exclus. Les comptes internes non plus : ils
-        // utilisent le produit sans l'acheter (voir Organization::isCommercial).
-        $activeSubs = \App\Models\Subscription::with(['plan', 'organization:id,name,billing_mode', 'hotel:id,name'])
-            ->commercial()
-            ->where('status', 'active')
-            ->orderByDesc('started_at')
-            ->get()
-            ->unique(fn($sub) => $sub->organization_id ?? 'hotel:' . $sub->hotel_id)
-            ->values();
-        $mrrBreakdown = $activeSubs->map(fn($sub) => [
-            'customer'      => $sub->organization?->name ?? $sub->hotel?->name ?? '—',
-            'plan'          => $sub->plan?->name ?? '—',
-            'billing_cycle' => $sub->billing_cycle,
-            'negotiated'    => $sub->custom_price !== null,
-            'monthly_value' => \App\Services\Subscription\PlanPricing::monthlyValue($sub),
-        ]);
-        $mrr = $mrrBreakdown->sum('monthly_value');
+        // Revenu et parc : calcul UNIQUE, partagé avec /admin/metrics/kpis.
+        // Recomposer la base ici a déjà fait diverger deux écrans du même
+        // back-office (voir CommercialMetrics).
+        $metrics = app(\App\Services\Subscription\CommercialMetrics::class)->snapshot();
 
         // Top 5 établissements by check-in volume this month.
         $topHotels = Hotel::withCount(['checkIns' => fn($q) => $q->whereMonth('created_at', now()->month)->whereYear('created_at', now()->year)])
@@ -344,7 +346,7 @@ class HotelAdminController extends Controller
                     'this_month' => \App\Models\CheckIn::whereMonth('created_at', now()->month)->whereYear('created_at', now()->year)->count(),
                 ],
                 'trials' => [
-                    'in_progress'     => \App\Models\Subscription::where('status', 'trial')->count(),
+                    'in_progress'     => \App\Models\Subscription::commercial()->where('status', 'trial')->count(),
                     'expiring_soon'   => $trialsExpiringSoon,
                     'conversion_rate' => $orgsWithTrial->isNotEmpty() ? round($convertedTrialOrgs / $orgsWithTrial->count() * 100) : null,
                 ],
@@ -357,13 +359,12 @@ class HotelAdminController extends Controller
                 // Répartition du parc : les comptes internes existent bien,
                 // ils sont simplement hors du périmètre commercial. Les
                 // afficher évite de croire à une perte de clients.
-                'organizations' => [
-                    'total'      => \App\Models\Organization::count(),
-                    'commercial' => \App\Models\Organization::commercial()->count(),
-                    'internal'   => \App\Models\Organization::internal()->count(),
-                ],
-                'mrr'              => round($mrr, 3),
-                'mrr_breakdown'    => $mrrBreakdown,
+                'organizations'    => $metrics['organizations'],
+                'currency'         => $metrics['currency'],
+                'mrr'              => $metrics['mrr'],
+                'arr'              => $metrics['arr'],
+                'paying_customers' => $metrics['paying_customers'],
+                'mrr_breakdown'    => $metrics['breakdown'],
                 'check_ins_chart'  => $checkInsChart,
                 'top_hotels'       => $topHotels,
                 'recent_signups'   => $recentSignups,
