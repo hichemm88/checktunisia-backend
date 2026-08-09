@@ -80,7 +80,12 @@ class OrganizationAdminController extends Controller
         $mrr = null;
         $pricing = null;
         if ($sub && in_array($sub->status, ['active', 'trial'], true)) {
-            $mrr = \App\Services\Subscription\PlanPricing::monthlyValue($sub, $org->properties->count());
+            // Un compte interne ne pèse rien dans le revenu : 0, et pas
+            // « null » — l'admin doit lire explicitement zéro plutôt qu'une
+            // absence qu'il pourrait prendre pour une donnée manquante.
+            $mrr = $org->isCommercial()
+                ? \App\Services\Subscription\PlanPricing::monthlyValue($sub, $org->properties->count())
+                : 0.0;
             $pricing = \App\Services\Subscription\PlanPricing::detail($sub, $org->properties->count());
         }
 
@@ -145,10 +150,25 @@ class OrganizationAdminController extends Controller
             'contact_email'       => ['sometimes', 'email', 'max:255'],
             'contact_phone'       => ['sometimes', 'nullable', 'string', 'max:30'],
             'address'             => ['sometimes', 'array'],
+            // Bascule commercial ↔ interne. Réservée au back-office (route
+            // platform_admin) : c'est une décision d'exploitation, jamais une
+            // action client. Marquer un compte interne le sort de toute
+            // facturation et de toutes les métriques de revenu.
+            'billing_mode'        => ['sometimes', 'in:'.implode(',', Organization::BILLING_MODES)],
+            'billing_mode_note'   => ['sometimes', 'nullable', 'string', 'max:500'],
         ]);
 
         $org->update($v);
         AuditLogger::log('organization.updated', $org, $old, $org->fresh()->toArray());
+
+        // Une exemption commerciale se trace à part : c'est ce qui explique
+        // qu'un compte cesse d'apparaître dans le chiffre d'affaires.
+        if (array_key_exists('billing_mode', $v) && ($old['billing_mode'] ?? null) !== $v['billing_mode']) {
+            AuditLogger::log('organization.billing_mode_changed', $org,
+                oldValues: ['billing_mode' => $old['billing_mode'] ?? null],
+                newValues: ['billing_mode' => $v['billing_mode'], 'note' => $v['billing_mode_note'] ?? null],
+            );
+        }
 
         return response()->json(['data' => $org->fresh()]);
     }

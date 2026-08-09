@@ -140,6 +140,11 @@ class PlanChangeService
         if (!$target->is_active || !$target->is_public) {
             return [false, "Ce plan n'est pas souscriptible."];
         }
+        // Un compte interne n'achète pas : aucun achat, aucune souscription,
+        // aucun changement payant. Son plan se règle depuis le back-office.
+        if ($sub->isInternal()) {
+            return [false, 'Ce compte est un compte interne : il n\'est pas soumis à la facturation.'];
+        }
         if ($sub->status === 'cancelled') {
             return [false, 'Cet abonnement est résilié — contactez contact@qayed.tn pour le reprendre.'];
         }

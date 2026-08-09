@@ -16,7 +16,11 @@ class SuspendExpiredSubscriptions extends Command
 
     public function handle(): void
     {
+        // Un compte interne n'a pas d'échéance commerciale : il n'achète
+        // rien, donc rien n'expire. Le couper reviendrait à nous couper
+        // nous-mêmes pour une facture qui n'existe pas.
         $subscriptions = Subscription::with(['organization', 'hotel'])
+            ->commercial()
             ->whereIn('status', ['active', 'trial'])
             ->where('expires_at', '<', now())
             ->get();

@@ -87,7 +87,12 @@ class CloseMonthlyQuotas extends Command
         $bundleSize = (int) ($plan?->overage_bundle_size ?? 0) >= 1 ? (int) $plan->overage_bundle_size : 1;
         $unitPrice  = $plan?->overage_price !== null ? (float) $plan->overage_price : 0.0;
         $bundles    = CheckinQuota::bundleCount($used, $quota, $bundleSize);
-        $billable   = CheckinQuota::overageBillable($sub);
+        // Un compte interne voit sa consommation mesurée comme les autres —
+        // c'est une donnée d'exploitation utile — mais son dépassement n'est
+        // jamais valorisé : montant à zéro, jamais facturé, jamais compté
+        // dans le revenu de dépassement.
+        $internal   = $sub->isInternal();
+        $billable   = !$internal && CheckinQuota::overageBillable($sub);
 
         // Idempotence : un dépassement déjà facturé (ou abandonné par l'admin)
         // n'est jamais recalculé ni re-statué par une relance de la commande.
@@ -100,9 +105,13 @@ class CloseMonthlyQuotas extends Command
                 'overage_count'   => $used - $quota,
                 'bundle_size'     => $bundleSize,
                 'bundle_count'    => $bundles,
-                'unit_price'      => $unitPrice,
-                'amount'          => round($bundles * $unitPrice, 3),
-                'status'          => $billable ? OverageCharge::STATUS_PENDING : OverageCharge::STATUS_EXCLUDED_LEGACY,
+                'unit_price'      => $internal ? 0.0 : $unitPrice,
+                'amount'          => $internal ? 0.0 : round($bundles * $unitPrice, 3),
+                'status'          => match (true) {
+                    $billable  => OverageCharge::STATUS_PENDING,
+                    $internal  => OverageCharge::STATUS_EXCLUDED_INTERNAL,
+                    default    => OverageCharge::STATUS_EXCLUDED_LEGACY,
+                },
             ])->save();
         }
         $stats['computed']++;
@@ -123,7 +132,8 @@ class CloseMonthlyQuotas extends Command
             return;
         }
 
-        $suggested = $this->suggestedPlan($plan?->slug);
+        // Pas d'upsell vers un compte qui ne nous achète rien.
+        $suggested = $internal ? null : $this->suggestedPlan($plan?->slug);
         if (!$suggested) {
             return;
         }

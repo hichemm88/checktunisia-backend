@@ -20,6 +20,8 @@ class OverageCharge extends Model
     public const STATUS_PENDING         = 'pending';
     public const STATUS_INVOICED        = 'invoiced';
     public const STATUS_EXCLUDED_LEGACY = 'excluded_legacy';
+    /** Compte interne : le dépassement reste mesuré, il n'est jamais facturé. */
+    public const STATUS_EXCLUDED_INTERNAL = 'excluded_internal';
     public const STATUS_WAIVED          = 'waived';
 
     protected $fillable = [

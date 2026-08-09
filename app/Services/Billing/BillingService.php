@@ -69,6 +69,7 @@ class BillingService
     public function generateDueRenewalInvoices(): array
     {
         $subs = Subscription::with(['plan', 'organization', 'hotel'])
+            ->commercial() // un compte interne n'achète rien : rien à facturer
             ->where('status', 'active')
             ->where('auto_renew', true)
             ->whereBetween('expires_at', [now(), now()->addDays(self::RENEWAL_WINDOW_DAYS)])
@@ -92,6 +93,13 @@ class BillingService
     /** Facture de renouvellement pour un abonnement donné (null si une facture ouverte existe déjà). */
     public function generateRenewalInvoice(Subscription $sub): ?Invoice
     {
+        // Garde de fond : quel que soit l'appelant (commande, admin, code
+        // futur), un compte interne ne produit jamais de facture. Le filtre
+        // amont ne suffit pas — c'est ici que la règle doit tenir.
+        if ($sub->isInternal()) {
+            return null;
+        }
+
         $periodStart = $sub->expires_at->copy();
         $periodEnd   = $sub->billing_cycle === 'yearly'
             ? $periodStart->copy()->addYear()
@@ -182,7 +190,9 @@ class BillingService
      */
     public function generateOverageInvoice(Subscription $sub, \App\Models\OverageCharge $charge): ?Invoice
     {
-        if ($charge->invoice_id || $charge->amount <= 0) {
+        // Un compte interne consomme sans acheter : son dépassement reste
+        // visible en pilotage, il ne devient jamais une créance.
+        if ($charge->invoice_id || $charge->amount <= 0 || $sub->isInternal()) {
             return null;
         }
 
@@ -296,11 +306,14 @@ class BillingService
     {
         $stats = ['overdue' => 0, 'reminded' => 0, 'suspended' => 0];
 
-        // 1. sent + échue → overdue.
-        $newlyOverdue = Invoice::where('status', 'sent')
+        // 1. sent + échue → overdue. Les factures d'un compte interne sont
+        // laissées telles quelles : aucune créance ne court contre nous-mêmes.
+        $newlyOverdue = Invoice::with('subscription.organization')
+            ->where('status', 'sent')
             ->whereNotNull('due_at')
             ->where('due_at', '<', now())
-            ->get();
+            ->get()
+            ->reject(fn (Invoice $i) => $i->subscription?->isInternal());
         foreach ($newlyOverdue as $invoice) {
             $invoice->update(['status' => 'overdue']);
             AuditLogger::log('invoice.overdue', $invoice);
@@ -314,6 +327,13 @@ class BillingService
             ->get();
 
         foreach ($overdue as $invoice) {
+            // Un compte interne ne doit ni être relancé ni être suspendu :
+            // il n'y a pas de créance. Ses factures historiques restent en
+            // base, on ne les touche simplement plus.
+            if ($invoice->subscription?->isInternal()) {
+                continue;
+            }
+
             // Une facture d'achat de plan abandonnée ne se relance pas et ne
             // suspend personne : le client n'a jamais eu ce qu'elle vend, et
             // son abonnement courant reste dû par ailleurs. On referme

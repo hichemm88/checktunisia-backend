@@ -47,7 +47,23 @@ class Organization extends Model
         'status',
         'locale',
         'upsell_flagged_at',
+        'billing_mode',
+        'billing_mode_note',
     ];
+
+    /** Client : facturé, compté dans le chiffre d'affaires. */
+    public const BILLING_COMMERCIAL = 'commercial';
+
+    /**
+     * Compte nous appartenant : utilise le produit sans rien acheter. Jamais
+     * facturé, jamais compté dans une métrique commerciale.
+     *
+     * N'accorde AUCUN privilège : mêmes permissions, même isolation tenant,
+     * même accès au produit qu'un client. C'est une exemption commerciale.
+     */
+    public const BILLING_INTERNAL = 'internal';
+
+    public const BILLING_MODES = [self::BILLING_COMMERCIAL, self::BILLING_INTERNAL];
 
     protected function casts(): array
     {
@@ -90,6 +106,41 @@ class Organization extends Model
     public function hasActiveSubscription(): bool
     {
         return $this->activeSubscription()->exists();
+    }
+
+    // ─── Périmètre commercial ────────────────────────────────────────────
+    //
+    // Règle UNIQUE. Toute facturation et toute métrique de revenu doivent
+    // passer par ici : c'est ce qui garantit qu'une fonctionnalité ajoutée
+    // plus tard ne réintroduira pas un compte interne dans le chiffre
+    // d'affaires par simple oubli.
+
+    /** Ce compte est-il un client ? (défaut pour toute organisation) */
+    public function isCommercial(): bool
+    {
+        // Le repli sur `commercial` couvre les lignes antérieures à la
+        // colonne : un compte est un client tant qu'on n'a pas dit l'inverse.
+        return ($this->billing_mode ?? self::BILLING_COMMERCIAL) !== self::BILLING_INTERNAL;
+    }
+
+    /** Compte à nous : exempté de facturation et de toute métrique de revenu. */
+    public function isInternal(): bool
+    {
+        return ! $this->isCommercial();
+    }
+
+    /** Organisations clientes — la base de toute statistique commerciale. */
+    public function scopeCommercial(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->where(function ($q) {
+            $q->where('billing_mode', self::BILLING_COMMERCIAL)->orWhereNull('billing_mode');
+        });
+    }
+
+    /** Comptes internes — visibles en pilotage opérationnel, jamais en revenu. */
+    public function scopeInternal(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->where('billing_mode', self::BILLING_INTERNAL);
     }
 
     public function isActive(): bool

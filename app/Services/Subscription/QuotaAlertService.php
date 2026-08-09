@@ -41,6 +41,13 @@ class QuotaAlertService
 
     public static function evaluate(Organization $org): void
     {
+        // Ces alertes annoncent un coût de dépassement et poussent vers un
+        // plan supérieur : elles n'ont aucun sens pour un compte interne, qui
+        // ne paie rien. Sa consommation reste mesurée et visible en admin.
+        if ($org->isInternal()) {
+            return;
+        }
+
         $status = CheckinQuota::status($org);
         if ($status['unlimited'] || $status['quota'] < 1) {
             return;

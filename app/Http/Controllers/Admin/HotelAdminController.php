@@ -298,11 +298,14 @@ class HotelAdminController extends Controller
             return ['date' => $day, 'count' => (int) ($rawDaily[$day] ?? 0)];
         });
 
-        // MRR = somme des abonnements actifs au prix effectif (négocié si présent),
-        // annuels / 12. Un seul abonnement compté par client (le plus récent) :
-        // un vieil abonnement resté « active » à côté du courant ne doit pas
-        // gonfler le chiffre. Les essais (trial) ne rapportent rien → exclus.
-        $activeSubs = \App\Models\Subscription::with(['plan', 'organization:id,name', 'hotel:id,name'])
+        // MRR = somme des abonnements COMMERCIAUX actifs au prix effectif
+        // (négocié si présent), annuels / 12. Un seul abonnement compté par
+        // client (le plus récent) : un vieil abonnement resté « active » à
+        // côté du courant ne doit pas gonfler le chiffre. Les essais (trial)
+        // ne rapportent rien → exclus. Les comptes internes non plus : ils
+        // utilisent le produit sans l'acheter (voir Organization::isCommercial).
+        $activeSubs = \App\Models\Subscription::with(['plan', 'organization:id,name,billing_mode', 'hotel:id,name'])
+            ->commercial()
             ->where('status', 'active')
             ->orderByDesc('started_at')
             ->get()
@@ -350,6 +353,14 @@ class HotelAdminController extends Controller
                     'failed_payments'        => $failedPayments,
                     'recently_suspended'     => $recentlySuspended,
                     'pending_virements'      => $pendingVirements,
+                ],
+                // Répartition du parc : les comptes internes existent bien,
+                // ils sont simplement hors du périmètre commercial. Les
+                // afficher évite de croire à une perte de clients.
+                'organizations' => [
+                    'total'      => \App\Models\Organization::count(),
+                    'commercial' => \App\Models\Organization::commercial()->count(),
+                    'internal'   => \App\Models\Organization::internal()->count(),
                 ],
                 'mrr'              => round($mrr, 3),
                 'mrr_breakdown'    => $mrrBreakdown,

@@ -80,7 +80,14 @@ class SubscriptionController extends Controller
                 // La période en cours reste-t-elle à régler ? C'est le
                 // backend qui tranche : le front ne rejoue pas la liste des
                 // statuts concernés, elle dériverait.
-                'awaiting_payment' => app(PlanChangeService::class)->awaitsPayment($sub),
+                // Un compte interne n'a jamais rien à régler.
+                'awaiting_payment' => $sub->isCommercial()
+                    && app(PlanChangeService::class)->awaitsPayment($sub),
+                // Compte interne : l'écran masque tout ce qui relève du
+                // commerce (prix à payer, factures à régler, upgrade,
+                // dépassement facturable) et garde l'opérationnel.
+                'billing_mode'   => $org?->billing_mode ?? \App\Models\Organization::BILLING_COMMERCIAL,
+                'is_internal'    => $sub->isInternal(),
             ],
         ]);
     }
@@ -93,8 +100,15 @@ class SubscriptionController extends Controller
      * (Flouci ne permet aucun prélèvement récurrent). Le front s'appuie
      * dessus pour ne jamais parler de « prélèvement automatique ».
      */
-    private function nextRenewalPayload(Subscription $sub): array
+    private function nextRenewalPayload(Subscription $sub): ?array
     {
+        // Un compte interne n'a pas d'échéance commerciale : ni date de
+        // renouvellement, ni montant. Renvoyer null plutôt qu'un montant à
+        // zéro évite de faire croire à une facture qui n'existera jamais.
+        if ($sub->isInternal()) {
+            return null;
+        }
+
         $scheduled = SubscriptionPlanChange::where('subscription_id', $sub->id)
             ->where('status', SubscriptionPlanChange::STATUS_SCHEDULED)
             ->latest('created_at')

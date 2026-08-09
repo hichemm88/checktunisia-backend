@@ -24,6 +24,10 @@ use Illuminate\Http\JsonResponse;
  *   client (le plus recent), pour ne pas gonfler les chiffres si un vieil
  *   abonnement reste « active » a cote du courant.
  * - Les essais (trial) ne rapportent rien : exclus du MRR / ARPU / churn payant.
+ * - Les comptes INTERNES (billing_mode = internal) sont hors perimetre
+ *   commercial : ils utilisent le produit sans l'acheter. Exclus de TOUTES
+ *   les metriques ci-dessous, y compris les cohortes d'activation et de
+ *   conversion, qui mesurent un entonnoir commercial.
  * - Les abonnements legacy au niveau etablissement (organization_id null) sont
  *   comptes dans le MRR comme sur le dashboard, mais pas dans le churn ni
  *   l'activation qui raisonnent au niveau organisation.
@@ -41,6 +45,7 @@ class KpiController extends Controller
         // Abonnements actifs, dedupliques par client (org, ou etablissement en
         // legacy), au prix effectif mensualise (annuel / 12, negocie prioritaire).
         $activeSubs = Subscription::with(['plan', 'organization'])
+            ->commercial()
             ->where('status', 'active')
             ->orderByDesc('started_at')
             ->get()
@@ -61,6 +66,7 @@ class KpiController extends Controller
         $activeOrgIds = $activeSubs->pluck('organization_id')->filter()->unique();
 
         $endedSubs = Subscription::with(['plan', 'organization'])
+            ->commercial()
             ->where(function ($q) use ($monthStart) {
                 $q->where(fn ($qq) => $qq->where('status', 'cancelled')->whereBetween('cancelled_at', [$monthStart, now()]))
                   ->orWhere(fn ($qq) => $qq->where('status', 'expired')->whereBetween('expires_at', [$monthStart, now()]));
@@ -84,7 +90,8 @@ class KpiController extends Controller
         // ─── Activation : inscription -> premier check-in ─────────────────
         // Cohorte = organisations creees sur les 30 derniers jours. Activee =
         // au moins un check-in (scan) sur l'un de ses etablissements.
-        $cohort = Organization::where('created_at', '>=', now()->subDays(30)->startOfDay())->pluck('id');
+        $cohort = Organization::commercial()
+            ->where('created_at', '>=', now()->subDays(30)->startOfDay())->pluck('id');
         $activated = $cohort->isNotEmpty()
             ? Organization::whereIn('id', $cohort)
                 ->whereHas('properties', fn ($q) => $q->whereHas('checkIns'))
@@ -95,7 +102,8 @@ class KpiController extends Controller
         // ─── Conversion d'essai (trial -> payant) ─────────────────────────
         // Meme logique que le dashboard : orgs ayant eu un essai et detenant
         // aujourd'hui un abonnement actif.
-        $orgsWithTrial = Organization::whereHas('subscriptions', fn ($q) => $q->whereRaw("metadata->>'trial' = 'true'"))->pluck('id');
+        $orgsWithTrial = Organization::commercial()
+            ->whereHas('subscriptions', fn ($q) => $q->whereRaw("metadata->>'trial' = 'true'"))->pluck('id');
         $convertedTrials = $orgsWithTrial->isNotEmpty()
             ? Organization::whereIn('id', $orgsWithTrial)
                 ->whereHas('subscriptions', fn ($q) => $q->where('status', 'active'))

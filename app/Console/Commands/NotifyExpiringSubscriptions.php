@@ -22,7 +22,10 @@ class NotifyExpiringSubscriptions extends Command
         foreach ($thresholds as $days) {
             $target = now()->addDays($days)->toDateString();
 
+            // Un compte interne n'a pas de renouvellement a preparer :
+            // aucune relance d'echeance ne le concerne.
             $subscriptions = Subscription::with(['hotel.users', 'plan'])
+                ->commercial()
                 ->where('status', 'active')
                 ->whereDate('expires_at', $target)
                 ->get();
@@ -51,6 +54,7 @@ class NotifyExpiringSubscriptions extends Command
             $target = now()->addDays($days)->toDateString();
 
             $trials = Subscription::with('organization')
+                ->commercial()
                 ->where('status', 'trial')
                 ->whereDate('expires_at', $target)
                 ->get();

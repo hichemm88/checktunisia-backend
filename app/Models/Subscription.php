@@ -51,6 +51,46 @@ class Subscription extends Model
         return $this->cancellation_requested_at !== null && !$this->auto_renew;
     }
 
+    // ─── Périmètre commercial ────────────────────────────────────────────
+
+    /**
+     * Cet abonnement représente-t-il du revenu ?
+     *
+     * Décidé par l'ORGANISATION qui le détient (voir Organization::isCommercial).
+     * Un abonnement historique rattaché à un établissement sans organisation
+     * reste commercial : ce sont de vrais clients d'avant le modèle org.
+     */
+    public function isCommercial(): bool
+    {
+        $org = $this->organization ?? $this->hotel?->organization;
+
+        return $org === null ? true : $org->isCommercial();
+    }
+
+    public function isInternal(): bool
+    {
+        return ! $this->isCommercial();
+    }
+
+    /**
+     * Abonnements facturables / comptabilisables. Couvre les deux
+     * rattachements : directement à l'organisation, ou via l'établissement
+     * pour les abonnements historiques.
+     */
+    public function scopeCommercial(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->where(function ($q) {
+            $q->whereHas('organization', fn ($o) => $o->commercial())
+              ->orWhere(function ($qq) {
+                  $qq->whereNull('organization_id')
+                     ->where(function ($h) {
+                         $h->whereHas('hotel.organization', fn ($o) => $o->commercial())
+                           ->orWhereDoesntHave('hotel.organization');
+                     });
+              });
+        });
+    }
+
     public function isActive(): bool       { return $this->status === 'active'; }
     public function isExpired(): bool      { return $this->status === 'expired'; }
     public function isSuspended(): bool    { return $this->status === 'suspended'; }
