@@ -3,17 +3,18 @@
 return [
     'paths'                    => ['api/*'],
     'allowed_methods'          => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    'allowed_origins'          => array_filter([
-        'https://checktunisia.vercel.app',
-        'https://qayed.tn',
-        'https://www.qayed.tn',
-        // Local dev preview only — never allowed in production regardless of
-        // what gets left in this file by mistake. Uses env() directly (not
-        // app()->environment()) because config files load before the
-        // container's 'env' binding exists — calling app()->environment()
-        // here throws "Target class [env] does not exist" during boot.
-        env('APP_ENV') !== 'production' ? 'http://localhost:4173' : null,
-    ]),
+    // Socle du dépôt + ajouts éventuels de CORS_ALLOWED_ORIGINS. La variable
+    // ne peut qu'AJOUTER : la lire comme source unique aurait coupé
+    // www.qayed.tn, qu'elle ne mentionne pas. Règles et refus dans
+    // App\Support\CorsOrigins, testés dans tests/Unit/CorsOriginsTest.
+    //
+    // `env()` directement (et non app()->environment()) : les fichiers de
+    // configuration sont chargés avant que le conteneur ne lie 'env', et
+    // app()->environment() lèverait « Target class [env] does not exist ».
+    'allowed_origins'          => \App\Support\CorsOrigins::resolve(
+        env('CORS_ALLOWED_ORIGINS'),
+        env('APP_ENV'),
+    ),
     'allowed_origins_patterns' => [],
     'allowed_headers'          => ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'X-Property-Id'],
     'exposed_headers'          => [],

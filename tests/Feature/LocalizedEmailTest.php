@@ -106,4 +106,52 @@ class LocalizedEmailTest extends TestCase
         $this->assertDatabaseHas('users', ['email' => 'nour.locale@test.tn', 'locale' => 'en']);
         $this->assertDatabaseHas('organizations', ['name' => 'Riad Test', 'locale' => 'en']);
     }
+
+    // ── Le cycle de vie de l'abonnement parle aussi la langue du client ──────
+    //
+    // Les gabarits étaient traduits, mais les phrases INJECTÉES dedans (fin
+    // d'essai, motif d'expiration) étaient composées en français sur le lieu
+    // d'envoi. Un client anglophone recevait donc une coquille anglaise avec
+    // une phrase française au milieu.
+
+    public function test_the_trial_sentence_follows_the_client_language(): void
+    {
+        $this->assertStringContainsString('se termine dans 2 jour(s)', SystemMailer::trialMessage(2, '15/07/2026', 'fr'));
+        $this->assertStringContainsString('ends in 2 day(s)', SystemMailer::trialMessage(2, '15/07/2026', 'en'));
+        $this->assertStringContainsString('تنتهي', SystemMailer::trialMessage(2, '15/07/2026', 'ar'));
+
+        $this->assertStringContainsString("se termine aujourd'hui", SystemMailer::trialMessage(0, '15/07/2026', 'fr'));
+        $this->assertStringContainsString('ends today', SystemMailer::trialMessage(0, '15/07/2026', 'en'));
+
+        // null = l'essai est déjà terminé.
+        $this->assertStringContainsString("s'est terminé le 15/07/2026", SystemMailer::trialMessage(null, '15/07/2026', 'fr'));
+        $this->assertStringContainsString('ended on 15/07/2026', SystemMailer::trialMessage(null, '15/07/2026', 'en'));
+    }
+
+    public function test_the_expiry_reason_follows_the_client_language_and_never_asks_to_write_to_us(): void
+    {
+        foreach (['fr', 'en', 'ar'] as $locale) {
+            $reason = SystemMailer::subscriptionExpiredReason('15/07/2026', $locale);
+
+            $this->assertStringContainsString('15/07/2026', $reason);
+            // Le renouvellement est self-service : plus aucun motif ne doit
+            // renvoyer le client vers nous.
+            $this->assertStringNotContainsString('Contactez-nous', $reason);
+            $this->assertStringNotContainsString('contact@qayed.tn', $reason);
+        }
+
+        $this->assertStringContainsString('expired', SystemMailer::subscriptionExpiredReason('15/07/2026', 'en'));
+    }
+
+    public function test_an_unknown_locale_falls_back_to_french_for_these_sentences_too(): void
+    {
+        $this->assertSame(
+            SystemMailer::trialMessage(3, '15/07/2026', 'fr'),
+            SystemMailer::trialMessage(3, '15/07/2026', 'de'),
+        );
+        $this->assertSame(
+            SystemMailer::subscriptionExpiredReason('15/07/2026', 'fr'),
+            SystemMailer::subscriptionExpiredReason('15/07/2026', null),
+        );
+    }
 }

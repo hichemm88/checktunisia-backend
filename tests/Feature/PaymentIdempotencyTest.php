@@ -199,6 +199,83 @@ class PaymentIdempotencyTest extends TestCase
     }
 
     /**
+     * Le RETOUR RÉEL de Flouci.
+     *
+     * Flouci ne connaît que son propre identifiant de paiement : il renvoie
+     * le client sur `success_link?payment_id=<son id>`, jamais avec le nôtre.
+     * La page de retour transmet donc cet identifiant tel quel — s'il n'ouvre
+     * pas la vérification, le règlement n'est jamais constaté : la facture
+     * reste impayée, part en relance, et finit par suspendre un client qui a
+     * payé.
+     */
+    public function test_the_identifier_flouci_sends_back_opens_the_verification(): void
+    {
+        $invoice = $this->renewalInvoice();
+
+        $payment = Payment::create([
+            'invoice_id'          => $invoice->id,
+            'provider'            => 'flouci',
+            'provider_payment_id' => '6f1c2b9e4d3a5c7b8e9f0a1b',
+            'status'              => 'pending',
+            'amount'              => $invoice->total_amount,
+            'currency'            => 'TND',
+            'expires_at'          => now()->addMinutes(15),
+        ]);
+
+        $this->mock(\App\Services\Payment\FlouciService::class, function ($mock) {
+            $mock->shouldReceive('verifyPayment')->andReturn(['success' => true, 'raw' => ['status' => 'SUCCESS']]);
+        });
+
+        $this->actingAs($this->owner)
+            ->getJson("/api/v1/hotel/payments/{$payment->provider_payment_id}/verify")
+            ->assertOk()
+            ->assertJsonPath('data.status', 'completed');
+
+        $this->assertSame('paid', $invoice->fresh()->status);
+    }
+
+    /** Un identifiant inconnu reste un 404 — jamais une erreur de base de données. */
+    public function test_an_unknown_payment_identifier_is_simply_not_found(): void
+    {
+        $this->actingAs($this->owner)
+            ->getJson('/api/v1/hotel/payments/pas-un-identifiant/verify')
+            ->assertNotFound();
+    }
+
+    /** Le retour de paiement d'un tenant n'ouvre rien chez un autre. */
+    public function test_the_provider_identifier_of_another_tenant_stays_out_of_reach(): void
+    {
+        $otherOrg = Organization::create([
+            'name' => 'AUTRE MAISON', 'entity_type' => 'company',
+            'contact_email' => 'autre@test.tn', 'status' => 'active', 'locale' => 'fr',
+        ]);
+        $otherSub = Subscription::create([
+            'organization_id' => $otherOrg->id,
+            'plan_id'         => (int) SubscriptionPlan::where('slug', 'essentiel')->value('id'),
+            'status'          => 'active', 'billing_cycle' => 'monthly',
+            'started_at'      => now()->subMonth(), 'expires_at' => now()->addDay(), 'auto_renew' => true,
+        ]);
+        $theirInvoice = Invoice::create([
+            'subscription_id' => $otherSub->id, 'invoice_number' => 'INV-'.now()->year.'-7999',
+            'amount' => 59, 'tax_amount' => 0, 'total_amount' => 59, 'currency' => 'TND', 'status' => 'sent',
+        ]);
+        $theirPayment = Payment::create([
+            'invoice_id'          => $theirInvoice->id,
+            'provider'            => 'flouci',
+            'provider_payment_id' => 'FLOUCI-AUTRE-1',
+            'status'              => 'pending',
+            'amount'              => 59, 'currency' => 'TND',
+            'expires_at'          => now()->addMinutes(15),
+        ]);
+
+        $this->actingAs($this->owner)
+            ->getJson("/api/v1/hotel/payments/{$theirPayment->provider_payment_id}/verify")
+            ->assertNotFound();
+
+        $this->assertSame('pending', $theirPayment->fresh()->status);
+    }
+
+    /**
      * Canal virement : l'admin valide, puis reclique (ou deux admins valident
      * le même virement en même temps). Un seul règlement doit en sortir.
      */

@@ -567,10 +567,23 @@ class BillingService
 
         if ($periodEnd && $periodEnd->isAfter($sub->expires_at)) {
             $updates['expires_at'] = $periodEnd;
-        } elseif (!$periodEnd && in_array($previous, ['expired', 'suspended', 'trial_expired'], true)) {
+        } elseif (!$periodEnd && in_array($previous, ['expired', 'suspended', 'trial_expired', 'trial'], true)) {
             // Paiement hors renouvellement automatique (facture manuelle) sur un
-            // abonnement retombé : nouvelle période complète à partir d'aujourd'hui.
-            $base = $sub->expires_at?->isFuture() ? $sub->expires_at->copy() : now();
+            // abonnement sans période PAYÉE en cours : nouvelle période complète.
+            //
+            // L'essai en fait partie. Il était absent de cette liste alors
+            // qu'il figurait dans celle du statut juste dessous : le compte
+            // passait « actif » en gardant l'échéance de son essai. Le client
+            // réglait un mois plein et se retrouvait coupé quelques jours plus
+            // tard, sans que rien ne le signale.
+            //
+            // Un essai en cours ne reporte pas ses jours gratuits sur la
+            // période achetée : c'est déjà la règle du parcours self-service
+            // (PlanChangeService::applyChange), et deux règles pour le même
+            // acte se paieraient en écarts de facturation selon le canal.
+            $base = $previous !== 'trial' && $sub->expires_at?->isFuture()
+                ? $sub->expires_at->copy()
+                : now();
             $updates['expires_at'] = $sub->billing_cycle === 'yearly' ? $base->addYear() : $base->addMonth();
         }
 

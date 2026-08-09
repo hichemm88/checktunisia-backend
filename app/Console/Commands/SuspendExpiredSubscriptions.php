@@ -87,17 +87,29 @@ class SuspendExpiredSubscriptions extends Command
             $to   = $org?->contact_email
                 ?? $sub->hotel?->contacts()->where('type', 'email')->where('is_primary', true)->first()?->value;
 
+            // La langue du client, comme sur tous les autres courriels du
+            // cycle de vie : le gabarit était bien traduit, la phrase injectée
+            // ne l'était pas.
+            $locale = $org?->locale ?? \App\Models\EmailTemplate::DEFAULT_LOCALE;
+            $date   = $sub->expires_at->format('d/m/Y');
+
             if ($wasTrial) {
                 SystemMailer::send('trial_ending', $to, [
                     'name'          => $name,
-                    'trial_message' => "Votre essai gratuit s'est terminé le " . $sub->expires_at->format('d/m/Y') . '.',
-                    'cta_button'    => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), 'Voir les abonnements'),
-                ]);
+                    'trial_message' => SystemMailer::trialMessage(null, $date, $locale),
+                    'cta_button'    => SystemMailer::ctaButton(
+                        SystemMailer::frontendUrl('/hotel/subscription'),
+                        SystemMailer::label('view_subscriptions', $locale),
+                    ),
+                ], $locale);
             } else {
+                // « Contactez-nous pour le renouveler » datait d'avant le
+                // self-service : le renouvellement se pilote depuis l'écran
+                // d'abonnement, sans nous.
                 SystemMailer::send('account_suspended', $to, [
                     'name'   => $name,
-                    'reason' => 'Abonnement expiré le ' . $sub->expires_at->format('d/m/Y') . '. Contactez-nous pour le renouveler.',
-                ]);
+                    'reason' => SystemMailer::subscriptionExpiredReason($date, $locale),
+                ], $locale);
             }
 
             $this->line(($wasTrial ? 'Trial ended' : 'Expired subscription') . " {$sub->id} ({$name}).");

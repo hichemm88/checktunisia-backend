@@ -220,6 +220,54 @@ class SystemMailer
         return self::twoRowBox(self::label('amount', $locale), $amount, self::label('invoice_number', $locale), $invoiceNumber);
     }
 
+    /**
+     * Phrases du cycle de vie de l'essai et de l'expiration.
+     *
+     * Elles étaient composées en français directement sur les lieux d'envoi
+     * (rappel J-2, fin d'essai, expiration), si bien qu'un client anglophone
+     * ou arabophone recevait un gabarit traduit portant une phrase française.
+     * Elles vivent ici, avec les autres libellés localisés, pour qu'un canal
+     * ajouté demain ne puisse pas réintroduire l'écart.
+     *
+     * @param  int|null  $daysLeft  null = l'essai est déjà terminé.
+     */
+    public static function trialMessage(?int $daysLeft, string $date, ?string $locale = null): string
+    {
+        $locale = EmailTemplate::normalizeLocale($locale);
+
+        if ($daysLeft === null) {
+            return match ($locale) {
+                'en'    => "Your free trial ended on {$date}.",
+                'ar'    => "انتهت فترتك التجريبية المجانية في {$date}.",
+                default => "Votre essai gratuit s'est terminé le {$date}.",
+            };
+        }
+
+        if ($daysLeft <= 0) {
+            return match ($locale) {
+                'en'    => 'Your free trial ends today.',
+                'ar'    => 'تنتهي فترتك التجريبية المجانية اليوم.',
+                default => "Votre essai gratuit se termine aujourd'hui.",
+            };
+        }
+
+        return match ($locale) {
+            'en'    => "Your free trial ends in {$daysLeft} day(s), on {$date}.",
+            'ar'    => "تنتهي فترتك التجريبية المجانية خلال {$daysLeft} يوم، في {$date}.",
+            default => "Votre essai gratuit se termine dans {$daysLeft} jour(s), le {$date}.",
+        };
+    }
+
+    /** Motif d'un abonnement arrivé à expiration, localisé. */
+    public static function subscriptionExpiredReason(string $date, ?string $locale = null): string
+    {
+        return match (EmailTemplate::normalizeLocale($locale)) {
+            'en'    => "Subscription expired on {$date}. Renew it from your subscription screen.",
+            'ar'    => "انتهى اشتراكك في {$date}. يمكنك تجديده من شاشة الاشتراك.",
+            default => "Abonnement expiré le {$date}. Renouvelez-le depuis votre écran d'abonnement.",
+        };
+    }
+
     private static function twoRowBox(string $label1, string $value1, string $label2, string $value2): string
     {
         $cell = fn (string $label, string $value, bool $border) => '<td style="padding:14px 24px;'.($border ? 'border-bottom:1px solid #DDD9CF;' : '').'font-size:12px;font-weight:600;color:#8A94A0;text-transform:uppercase;letter-spacing:0.05em;font-family:\'IBM Plex Sans\',-apple-system,\'Segoe UI\',Arial,sans-serif;">'.htmlspecialchars($label, ENT_QUOTES, 'UTF-8').'</td>'

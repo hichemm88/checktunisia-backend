@@ -175,6 +175,33 @@ class BillingAutomationTest extends TestCase
         $this->assertTrue($sub->expires_at->isFuture());
     }
 
+    /**
+     * Un essai qui règle une facture émise à la main doit obtenir la période
+     * qu'il vient d'acheter — pas le reliquat de son essai.
+     *
+     * Sans cela le compte passait bien « actif », mais gardait l'échéance de
+     * l'essai : le client payait un mois plein et se retrouvait coupé
+     * quelques jours plus tard, sans que rien ne le signale.
+     */
+    public function test_a_trial_paying_a_hand_written_invoice_gets_the_period_it_paid_for(): void
+    {
+        $this->sub->update(['status' => 'trial', 'expires_at' => now()->addDays(3)]);
+
+        $invoice = Invoice::create([
+            'subscription_id' => $this->sub->id, 'invoice_number' => 'INV-2026-0300',
+            'amount' => 199, 'tax_amount' => 0, 'total_amount' => 199, 'currency' => 'TND', 'status' => 'sent',
+        ]);
+        $invoice->update(['status' => 'paid', 'paid_at' => now(), 'payment_method' => 'virement']);
+        $this->billing->handleInvoicePaid($invoice->fresh());
+
+        $sub = $this->sub->fresh();
+        $this->assertSame('active', $sub->status);
+        $this->assertTrue(
+            $sub->expires_at->isAfter(now()->addDays(25)),
+            'un mois payé doit ouvrir un mois de service, pas la fin de l\'essai',
+        );
+    }
+
     public function test_validate_virement_reactivates_subscription(): void
     {
         $this->sub->update(['status' => 'expired', 'expires_at' => now()->subDay()]);

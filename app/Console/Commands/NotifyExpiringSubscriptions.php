@@ -68,13 +68,16 @@ class NotifyExpiringSubscriptions extends Command
                 $org = $sub->organization;
                 if (!$org?->contact_email) continue;
 
+                $locale = $org->locale ?? \App\Models\EmailTemplate::DEFAULT_LOCALE;
+
                 SystemMailer::send('trial_ending', $org->contact_email, [
                     'name'          => $org->name,
-                    'trial_message' => $days > 0
-                        ? "Votre essai gratuit se termine dans {$days} jour(s), le {$sub->expires_at->format('d/m/Y')}."
-                        : "Votre essai gratuit se termine aujourd'hui.",
-                    'cta_button' => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), 'Voir les abonnements'),
-                ]);
+                    'trial_message' => SystemMailer::trialMessage($days, $sub->expires_at->format('d/m/Y'), $locale),
+                    'cta_button'    => SystemMailer::ctaButton(
+                        SystemMailer::frontendUrl('/hotel/subscription'),
+                        SystemMailer::label('view_subscriptions', $locale),
+                    ),
+                ], $locale);
 
                 AuditLogger::log('subscription.trial_reminder_sent', $sub, newValues: ['days_remaining' => $days]);
                 $this->line("Notified trial org {$org->name} — {$days}d remaining.");
