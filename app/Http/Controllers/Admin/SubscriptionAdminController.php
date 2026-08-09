@@ -240,13 +240,20 @@ class SubscriptionAdminController extends Controller {
 
         $org = $sub->organization;
         if ($org?->contact_email) {
+            // Même langue que les factures automatiques : une facture saisie à
+            // la main ne doit pas arriver en français chez un client anglophone.
+            $locale = $org->locale ?? \App\Models\EmailTemplate::DEFAULT_LOCALE;
+
             \App\Services\Email\SystemMailer::send('invoice_available', $org->contact_email, [
                 'name'           => $org->name,
                 'plan_name'      => $sub->plan?->name ?? '—',
                 'invoice_number' => $invoice->invoice_number,
-                'credentials_box' => \App\Services\Email\SystemMailer::amountBox(\App\Support\Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number),
-                'cta_button'      => \App\Services\Email\SystemMailer::ctaButton(\App\Services\Email\SystemMailer::frontendUrl('/hotel/subscription'), 'Voir la facture'),
-            ]);
+                'credentials_box' => \App\Services\Email\SystemMailer::amountBox(\App\Support\Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number, $locale),
+                'cta_button'      => \App\Services\Email\SystemMailer::ctaButton(
+                    \App\Services\Email\SystemMailer::frontendUrl('/hotel/subscription'),
+                    \App\Services\Email\SystemMailer::label('view_invoice', $locale),
+                ),
+            ], $locale);
         }
 
         return response()->json(['data' => $invoice], 201);
