@@ -206,6 +206,118 @@ class CommercialMetricsTest extends TestCase
         $this->assertSame(0, $m['paying_customers']);
     }
 
+    // ── Le long des états de l'abonnement ────────────────────────────────────
+
+    /**
+     * RÈGLE PRODUIT ARRÊTÉE : un compte en période de grâce (échéance passée,
+     * facture impayée, service maintenu jusqu'à J+21) RESTE dans le revenu.
+     *
+     * C'est encore un client servi, et sa facture est émise — l'exclure ferait
+     * chuter le MRR à chaque retard de virement puis remonter au paiement,
+     * rendant la courbe illisible. Il en sort à la suspension, pas avant.
+     */
+    public function test_an_account_in_its_grace_period_still_counts(): void
+    {
+        [$org] = $this->org('En Sursis');
+        $sub = $this->subscribe($org, 'essentiel', 'monthly', [
+            'started_at' => now()->subMonths(2),
+            'expires_at' => now()->subDays(5), // échéance dépassée, encore « active »
+        ]);
+
+        $this->assertTrue($sub->isInGracePeriod(), 'le montage du test doit bien être en grâce');
+
+        $m = $this->snapshot();
+
+        $this->assertEqualsWithDelta(59.0, $m['mrr'], 0.001);
+        $this->assertEqualsWithDelta(708.0, $m['arr'], 0.001);
+        $this->assertSame(1, $m['paying_customers']);
+    }
+
+    /** Et il en sort dès la suspension : plus de service, plus de revenu. */
+    public function test_a_suspended_account_leaves_the_revenue(): void
+    {
+        [$org] = $this->org('Suspendu');
+        $this->subscribe($org, 'essentiel', 'monthly', [
+            'status'       => 'suspended',
+            'suspended_at' => now(),
+            'expires_at'   => now()->subDays(25),
+        ]);
+
+        $m = $this->snapshot();
+
+        $this->assertSame(0.0, $m['mrr']);
+        $this->assertSame(0.0, $m['arr']);
+        $this->assertSame(0, $m['paying_customers']);
+    }
+
+    public function test_an_expired_account_leaves_the_revenue(): void
+    {
+        [$org] = $this->org('Expiré');
+        $this->subscribe($org, 'essentiel', 'monthly', [
+            'status'     => 'expired',
+            'expires_at' => now()->subDays(40),
+        ]);
+
+        $m = $this->snapshot();
+
+        $this->assertSame(0.0, $m['mrr']);
+        $this->assertSame(0, $m['paying_customers']);
+    }
+
+    /**
+     * Un downgrade PROGRAMMÉ ne change rien tant qu'il n'a pas pris effet :
+     * le client paie encore son plan actuel jusqu'au bout de sa période.
+     * Compter le futur plan gonflerait ou raboterait le revenu d'avance.
+     */
+    public function test_a_scheduled_downgrade_does_not_move_the_revenue_before_it_applies(): void
+    {
+        [$org] = $this->org('Va Descendre');
+        $sub = $this->subscribe($org, 'pro');
+
+        \App\Models\SubscriptionPlanChange::create([
+            'subscription_id'     => $sub->id,
+            'organization_id'     => $org->id,
+            'from_plan_id'        => $this->planId('pro'),
+            'to_plan_id'          => $this->planId('essentiel'),
+            'kind'                => \App\Models\SubscriptionPlanChange::KIND_DOWNGRADE,
+            'status'              => \App\Models\SubscriptionPlanChange::STATUS_SCHEDULED,
+            'effective_at'        => now()->addDays(20),
+            'amount_due'          => 0,
+            'credit_applied'      => 0,
+            'next_renewal_amount' => 59,
+            'idempotency_key'     => 'down-1',
+        ]);
+
+        $m = $this->snapshot();
+
+        $this->assertEqualsWithDelta(119.0, $m['mrr'], 0.001, 'toujours le plan payé, pas celui à venir');
+        $this->assertEqualsWithDelta(1428.0, $m['arr'], 0.001);
+    }
+
+    /** Un upgrade non encore payé ne rapporte rien non plus : le plan n'a pas basculé. */
+    public function test_an_unpaid_upgrade_does_not_move_the_revenue(): void
+    {
+        [$org] = $this->org('Va Monter');
+        $sub = $this->subscribe($org, 'essentiel');
+
+        \App\Models\SubscriptionPlanChange::create([
+            'subscription_id'     => $sub->id,
+            'organization_id'     => $org->id,
+            'from_plan_id'        => $this->planId('essentiel'),
+            'to_plan_id'          => $this->planId('pro'),
+            'kind'                => \App\Models\SubscriptionPlanChange::KIND_UPGRADE,
+            'status'              => \App\Models\SubscriptionPlanChange::STATUS_PENDING_PAYMENT,
+            'amount_due'          => 119,
+            'credit_applied'      => 0,
+            'next_renewal_amount' => 119,
+            'idempotency_key'     => 'up-1',
+        ]);
+
+        $m = $this->snapshot();
+
+        $this->assertEqualsWithDelta(59.0, $m['mrr'], 0.001, 'le plan ne bascule qu\'au paiement');
+    }
+
     public function test_an_empty_platform_reports_zero_not_null(): void
     {
         $m = $this->snapshot();

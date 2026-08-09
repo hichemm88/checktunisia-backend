@@ -52,36 +52,61 @@ partir ». C'est le statut de session qui tranche.
 - **Session WhatsApp révoquée (LOGOUT)** — dédupliquée, une seule alerte.
 
 Ces trois-là dépendent du planificateur. **Elles se taisent en même temps que
-lui** — d'où la section suivante.
+lui** — d'où la sonde externe ci-dessous, qui est le seul témoin dont l'alarme
+ne vit pas dans le système qu'elle surveille.
 
-## Ce qu'il reste à brancher (action manuelle, hors code)
+### 4. La sonde externe (dead-man's switch) — CODE LIVRÉ, à configurer
 
-Une sonde **externe au déploiement**. Rien de ce qui tourne dans le conteneur
-Railway ne peut garantir de crier quand ce conteneur se tait.
+C'est le seul témoin qui couvre la nuit et le week-end. Le planificateur
+appelle une URL tierce toutes les 5 minutes ; **le service tiers alerte quand
+les appels cessent d'arriver**. L'alarme vit chez lui, pas chez nous — c'est
+exactement ce qui la rend valable.
 
-**À mettre en place :** un moniteur d'uptime tiers (UptimeRobot, Better Stack,
-Healthchecks.io — tous ont une offre gratuite suffisante ici).
+Côté dépôt, tout est en place :
 
-Deux montages possibles, du plus simple au plus fiable :
+| Élément | Rôle |
+|---|---|
+| `SCHEDULER_PING_URL` (env) | l'URL du check. **Vide = sonde inerte**, aucun appel sortant |
+| `config/monitoring.php` | lecture de la variable, aucune valeur en dur |
+| `SchedulerHeartbeat::ping()` | appel, timeout 5 s, jamais bloquant, n'écrit jamais l'URL dans les logs |
+| `routes/console.php` | tâche `scheduler-external-probe`, toutes les 5 min |
+| `php artisan qayed:scheduler-ping` | test manuel du branchement |
 
-1. **Sonde HTTP sur `/up`** (5 min, alerte email/SMS).
-   Détecte : conteneur mort, déploiement raté, base injoignable au démarrage.
-   Ne détecte PAS : planificateur mort alors que le web répond.
+L'URL **est un jeton** : qui la connaît peut faire taire l'alarme. Elle se
+traite comme un secret — jamais dans le dépôt, jamais dans un log, jamais
+dans une capture d'écran.
 
-2. **Dead-man's switch sur le planificateur** — *le montage qui manque
-   réellement*. Créer un check « ping attendu toutes les 5 minutes » sur
-   Healthchecks.io, puis appeler son URL depuis `routes/console.php` à côté du
-   battement existant. Le service alerte quand le ping **cesse d'arriver** :
-   l'alarme vit chez le tiers, pas chez nous, et c'est précisément ce qui la
-   rend valable.
+#### Ce qu'il reste à faire, une seule fois (~10 minutes)
 
-   Une variable d'environnement suffit (`SCHEDULER_PING_URL`), et l'appel doit
-   être en `try/catch` silencieux : une sonde ne doit jamais faire échouer une
-   tâche métier.
+1. Créer un compte sur **Healthchecks.io** (l'offre gratuite suffit : 20
+   checks). Tout service équivalent acceptant un ping HTTP convient.
+2. Créer un check nommé `qayed-scheduler` avec :
+   - **Period : 5 minutes** (la cadence de la tâche) ;
+   - **Grace time : 10 minutes** (tolère un déploiement ou un pic de charge
+     sans crier au loup).
+   Détection effective d'un planificateur mort : **sous 15 minutes**.
+3. Copier l'URL de ping du check (`https://hc-ping.com/<uuid>`).
+4. Dans **Railway → service backend → Variables**, ajouter
+   `SCHEDULER_PING_URL` avec cette valeur. Le service redémarre seul.
+5. Vérifier le branchement :
+   ```
+   railway run php artisan qayed:scheduler-ping
+   ```
+   Attendu : « Sonde externe prévenue. » — et le check passe au vert dans
+   Healthchecks.
+6. Renseigner la destination d'alerte dans Healthchecks (email, SMS).
+   **Ne pas router l'alerte vers un canal hébergé par Qayed** : une alarme
+   qui transite par le système en panne ne sonne pas.
 
-Tant que le point 2 n'est pas branché, **la mort du planificateur en dehors
-des heures ouvrées reste non détectée**. C'est le trou d'observabilité connu
-et assumé du déploiement actuel.
+**Tant que l'étape 4 n'est pas faite, la mort du planificateur hors heures
+ouvrées n'est pas détectée.** Le code est inerte et ne provoque aucun appel
+sortant : il n'y a aucun risque à le déployer avant de configurer.
+
+### 5. Sonde HTTP simple sur `/up` (complémentaire, facultative)
+
+Détecte : conteneur mort, déploiement raté, base injoignable au démarrage.
+Ne détecte PAS : planificateur mort alors que le serveur web répond — d'où le
+point 4.
 
 ## Suivi des erreurs applicatives
 

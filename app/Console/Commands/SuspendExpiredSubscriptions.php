@@ -28,6 +28,15 @@ class SuspendExpiredSubscriptions extends Command
         $spared = 0;
 
         foreach ($subscriptions as $sub) {
+            // Garde de fond, en plus du filtre amont : un compte interne ne
+            // s'éteint jamais pour une raison commerciale, quel que soit
+            // l'appelant. Même motif que BillingService::generateRenewalInvoice
+            // — le filtre de la requête protège l'usage nominal, cette ligne
+            // protège la règle.
+            if ($sub->isInternal()) {
+                continue;
+            }
+
             // Échéance dépassée mais recouvrement en cours : on ne coupe pas.
             // Le client reçoit ses relances J+3 / J+7 / J+14 et sera suspendu
             // à J+21 par `invoices:dunning` — c'est ce qui lui a été annoncé.

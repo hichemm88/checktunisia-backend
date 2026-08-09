@@ -199,6 +199,67 @@ class PaymentIdempotencyTest extends TestCase
     }
 
     /**
+     * Canal virement : l'admin valide, puis reclique (ou deux admins valident
+     * le même virement en même temps). Un seul règlement doit en sortir.
+     */
+    public function test_validating_the_same_bank_transfer_twice_settles_it_once(): void
+    {
+        $invoice = $this->renewalInvoice();
+        $payment = Payment::create([
+            'invoice_id'         => $invoice->id,
+            'provider'           => 'virement',
+            'declared_reference' => 'VIR-BNA-77',
+            'declared_at'        => now()->subDay(),
+            'status'             => 'pending',
+            'amount'             => $invoice->total_amount,
+            'currency'           => 'TND',
+        ]);
+
+        $admin = User::factory()->platformAdmin()->create();
+
+        $this->actingAs($admin)->postJson("/api/v1/admin/payments/{$payment->id}/validate-virement")->assertOk();
+        // Le second appel ne trouve plus de virement « pending » : rien ne se rejoue.
+        $this->actingAs($admin)->postJson("/api/v1/admin/payments/{$payment->id}/validate-virement")->assertNotFound();
+
+        $this->assertSame(1, Payment::where('invoice_id', $invoice->id)->where('status', 'completed')->count());
+        $this->assertSame(
+            1,
+            SubscriptionEvent::where('subscription_id', $this->sub->id)
+                ->where('event_type', 'payment_confirmed')->count(),
+        );
+        Mail::assertSentCount(1);
+    }
+
+    /**
+     * Canal saisie admin : la fiche facture est repassée à « payée » deux fois
+     * (correction de date, second enregistrement du formulaire).
+     */
+    public function test_marking_an_invoice_paid_twice_from_the_back_office_settles_it_once(): void
+    {
+        $invoice = $this->renewalInvoice();
+        $admin   = User::factory()->platformAdmin()->create();
+        $url     = "/api/v1/admin/hosts/{$this->org->id}/invoices/{$invoice->id}";
+
+        $payload = [
+            'status'            => 'paid',
+            'paid_at'           => now()->toDateTimeString(),
+            'payment_method'    => 'virement',
+            'payment_reference' => 'VIR-STB-12',
+        ];
+
+        $this->actingAs($admin)->patchJson($url, $payload)->assertOk();
+        $this->actingAs($admin)->patchJson($url, $payload)->assertOk();
+
+        $this->assertSame(1, Payment::where('invoice_id', $invoice->id)->count());
+        $this->assertSame(
+            1,
+            SubscriptionEvent::where('subscription_id', $this->sub->id)
+                ->where('event_type', 'payment_confirmed')->count(),
+        );
+        Mail::assertSentCount(1);
+    }
+
+    /**
      * Non-régression : la protection ne doit pas transformer un vrai second
      * paiement (facture suivante) en silence.
      */

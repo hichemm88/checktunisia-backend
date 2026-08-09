@@ -141,6 +141,45 @@ class InternalAccountTest extends TestCase
         $this->assertSame(1, Invoice::count());
     }
 
+    /**
+     * La garde de dernier recours, au niveau du MODÈLE.
+     *
+     * Les gardes de service couvrent les chemins connus. Celle-ci couvre ceux
+     * qui n'existent pas encore : un futur script, une commande de rattrapage,
+     * un développeur pressé. Aucun code passant par Eloquent ne peut créer une
+     * facture sur un compte interne — la règle cesse d'être une convention à
+     * respecter pour devenir une impossibilité.
+     */
+    public function test_no_code_path_whatsoever_can_create_an_invoice_for_an_internal_account(): void
+    {
+        [, , , $sub] = $this->account('Compte Interne', Organization::BILLING_INTERNAL);
+
+        $this->expectException(\DomainException::class);
+
+        // Écriture directe, sans passer par le moindre service : c'est
+        // exactement ce que ferait un chemin de facturation ajouté plus tard.
+        Invoice::create([
+            'subscription_id' => $sub->id,
+            'invoice_number'  => 'INV-2026-9999',
+            'amount'          => 199, 'tax_amount' => 0, 'total_amount' => 199,
+            'currency'        => 'TND', 'status' => 'sent',
+        ]);
+    }
+
+    public function test_the_model_guard_leaves_real_customers_alone(): void
+    {
+        [, , , $sub] = $this->account('Vrai Client', Organization::BILLING_COMMERCIAL);
+
+        Invoice::create([
+            'subscription_id' => $sub->id,
+            'invoice_number'  => 'INV-2026-9998',
+            'amount'          => 199, 'tax_amount' => 0, 'total_amount' => 199,
+            'currency'        => 'TND', 'status' => 'sent',
+        ]);
+
+        $this->assertSame(1, Invoice::count());
+    }
+
     public function test_the_guard_holds_even_when_the_invoice_is_asked_for_directly(): void
     {
         // Le filtre de la commande ne suffit pas : n'importe quel appelant
@@ -185,14 +224,18 @@ class InternalAccountTest extends TestCase
     public function test_an_internal_account_is_never_chased_or_suspended(): void
     {
         Mail::fake();
-        [, , , $sub] = $this->account('Compte Interne', Organization::BILLING_INTERNAL);
 
-        // Facture historique restée impayée et largement échue.
+        // Le scénario réel : le compte était un CLIENT, il a reçu une facture,
+        // puis il est passé chez nous. La facture reste impayée et échue.
+        [$org, , , $sub] = $this->account('Ancien Client', Organization::BILLING_COMMERCIAL);
+
         $invoice = Invoice::create([
             'subscription_id' => $sub->id, 'invoice_number' => 'INV-2026-8001',
             'amount' => 59, 'tax_amount' => 0, 'total_amount' => 59, 'currency' => 'TND',
             'status' => 'sent', 'due_at' => now()->subDays(40), 'metadata' => ['renewal' => true],
         ]);
+
+        $org->update(['billing_mode' => Organization::BILLING_INTERNAL]);
 
         $this->artisan('invoices:dunning')->assertSuccessful();
 
@@ -387,14 +430,17 @@ class InternalAccountTest extends TestCase
 
     public function test_historic_invoices_of_an_internal_account_are_preserved_and_readable(): void
     {
-        [, , $owner, $sub] = $this->account('Compte Interne', Organization::BILLING_INTERNAL);
+        [$org, , $owner, $sub] = $this->account('Ancien Client', Organization::BILLING_COMMERCIAL);
 
-        // Facture émise DU TEMPS où le compte était commercial.
+        // Facture émise DU TEMPS où le compte était commercial — puis le
+        // compte passe chez nous. L'exemption n'efface pas l'histoire.
         Invoice::create([
             'subscription_id' => $sub->id, 'invoice_number' => 'INV-2025-0042',
             'amount' => 59, 'tax_amount' => 0, 'total_amount' => 59, 'currency' => 'TND',
             'status' => 'paid', 'paid_at' => now()->subMonths(3), 'due_at' => now()->subMonths(3),
         ]);
+
+        $org->update(['billing_mode' => Organization::BILLING_INTERNAL]);
 
         $invoices = $this->actingAs($owner)->getJson('/api/v1/hotel/invoices')->assertOk()->json('data');
 

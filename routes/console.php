@@ -85,9 +85,34 @@ Schedule::command('qayed:db-backup')
 // invisible : le serveur web répond normalement pendant que la file cesse
 // d'être drainée et que les fiches ne partent plus. Lu par
 // GET /admin/health, qui marque « stale » au-delà de 5 minutes.
-Schedule::call(fn () => cache()->put('scheduler:last_run_at', now()->toIso8601String(), now()->addHour()))
+Schedule::call(fn () => \Illuminate\Support\Facades\Cache::put(
+    \App\Services\Observability\SchedulerHeartbeat::CACHE_KEY,
+    now()->toIso8601String(),
+    now()->addHour(),
+))
     ->everyMinute()
     ->name('scheduler-heartbeat');
+
+// Sonde EXTERNE (dead-man's switch) — le seul témoin qui couvre la nuit.
+//
+// Le battement ci-dessus n'est lu que par le navigateur d'un administrateur :
+// il ne dit rien à 3 h du matin. Ici, c'est un service TIERS qui alerte quand
+// les appels cessent d'arriver. Aucune tâche interne ne peut jouer ce rôle —
+// elle se tairait en même temps que le planificateur qu'elle surveille.
+//
+// Toutes les 5 minutes plutôt que chaque minute : la détection reste
+// largement sous le quart d'heure et l'on n'inflige pas 1 440 appels par jour
+// à un service tiers pour rien.
+//
+// Inerte tant que SCHEDULER_PING_URL n'est pas posée (défaut du dépôt).
+// `withoutOverlapping` : un tiers lent ne doit pas empiler des tournées.
+// `name` AVANT `withoutOverlapping` : l'inverse lève une LogicException au
+// chargement de ce fichier — donc à CHAQUE commande artisan, y compris
+// `migrate` au démarrage du conteneur.
+Schedule::call(fn () => app(\App\Services\Observability\SchedulerHeartbeat::class)->ping())
+    ->name('scheduler-external-probe')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();
 
 // MODULE PROVISOIRE — relais WhatsApp : alerte admin si le worker est
 // silencieux (heartbeat périmé > 10 min) — chantier B3.
