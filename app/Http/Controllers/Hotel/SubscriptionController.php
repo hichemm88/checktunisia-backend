@@ -187,11 +187,17 @@ class SubscriptionController extends Controller
 
         $service = app(PlanChangeService::class);
 
+        // La période en cours reste-t-elle à régler ? Si oui, « rester sur son
+        // plan » n'est pas un non-changement : c'est l'ACTIVATION, l'opération
+        // la plus courante du parcours (un essai qui paie sa formule). Elle a
+        // donc besoin de sa simulation comme n'importe quelle autre offre.
+        $awaitsPayment = $service->awaitsPayment($sub);
+
         $plans = \App\Models\SubscriptionPlan::where('is_active', true)
             ->where('is_public', true)
             ->orderBy('sort_order')
             ->get()
-            ->map(function (\App\Models\SubscriptionPlan $plan) use ($sub, $service) {
+            ->map(function (\App\Models\SubscriptionPlan $plan) use ($sub, $service, $awaitsPayment) {
                 $isCurrent = $plan->id === $sub->plan_id;
 
                 return [
@@ -204,8 +210,13 @@ class SubscriptionController extends Controller
                     'overage_price'       => $plan->overage_price,
                     'overage_bundle_size' => $plan->overage_bundle_size,
                     'is_current'          => $isCurrent,
-                    // Pas de simulation pour le plan déjà souscrit.
-                    'change'              => $isCurrent ? null : $service->preview($sub, $plan),
+                    // Pas de simulation vers le plan déjà souscrit ET déjà
+                    // payé. Tant qu'il reste à régler, elle est au contraire
+                    // indispensable : sans elle l'écran d'activation n'a ni
+                    // montant à afficher, ni écran de confirmation à ouvrir.
+                    'change'              => $isCurrent && !$awaitsPayment
+                        ? null
+                        : $service->preview($sub, $plan),
                 ];
             });
 

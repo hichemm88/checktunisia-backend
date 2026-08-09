@@ -641,6 +641,77 @@ class SubscriptionSelfServiceTest extends TestCase
         $this->assertCount(0, $theirs);
     }
 
+    // ── Activation : régler la formule qu'on a déjà ──────────────────────────
+    //
+    // Le cas le PLUS courant du self-service, et le seul qui n'était couvert
+    // nulle part : un essai (ou un compte retombé) veut payer le plan sur
+    // lequel il est déjà. `PlanChangeService::eligibility` l'autorise
+    // explicitement — encore faut-il que l'écran reçoive le montant.
+
+    public function test_a_trial_account_can_pay_for_the_plan_it_is_already_on(): void
+    {
+        Mail::fake();
+        $this->sub->update(['status' => 'trial', 'expires_at' => now()->addDays(3)]);
+
+        $data = $this->changeTo('essentiel', ['idempotency_key' => 'activate-trial-1'])
+            ->assertCreated()->json('data');
+
+        $this->assertSame('subscribe', $data['kind']);
+        $this->assertEquals(59, (float) $data['amount_due']);
+        $this->assertNotNull($data['invoice']);
+    }
+
+    /**
+     * L'écran d'activation ne calcule rien : il rend la simulation servie par
+     * l'API. Tant que le plan courant arrive sans simulation, le bouton
+     * « Activer » n'a ni montant à afficher ni écran de confirmation à ouvrir.
+     */
+    public function test_the_plans_screen_prices_the_current_plan_for_an_account_that_must_still_pay(): void
+    {
+        foreach (['trial', 'trial_expired', 'expired', 'suspended'] as $status) {
+            $this->sub->update(['status' => $status]);
+
+            $plans = $this->actingAs($this->owner)->getJson('/api/v1/hotel/subscription/plans')
+                ->assertOk()->json('data.plans');
+
+            $current = collect($plans)->firstWhere('slug', 'essentiel');
+
+            $this->assertTrue($current['is_current'], "statut {$status}");
+            $this->assertNotNull($current['change'], "statut {$status} : aucune simulation pour activer le plan courant");
+            $this->assertSame('subscribe', $current['change']['kind'], "statut {$status}");
+            $this->assertTrue($current['change']['allowed'], "statut {$status}");
+            $this->assertEquals(59, (float) $current['change']['amount_due_now'], "statut {$status}");
+        }
+    }
+
+    public function test_an_active_client_is_still_offered_no_simulation_towards_its_own_plan(): void
+    {
+        $plans = $this->actingAs($this->owner)->getJson('/api/v1/hotel/subscription/plans')
+            ->assertOk()->json('data.plans');
+
+        $current = collect($plans)->firstWhere('slug', 'essentiel');
+        $this->assertTrue($current['is_current']);
+        $this->assertNull($current['change']);
+    }
+
+    public function test_paying_the_activation_invoice_opens_a_full_period_and_turns_the_account_active(): void
+    {
+        Mail::fake();
+        $this->sub->update(['status' => 'trial', 'expires_at' => now()->addDays(3), 'auto_renew' => false]);
+
+        $data = $this->changeTo('essentiel', ['idempotency_key' => 'activate-trial-2'])
+            ->assertCreated()->json('data');
+        $this->payInvoice(Invoice::findOrFail($data['invoice']['id']));
+
+        $fresh = $this->sub->fresh();
+        $this->assertSame('active', $fresh->status);
+        $this->assertSame($this->planId('essentiel'), $fresh->plan_id);
+        $this->assertTrue($fresh->expires_at->isAfter(now()->addDays(25)));
+        // Un essai converti doit être refacturé à l'échéance, sinon il
+        // s'éteint en silence.
+        $this->assertTrue($fresh->auto_renew);
+    }
+
     public function test_an_upgrade_from_an_expired_account_revives_it_on_payment(): void
     {
         Mail::fake();
