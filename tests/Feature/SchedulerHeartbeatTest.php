@@ -105,10 +105,41 @@ class SchedulerHeartbeatTest extends TestCase
         config(['monitoring.scheduler_ping_url' => 'https://hc-ping.test/abcd-1234']);
         Http::fake(fn () => throw new ConnectionException('boom'));
 
-        cache()->forget('scheduler:last_run_at');
+        cache()->forget(SchedulerHeartbeat::CACHE_KEY);
         $this->heartbeat()->beat();
 
-        $this->assertNotNull(cache()->get('scheduler:last_run_at'),
+        $this->assertNotNull(cache()->get(SchedulerHeartbeat::CACHE_KEY),
             'le battement interne est écrit même quand la sonde externe est injoignable');
+    }
+
+    // ── Celui qui écrit et celui qui lit doivent parler de la même clé ────────
+    //
+    // Le battement est écrit par SchedulerHeartbeat et relu par
+    // /admin/health. Tant que le panneau recopiait la chaîne au lieu
+    // d'utiliser la constante, rien n'empêchait les deux de diverger — et la
+    // divergence aurait été SILENCIEUSE : le panneau déclare « MUET » un
+    // planificateur qui bat parfaitement.
+
+    public function test_the_health_panel_reads_the_beat_that_the_scheduler_actually_writes(): void
+    {
+        config(['monitoring.scheduler_ping_url' => null]);
+        cache()->forget(SchedulerHeartbeat::CACHE_KEY);
+
+        $admin = \App\Models\User::factory()->platformAdmin()->create();
+
+        // Aucun battement : le planificateur doit être déclaré muet.
+        $this->actingAs($admin)->getJson('/api/v1/admin/health')
+            ->assertOk()
+            ->assertJsonPath('data.scheduler.stale', true)
+            ->assertJsonPath('data.scheduler.last_run_at', null);
+
+        // Le planificateur bat — et RIEN d'autre n'est écrit à la main.
+        $this->heartbeat()->beat();
+
+        $response = $this->actingAs($admin)->getJson('/api/v1/admin/health')->assertOk();
+
+        $response->assertJsonPath('data.scheduler.stale', false);
+        $this->assertNotNull($response->json('data.scheduler.last_run_at'));
+        $this->assertLessThanOrEqual(1, (float) $response->json('data.scheduler.minutes_since'));
     }
 }

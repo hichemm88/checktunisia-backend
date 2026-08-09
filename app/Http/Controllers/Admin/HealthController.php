@@ -207,7 +207,12 @@ class HealthController extends Controller
      */
     private function scheduler(): array
     {
-        $last = cache()->get('scheduler:last_run_at');
+        // La constante, pas la chaîne : le battement est ÉCRIT par
+        // SchedulerHeartbeat. Deux littéraux identiques recopiés de part et
+        // d'autre finissent par diverger, et la divergence est silencieuse —
+        // le panneau lirait une clé vide et déclarerait le planificateur mort
+        // alors qu'il bat, ou l'inverse selon le sens de la faute de frappe.
+        $last = cache()->get(\App\Services\Observability\SchedulerHeartbeat::CACHE_KEY);
 
         // Carbon 3 rend une différence SIGNÉE : `now()->diffInMinutes($passé)`
         // vaut -20, jamais 20, et la comparaison « > 5 » était donc toujours
