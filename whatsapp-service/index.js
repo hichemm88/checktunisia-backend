@@ -26,6 +26,7 @@ const QRCode = require('qrcode');
 const axios = require('axios');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const sessionStore = require('./session-store');
+const { createRecovery } = require('./recovery');
 
 // ── Configuration (variables d'environnement uniquement) ─────────────────────
 const API_BASE = (process.env.LARAVEL_API_BASE || 'http://localhost:8000/api/v1').replace(/\/$/, '');
@@ -34,6 +35,20 @@ const SESSION_PATH = process.env.WHATSAPP_SESSION_PATH || './.wwebjs_auth';
 const HEALTH_PORT = parseInt(process.env.PORT || '3001', 10);
 const IDLE_POLL_MS = parseInt(process.env.WHATSAPP_IDLE_POLL_MS || '5000', 10);
 const ERROR_BACKOFF_MS = parseInt(process.env.WHATSAPP_ERROR_BACKOFF_MS || '15000', 10);
+
+// ── Reprise après échec d'envoi (voir recovery.js) ───────────────────────────
+// Le plafond de redémarrages tient SOUS restartPolicyMaxRetries (10, cf.
+// railway.json) : le worker doit se mettre en veille de lui-même bien avant que
+// Railway n'arrête définitivement le service — un service arrêté, c'est aussi
+// la page /qr injoignable, donc plus aucun moyen de ré-appairer.
+const MAX_CONSECUTIVE_SEND_FAILURES = parseInt(process.env.WHATSAPP_MAX_SEND_FAILURES || '3', 10);
+const MAX_PAGE_RELOADS = parseInt(process.env.WHATSAPP_MAX_PAGE_RELOADS || '2', 10);
+const MAX_SELF_RESTARTS = parseInt(process.env.WHATSAPP_MAX_SELF_RESTARTS || '4', 10);
+const SELF_RESTART_WINDOW_MS = parseInt(process.env.WHATSAPP_SELF_RESTART_WINDOW_MS || String(3600 * 1000), 10);
+// Durée de la mise en veille quand le budget de redémarrages est épuisé : au
+// bout du compte à rebours, le worker retente — une panne qui s'est résorbée
+// seule (backend rétabli, WhatsApp Web réparé) ne doit pas exiger un humain.
+const HALT_COOLDOWN_MS = parseInt(process.env.WHATSAPP_HALT_COOLDOWN_MS || String(1800 * 1000), 10);
 
 // ── Coffre de session (persistance durable, hors volume) ─────────────────────
 // Le volume Railway reste le chemin rapide ; le coffre est le filet quand
@@ -68,6 +83,33 @@ const state = {
 };
 
 let ready = false;
+
+const recovery = createRecovery({
+  dataPath: SESSION_PATH,
+  maxPageFailures: MAX_CONSECUTIVE_SEND_FAILURES,
+  maxReloads: MAX_PAGE_RELOADS,
+  maxRestarts: MAX_SELF_RESTARTS,
+  restartWindowMs: SELF_RESTART_WINDOW_MS,
+});
+
+/*
+ * Veille technique : le worker reste en vie mais cesse d'émettre.
+ *
+ * C'est la porte de sortie du cercle vicieux « échec → redémarrage → échec ».
+ * Tant qu'elle est fermée, aucune fiche n'est réclamée : rien ne sert de
+ * consommer des tentatives (et de repousser le backoff des fiches) sur un canal
+ * dont on sait qu'il ne passe pas. Les fiches restent en file côté Laravel et
+ * repartiront à la reprise — le check-in, lui, n'a jamais dépendu de ce worker.
+ */
+let sendingSuspendedUntil = 0;
+let suspensionReason = null;
+
+/** État réel à annoncer au backend — la veille prime sur le « ready » de la bibliothèque. */
+function currentStatus() {
+  if (sendingSuspendedUntil > Date.now()) return 'disconnected';
+
+  return ready ? 'ready' : state.session;
+}
 
 // ── Session whatsapp-web.js (LocalAuth persistant) ───────────────────────────
 /**
@@ -221,6 +263,73 @@ async function reportSession(status, reason = null) {
   }
 }
 
+/**
+ * Recyclage volontaire du conteneur (Chromium neuf), quand c'est le seul geste
+ * qui puisse encore réparer.
+ *
+ * Trois différences avec le `process.exit(1)` d'avant, et chacune corrige une
+ * panne constatée :
+ *
+ *  1. Le budget est consulté AVANT. Au-delà de N recyclages par heure, la
+ *     réparation n'en est plus une : on passe en veille au lieu de brûler le
+ *     quota de crashs Railway (10, après quoi le service est arrêté pour de bon).
+ *  2. L'arrêt est PROPRE : Chromium est fermé et la session déposée au coffre,
+ *     comme sur SIGTERM. Couper Node avec le navigateur en pleine écriture
+ *     laissait un profil LocalAuth incohérent — le « redémarrage réparateur »
+ *     abîmait la session qu'il devait préserver.
+ *  3. L'état annoncé est « initializing », pas « disconnected ». Un recyclage
+ *     décidé par le worker n'est pas une perte de session : l'annoncer comme
+ *     telle envoyait aux administrateurs, à chaque tour de boucle, un email
+ *     « session temporairement déconnectée » qui ne décrivait rien de réel.
+ */
+async function selfRestart(reason) {
+  if (recovery.restartBudgetExhausted()) {
+    return haltSending(`${reason} — budget de redémarrages épuisé`);
+  }
+
+  const count = recovery.noteRestart(reason);
+  console.error(`[whatsapp] redémarrage du conteneur (${count}/${MAX_SELF_RESTARTS} sur la fenêtre) — ${reason}. La session LocalAuth est conservée.`);
+  await reportSession('initializing', `Recyclage technique du worker — ${reason}`);
+
+  return shutdown('auto-restart', 1);
+}
+
+/**
+ * Mise en veille : on arrête d'émettre pour un temps, sans quitter.
+ *
+ * Contrairement au recyclage, la veille décrit un vrai problème non résolu —
+ * elle s'annonce donc en « disconnected », ce qui alerte les administrateurs
+ * (une fois : la déduplication d'alerte porte sur l'événement, et
+ * `last_ready_at` ne bouge plus tant qu'on n'a pas repris).
+ */
+async function haltSending(reason) {
+  // Idempotente : la sonde de vivacité et la boucle d'envoi peuvent toutes deux
+  // buter sur le même mur. Sans ce garde, chacune repousserait le compte à
+  // rebours de la précédente — une veille qui ne finit jamais.
+  if (sendingSuspendedUntil > Date.now()) return;
+
+  sendingSuspendedUntil = Date.now() + HALT_COOLDOWN_MS;
+  suspensionReason = reason;
+  const minutes = Math.round(HALT_COOLDOWN_MS / 60000);
+  console.error(`[whatsapp] envois suspendus ${minutes} min — ${reason}. Le service reste joignable (/health, /qr, /debug).`);
+  await reportSession(
+    'disconnected',
+    `Envois suspendus ${minutes} min après échecs répétés — ${reason}`,
+  );
+}
+
+/** Fin de veille : on redonne sa chance au canal. */
+function resumeSendingIfDue() {
+  if (!sendingSuspendedUntil || sendingSuspendedUntil > Date.now()) return false;
+
+  sendingSuspendedUntil = 0;
+  suspensionReason = null;
+  recovery.success(); // compteurs remis à neuf : la veille valait la sanction
+  console.log('[whatsapp] fin de la veille technique — reprise des envois.');
+
+  return true;
+}
+
 /*
  * Watchdog anti-blocage au démarrage.
  *
@@ -245,11 +354,13 @@ const watchdog = setTimeout(() => {
   if (sessionStore.shouldWipeOnStartupTimeout()) {
     console.error('[whatsapp] bloqué au démarrage — effacement de la session EXPLICITEMENT autorisé (WHATSAPP_ALLOW_SESSION_WIPE=1).');
     wipeSession(SESSION_PATH);
-  } else {
-    console.error('[whatsapp] bloqué au démarrage (ni QR ni connexion) — redémarrage du conteneur. La session est CONSERVÉE.');
   }
 
-  process.exit(1); // Railway relance le conteneur
+  // Passe par le frein commun : une boucle de démarrages ratés est le plus sûr
+  // moyen d'épuiser le quota Railway et de rendre /qr injoignable — c'est-à-dire
+  // de supprimer le seul geste qui aurait pu réparer.
+  selfRestart('bloqué au démarrage (ni QR ni connexion)')
+    .catch((err) => console.warn('[whatsapp] recyclage au démarrage :', err.message));
 }, WATCHDOG_MS);
 
 /** Désarme le compte à rebours dès qu'un signe de vie arrive, quel qu'il soit. */
@@ -339,7 +450,10 @@ client.on('ready', () => {
   ready = true;
   state.qrDataUrl = null; // plus besoin du QR une fois connecté
   console.log('[whatsapp] session prête.');
-  reportSession('ready');
+  // Une veille technique en cours n'est pas levée par un simple « ready » : le
+  // canal a échoué de façon répétée alors que la bibliothèque se disait déjà
+  // prête. C'est la fin du compte à rebours qui décide, pas cet événement.
+  if (sendingSuspendedUntil <= Date.now()) reportSession('ready');
   attachPageDiagnostics();
   startPageLivenessWatchdog();
 
@@ -386,6 +500,16 @@ function startPageLivenessWatchdog() {
   let misses = 0;
   let reloads = 0;
   livenessTimer = setInterval(async () => {
+    // En veille technique, la décision est déjà prise : sonder pour escalader de
+    // nouveau ne ferait que relancer la boucle qu'on vient d'interrompre. On
+    // repart d'une ardoise vierge quand la veille se lève.
+    if (sendingSuspendedUntil > Date.now()) {
+      misses = 0;
+      reloads = 0;
+
+      return;
+    }
+
     try {
       await withTimeout(client.pupPage.evaluate('1'), 15000, 'sonde de vivacité');
       misses = 0;
@@ -398,24 +522,36 @@ function startPageLivenessWatchdog() {
       // 1er niveau : recharger la page — un reload crée un renderer NEUF sans
       // consommer le budget de redémarrages Railway (10 crashs max avant arrêt
       // définitif du service). La session LocalAuth du profil est réutilisée.
-      if (reloads < 2) {
+      if (reloads < MAX_PAGE_RELOADS) {
         reloads += 1;
         misses = 0;
-        console.warn(`[whatsapp] rechargement de la page WhatsApp (tentative ${reloads}/2)…`);
-        try {
-          await withTimeout(client.pupPage.reload({ waitUntil: 'domcontentloaded' }), 60000, 'reload');
-          console.log('[whatsapp] page rechargée.');
-        } catch (reloadErr) {
-          console.warn('[whatsapp] reload échoué:', reloadErr.message);
-        }
+        console.warn(`[whatsapp] rechargement de la page WhatsApp (tentative ${reloads}/${MAX_PAGE_RELOADS})…`);
+        await reloadPage();
         return;
       }
 
-      // 2e niveau : le reload ne suffit pas → redémarrage complet du conteneur.
-      console.error('[whatsapp] page WhatsApp morte malgré les reloads (OOM renderer probable) — redémarrage du conteneur.');
-      reportSession('disconnected', 'page morte (OOM renderer probable) — auto-restart').finally(() => process.exit(1));
+      // 2e niveau : le reload ne suffit pas → recyclage complet du conteneur.
+      await selfRestart('page WhatsApp morte malgré les reloads (OOM renderer probable)');
     }
   }, 60000);
+}
+
+/**
+ * Recharge la page WhatsApp Web : un renderer neuf, sans quitter le conteneur
+ * ni toucher au profil LocalAuth. C'est toujours le geste à tenter avant le
+ * recyclage — il ne coûte rien au budget de crashs Railway.
+ */
+async function reloadPage() {
+  try {
+    await withTimeout(client.pupPage.reload({ waitUntil: 'domcontentloaded' }), 60000, 'reload');
+    console.log('[whatsapp] page rechargée.');
+
+    return true;
+  } catch (err) {
+    console.warn('[whatsapp] reload échoué:', err.message);
+
+    return false;
+  }
 }
 
 client.on('auth_failure', (msg) => {
@@ -493,22 +629,25 @@ async function sendJob(job, minIntervalSeconds) {
   state.sentCount += 1;
 
   await api.post(`/internal/whatsapp/jobs/${job.id}/result`, {
+    // `$1` : les builds WhatsApp Web récents renomment `_serialized` (voir le
+    // correctif patches/whatsapp-web.js). Sans ce repli, un envoi réussi était
+    // journalisé sans identifiant de message — donc introuvable en cas de litige.
     status: 'sent',
-    message_id: sent?.id?._serialized || sent?.id?.id || null,
+    message_id: sent?.id?._serialized ?? sent?.id?.$1 ?? sent?.id?.id ?? null,
   });
 
   // Délai minimum anti-ban entre deux messages.
   await sleep(Math.max(minIntervalSeconds, 1) * 1000);
 }
 
-// Auto-réparation : au-delà de N échecs d'envoi consécutifs, Chromium est
-// considéré comme « zombie » (page WhatsApp Web pendue, ex. Runtime.callFunctionOn
-// timed out) — on quitte, Railway relance le conteneur avec un navigateur frais.
-const MAX_CONSECUTIVE_SEND_FAILURES = parseInt(process.env.WHATSAPP_MAX_SEND_FAILURES || '3', 10);
-let consecutiveSendFailures = 0;
-
 async function tick() {
   state.lastPollAt = new Date().toISOString();
+
+  // Sortie de veille : les compteurs repartent à neuf et on réannonce l'état
+  // réel, faute de quoi le backend nous croirait déconnectés indéfiniment.
+  if (resumeSendingIfDue() && ready) {
+    await reportSession('ready');
+  }
 
   try {
     // Le backend décide si on peut avancer (activé, non en pause, session prête).
@@ -518,13 +657,16 @@ async function tick() {
     // (ex. notre POST « ready » perdu pendant un redéploiement backend), on
     // re-signale notre état réel. Sans ça, le backend restait « initializing »
     // pour toujours → distribution gelée alors que la session était connectée.
-    const localStatus = ready ? 'ready' : state.session;
+    // ⚠️ Pendant une veille technique, l'état réel EST « disconnected » : sans
+    // cette nuance, la resynchronisation aurait aussitôt réannoncé « ready » et
+    // annulé la mise en veille qu'on venait de décider.
+    const localStatus = currentStatus();
     if (control.session_status && control.session_status !== localStatus) {
       console.warn(`[whatsapp] resynchronisation d'état : backend=${control.session_status}, local=${localStatus}`);
       await reportSession(localStatus, state.reason);
     }
 
-    if (!ready || !control.enabled || control.paused) {
+    if (!ready || sendingSuspendedUntil > Date.now() || !control.enabled || control.paused) {
       return IDLE_POLL_MS;
     }
 
@@ -535,20 +677,50 @@ async function tick() {
 
     try {
       await withTimeout(sendJob(job, control.min_interval_seconds), SEND_TIMEOUT_MS, `envoi ${job.id}`);
-      consecutiveSendFailures = 0;
+      recovery.success();
     } catch (err) {
       state.failedCount += 1;
-      console.warn(`[whatsapp] envoi ${job.id} échoué:`, err.message);
+
+      /*
+       * Toute la nuance est ici (voir recovery.js) : un échec d'envoi n'est pas
+       * forcément un navigateur à jeter. Une photo que le backend ne rend pas,
+       * un destinataire refusé, une fiche rejetée — le redémarrage n'y change
+       * rien, et le déclencher revenait à transformer l'incident d'UNE fiche en
+       * panne de tout le canal, jusqu'à épuisement du quota Railway.
+       */
+      const outcome = recovery.failure(err);
+      console.warn(`[whatsapp] envoi ${job.id} échoué [${outcome.kind}]:`, err.message);
       await api.post(`/internal/whatsapp/jobs/${job.id}/result`, {
         status: 'failed',
-        error: String(err.message || err).slice(0, 500),
+        // La famille est journalisée avec l'erreur : le journal admin distingue
+        // désormais d'un coup d'œil « le backend n'a pas rendu la photo » de
+        // « la page WhatsApp ne répond plus » — la question qu'on ne pouvait
+        // trancher qu'en fouillant des journaux Railway déjà évincés.
+        error: `[${outcome.kind}] ${String(err.message || err)}`.slice(0, 500),
       }).catch(() => {});
 
-      consecutiveSendFailures += 1;
-      if (consecutiveSendFailures >= MAX_CONSECUTIVE_SEND_FAILURES) {
-        console.error(`[whatsapp] ${consecutiveSendFailures} échecs d'envoi consécutifs — redémarrage du conteneur (Chromium frais). La session LocalAuth est conservée sur le volume.`);
-        await reportSession('disconnected', 'auto-restart après échecs d\'envoi consécutifs');
-        process.exit(1); // Railway relance le conteneur
+      switch (outcome.decision) {
+        // Panne backend/réseau : laisser au backend le temps de revenir plutôt
+        // que de consommer les tentatives des fiches suivantes pour rien.
+        case 'backoff':
+          return ERROR_BACKOFF_MS;
+
+        case 'reload':
+          console.warn(`[whatsapp] ${outcome.pageFailures} échecs d'envoi consécutifs imputables à la page — rechargement (tentative ${outcome.reloads}/${MAX_PAGE_RELOADS}).`);
+          await reloadPage();
+
+          return ERROR_BACKOFF_MS;
+
+        case 'restart':
+          await selfRestart(`${outcome.pageFailures} échecs d'envoi consécutifs, rechargements sans effet`);
+
+          return IDLE_POLL_MS;
+
+        default:
+          // Une page qui vient de faillir mérite un souffle : enchaîner sur la
+          // fiche suivante pendant qu'un envoi précédent est peut-être encore
+          // en vol, c'est empiler les évaluations sur un renderer déjà en peine.
+          return outcome.kind === 'page' ? ERROR_BACKOFF_MS : 0;
       }
     }
 
@@ -596,7 +768,22 @@ function requireToken(req, res, next) {
 
 app.get('/health', (_req, res) => {
   const { qrDataUrl, ...safe } = state;
-  res.json({ ok: ready, has_qr: !!qrDataUrl, ...safe });
+  const suspended = sendingSuspendedUntil > Date.now();
+  // `ok` reste l'état de la SESSION, pas celui de la file : une veille technique
+  // ne doit pas pouvoir être lue comme un conteneur à tuer — ce serait rouvrir
+  // la boucle de redémarrages que la veille existe pour fermer.
+  res.json({
+    ok: ready,
+    has_qr: !!qrDataUrl,
+    ...safe,
+    // Rend visible ce qui était le plus difficile à diagnostiquer : le worker
+    // se réparait en boucle sans que rien, hors des journaux Railway déjà
+    // évincés, n'en garde la trace.
+    self_restarts_last_hour: recovery.restartsInWindow(),
+    sending_suspended: suspended,
+    suspended_until: suspended ? new Date(sendingSuspendedUntil).toISOString() : null,
+    suspension_reason: suspended ? suspensionReason : null,
+  });
 });
 
 // Diagnostic : version WhatsApp Web réellement chargée dans Chromium (permet de
@@ -732,7 +919,7 @@ app.listen(HEALTH_PORT, () => console.log(`[whatsapp] health sur :${HEALTH_PORT}
  * est borné dans le temps, un arrêt ne doit jamais traîner.
  */
 let shuttingDown = false;
-async function shutdown(signal) {
+async function shutdown(signal, exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[whatsapp] ${signal} reçu — arrêt propre.`);
@@ -765,7 +952,10 @@ async function shutdown(signal) {
     }
   }
 
-  process.exit(0);
+  // Code 1 pour un recyclage volontaire : Railway ne relance que sur échec
+  // (restartPolicyType ON_FAILURE). Code 0 pour un arrêt demandé par la
+  // plateforme — la relance, s'il y en a une, ne nous regarde pas.
+  process.exit(exitCode);
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));

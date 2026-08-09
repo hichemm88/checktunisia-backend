@@ -83,9 +83,45 @@ déploiement ».
 
 Détails, garde-fous et procédure de vérification : [`docs/session-whatsapp.md`](../docs/session-whatsapp.md).
 
+## Que fait le worker quand un envoi échoue ?
+
+Un échec d'envoi n'est pas un navigateur à jeter. La politique vit dans
+[`recovery.js`](recovery.js) et classe chaque erreur avant d'agir :
+
+| Famille | Exemples | Réaction |
+|---------|----------|----------|
+| `backend` | photo introuvable (404), Laravel en redéploiement, DNS | temporisation — le redémarrage n'y peut rien |
+| `job` | destinataire refusé, fiche rejetée, erreur inconnue | on passe à la fiche suivante ; le backoff par fiche vit côté Laravel |
+| `page` | envoi sans réponse, `Protocol error`, `Target closed` | escalade ci-dessous |
+
+Escalade sur la famille `page` uniquement, après `WHATSAPP_MAX_SEND_FAILURES`
+échecs **consécutifs** :
+
+1. **rechargement** de la page WhatsApp Web (renderer neuf, gratuit pour le
+   quota Railway) — jusqu'à `WHATSAPP_MAX_PAGE_RELOADS` fois ;
+2. **recyclage du conteneur**, par un arrêt *propre* (Chromium fermé, session
+   déposée au coffre) — jamais plus de `WHATSAPP_MAX_SELF_RESTARTS` fois par
+   `WHATSAPP_SELF_RESTART_WINDOW_MS` ;
+3. **veille technique** quand ce budget est épuisé : le worker cesse d'émettre
+   pendant `WHATSAPP_HALT_COOLDOWN_MS`, le dit une fois aux administrateurs, et
+   **reste en vie** — `/health`, `/qr` et `/debug` demeurent joignables.
+
+> Pourquoi ce plafond : `restartPolicyMaxRetries: 10` (voir `railway.json`). Au
+> dixième crash, Railway arrête le service définitivement — donc aussi `/qr`,
+> le seul geste qui aurait pu réparer. Un worker en veille vaut infiniment mieux
+> qu'un service éteint.
+
+Le compteur de recyclages est écrit sur le volume (`.qayed-restarts.json`, hors
+archive) : un compteur en mémoire serait remis à zéro par ce qu'il doit borner.
+
+Un recyclage volontaire s'annonce au backend en **`initializing`**, pas en
+`disconnected` : ce n'est pas une perte de session, et l'annoncer comme telle
+envoyait une fausse alerte à chaque tour de boucle.
+
 ## Santé
 
-- `GET /health` (ce service) : état local de la session + compteurs.
+- `GET /health` (ce service) : état local de la session + compteurs, dont
+  `self_restarts_last_hour`, `sending_suspended` et `suspension_reason`.
 - `GET /session-vault?token=…` : session sur le disque + copie en coffre
   (métadonnées seules — jamais un octet de la session).
 - `GET /api/v1/health/whatsapp` (Laravel) : état consolidé + profondeur de file.
@@ -99,6 +135,11 @@ npm test     # node --test, sans dépendance
 Couvre la résilience de la session : une session existante n'est jamais
 effacée, une instance recréée la retrouve, une session vide ne peut pas écraser
 le coffre, et aucun secret n'atteint les journaux.
+
+Couvre aussi la politique de reprise (`recovery.test.js`) : une photo
+introuvable ne redémarre pas le conteneur, une page muette est rechargée avant
+d'être recyclée, et le nombre de recyclages reste borné même à travers les
+redémarrages qu'il compte.
 
 ## Sécurité
 
