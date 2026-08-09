@@ -64,7 +64,7 @@ class NotifyExpiringSubscriptions extends Command
                     'trial_message' => $days > 0
                         ? "Votre essai gratuit se termine dans {$days} jour(s), le {$sub->expires_at->format('d/m/Y')}."
                         : "Votre essai gratuit se termine aujourd'hui.",
-                    'cta_button' => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), 'Voir les abonnements'),
+                    'cta_button' => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), 'Voir les abonnements'),
                 ]);
 
                 AuditLogger::log('subscription.trial_reminder_sent', $sub, newValues: ['days_remaining' => $days]);

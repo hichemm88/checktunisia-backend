@@ -148,7 +148,7 @@ class EmailTemplateAdminController extends Controller
             $ok = SystemMailer::send('trial_ending', $to, [
                 'name'          => $name,
                 'trial_message' => $trialMessage,
-                'cta_button' => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), SystemMailer::label('view_subscriptions', $locale)),
+                'cta_button' => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), SystemMailer::label('view_subscriptions', $locale)),
             ], $locale);
             if ($ok) $sent++;
         }

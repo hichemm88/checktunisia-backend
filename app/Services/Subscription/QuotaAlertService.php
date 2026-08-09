@@ -108,7 +108,7 @@ class QuotaAlertService
             'used'       => (string) $status['used'],
             'quota'      => (string) $status['quota'],
             'percent'    => (string) ($status['percent'] ?? 0),
-            'cta_button' => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), SystemMailer::label('view_subscriptions', $locale)),
+            'cta_button' => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), SystemMailer::label('view_subscriptions', $locale)),
         ], $locale);
     }
 
@@ -135,7 +135,7 @@ class QuotaAlertService
             'name'           => $org->name,
             'quota'          => (string) $status['quota'],
             'overage_notice' => self::overageNotice($status, $locale),
-            'cta_button'     => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), SystemMailer::label('upgrade_plan', $locale)),
+            'cta_button'     => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), SystemMailer::label('upgrade_plan', $locale)),
         ], $locale);
     }
 
@@ -224,7 +224,7 @@ class QuotaAlertService
             'name'           => $org->name,
             'suggested_plan' => $figures['suggested_plan'],
             'comparison_box' => self::comparisonBox($figures['current'], $figures['suggested'], $locale),
-            'cta_button'     => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), SystemMailer::label('upgrade_plan', $locale)),
+            'cta_button'     => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), SystemMailer::label('upgrade_plan', $locale)),
         ], $locale);
     }
 }

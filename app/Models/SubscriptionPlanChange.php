@@ -16,6 +16,17 @@ class SubscriptionPlanChange extends Model
 
     public const KIND_UPGRADE   = 'upgrade';
     public const KIND_DOWNGRADE = 'downgrade';
+    /**
+     * Souscription : le client règle son plan pour la première fois (fin
+     * d'essai) ou reprend un compte retombé, SANS changer de formule.
+     * Financièrement identique à un upgrade — facture puis bascule au
+     * paiement — mais c'est un évènement métier distinct, qui mérite son
+     * propre nom dans l'historique du client.
+     */
+    public const KIND_SUBSCRIBE = 'subscribe';
+
+    /** Changements qui se paient d'avance et s'appliquent au paiement confirmé. */
+    public const PAID_UPFRONT = [self::KIND_UPGRADE, self::KIND_SUBSCRIBE];
 
     public const STATUS_PENDING_PAYMENT = 'pending_payment';
     public const STATUS_SCHEDULED       = 'scheduled';

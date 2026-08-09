@@ -111,28 +111,28 @@ class SystemMailer
             'subscription_reminder' => ['name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'expires_at' => '15/07/2026', 'days_remaining' => '7'],
             'trial_ending' => [
                 'name' => 'Riad Al Warda', 'trial_message' => 'Votre essai gratuit se termine dans 2 jour(s), le 15/07/2026.',
-                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('view_subscriptions', $locale)),
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/subscription'), self::label('view_subscriptions', $locale)),
             ],
             'invoice_overdue' => [
                 'name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'invoice_number' => 'INV-2026-0042', 'days_late' => '7',
                 'credentials_box' => self::amountBox(Money::tnd(119), 'INV-2026-0042', $locale),
-                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('pay_invoice', $locale)),
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/subscription'), self::label('pay_invoice', $locale)),
             ],
             'invoice_available' => [
                 'name' => 'Kasbahost SARL', 'plan_name' => 'Pro', 'invoice_number' => 'INV-2026-0042',
                 'credentials_box' => self::amountBox(Money::tnd(119), 'INV-2026-0042', $locale),
-                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('view_invoice', $locale)),
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/subscription'), self::label('view_invoice', $locale)),
             ],
             'quota_warning' => [
                 'name' => 'Dar Omi', 'used' => '82', 'quota' => '100', 'percent' => '82',
-                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('view_subscriptions', $locale)),
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/subscription'), self::label('view_subscriptions', $locale)),
             ],
             'quota_reached' => [
                 'name' => 'Dar Omi', 'quota' => '100',
                 'overage_notice' => QuotaAlertService::overageNotice([
                     'billable' => true, 'unit_price' => 10.0, 'bundle_size' => 50, 'unlimited' => false,
                 ], $locale),
-                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('upgrade_plan', $locale)),
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/subscription'), self::label('upgrade_plan', $locale)),
             ],
             'quota_upsell' => [
                 'name' => 'Dar Omi', 'suggested_plan' => 'Professionnel',
@@ -141,7 +141,7 @@ class SystemMailer
                     ['label' => 'Professionnel (600 check-ins / mois)', 'amount' => Money::tnd(119)],
                     $locale,
                 ),
-                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/settings'), self::label('upgrade_plan', $locale)),
+                'cta_button' => self::ctaButton(self::frontendUrl('/hotel/subscription'), self::label('upgrade_plan', $locale)),
             ],
             default => [],
         };

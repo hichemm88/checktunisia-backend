@@ -49,6 +49,13 @@ use Illuminate\Support\Facades\DB;
  */
 class PlanChangeService
 {
+    /**
+     * États dans lesquels la période en cours n'a PAS été payée : le client
+     * doit régler sa formule (première fois ou reprise). Exposé au front via
+     * `GET /hotel/subscription` pour que la liste ne vive qu'ici.
+     */
+    public const AWAITING_PAYMENT_STATUSES = ['trial', 'trial_expired', 'expired', 'suspended'];
+
     public function __construct(private readonly BillingService $billing) {}
 
     // ─── Lecture : ce que le client voit AVANT de confirmer ──────────────────
@@ -93,10 +100,10 @@ class PlanChangeService
         // Le crédit ne récompense que ce qui a réellement été payé et n'a pas
         // encore été consommé. Un essai, un compte expiré ou suspendu n'a
         // rien payé d'avance : crédit nul, pas de cadeau inventé.
-        $credit   = $kind === SubscriptionPlanChange::KIND_UPGRADE
+        $credit   = in_array($kind, SubscriptionPlanChange::PAID_UPFRONT, true)
             ? $this->unusedCredit($sub, $current['cycle_total'], $targetCost['cycle_total'])
             : 0.0;
-        $amountDue = $kind === SubscriptionPlanChange::KIND_UPGRADE
+        $amountDue = in_array($kind, SubscriptionPlanChange::PAID_UPFRONT, true)
             ? round(max(0, $targetCost['cycle_total'] - $credit), 3)
             : 0.0;
 
@@ -133,14 +140,28 @@ class PlanChangeService
         if (!$target->is_active || !$target->is_public) {
             return [false, "Ce plan n'est pas souscriptible."];
         }
-        if ($sub->plan_id === $target->id) {
-            return [false, 'Votre compte est déjà sur ce plan.'];
-        }
         if ($sub->status === 'cancelled') {
             return [false, 'Cet abonnement est résilié — contactez contact@qayed.tn pour le reprendre.'];
         }
+        // Rester sur son plan n'est un « non-changement » que si la période
+        // en cours est déjà payée. En essai ou sur un compte retombé, c'est
+        // au contraire l'acte le plus courant : payer la formule qu'on avait
+        // choisie. Le refuser obligeait le client à passer par nous.
+        if ($sub->plan_id === $target->id && !$this->awaitsPayment($sub)) {
+            return [false, 'Votre compte est déjà sur ce plan.'];
+        }
 
         return [true, null];
+    }
+
+    /**
+     * L'abonnement attend-il un premier règlement (ou un règlement de
+     * reprise) ? Ces états n'ont RIEN payé d'avance : pas de crédit, et une
+     * souscription sur le même plan y est légitime.
+     */
+    public function awaitsPayment(Subscription $sub): bool
+    {
+        return in_array($sub->status, self::AWAITING_PAYMENT_STATUSES, true);
     }
 
     /**
@@ -151,6 +172,13 @@ class PlanChangeService
      */
     public function kindFor(Subscription $sub, SubscriptionPlan $target): string
     {
+        // Un compte qui n'a pas encore payé sa période SOUSCRIT, quel que
+        // soit le plan visé : parler d'« upgrade » à un essai qui règle sa
+        // première facture n'aurait aucun sens pour lui.
+        if ($this->awaitsPayment($sub)) {
+            return SubscriptionPlanChange::KIND_SUBSCRIBE;
+        }
+
         $from = (float) ($sub->plan?->price_monthly ?? 0);
 
         return (float) $target->price_monthly >= $from
@@ -299,7 +327,7 @@ class PlanChangeService
                 'from_plan_id'               => $sub->plan_id,
                 'to_plan_id'                 => $target->id,
                 'kind'                       => $preview['kind'],
-                'status'                     => $preview['kind'] === SubscriptionPlanChange::KIND_UPGRADE
+                'status'                     => in_array($preview['kind'], SubscriptionPlanChange::PAID_UPFRONT, true)
                     ? SubscriptionPlanChange::STATUS_PENDING_PAYMENT
                     : SubscriptionPlanChange::STATUS_SCHEDULED,
                 'effective_at'               => $preview['effective_at'] ? Carbon::parse($preview['effective_at']) : null,
@@ -312,8 +340,8 @@ class PlanChangeService
                 'requested_by'               => $actor?->id,
             ]);
 
-            if ($change->kind === SubscriptionPlanChange::KIND_UPGRADE) {
-                // Un upgrade à 0 TND (crédit couvrant tout le prix) n'a pas de
+            if (in_array($change->kind, SubscriptionPlanChange::PAID_UPFRONT, true)) {
+                // Un achat à 0 TND (crédit couvrant tout le prix) n'a pas de
                 // facture à payer : il s'applique tout de suite.
                 if ((float) $change->amount_due <= 0) {
                     $this->applyChange($change, 'upgrade_applied');
@@ -355,8 +383,10 @@ class PlanChangeService
             'status'          => 'sent',
             'due_at'          => now()->addDays(7),
             'notes'           => sprintf(
-                'Changement de plan — %s → %s (%s). Nouvelle période complète à compter du paiement.%s',
-                $sub->plan?->name ?? '—', $target->name,
+                '%s (%s). Nouvelle période complète à compter du paiement.%s',
+                $change->kind === SubscriptionPlanChange::KIND_SUBSCRIBE
+                    ? sprintf('Souscription — %s', $target->name)
+                    : sprintf('Changement de plan — %s → %s', $sub->plan?->name ?? '—', $target->name),
                 $sub->billing_cycle === 'yearly' ? 'annuel' : 'mensuel',
                 $creditLine,
             ),
@@ -479,18 +509,32 @@ class PlanChangeService
             $updates['is_legacy_plan'] = false;
         }
 
-        if ($change->kind === SubscriptionPlanChange::KIND_UPGRADE) {
+        if (in_array($change->kind, SubscriptionPlanChange::PAID_UPFRONT, true)) {
             // Nouvelle période complète : le client vient de la régler.
             $updates['expires_at'] = $sub->billing_cycle === 'yearly'
                 ? now()->addYear()
                 : now()->addMonthNoOverflow();
             $updates['started_at'] = now();
-            // Un upgrade payé relance un compte retombé (expiré/suspendu).
+            // Un achat payé relance un compte retombé (essai, expiré, suspendu).
             if (in_array($sub->status, ['expired', 'suspended', 'trial', 'trial_expired'], true)) {
                 $updates['status']           = 'active';
                 $updates['suspended_at']     = null;
                 $updates['suspended_reason'] = null;
             }
+
+            // Le client vient de payer pour continuer : on émettra donc sa
+            // prochaine facture à l'échéance. Sans cela, un essai converti
+            // n'aurait plus JAMAIS de facture et s'éteindrait en silence.
+            // On ne réactive rien si le client a explicitement résilié —
+            // payer sa dernière échéance n'est pas se réabonner.
+            if (!$sub->cancellation_requested_at) {
+                $updates['auto_renew'] = true;
+            }
+
+            // La facture de renouvellement de la période qu'on vient de
+            // remplacer n'a plus d'objet : la laisser ouverte la ferait
+            // relancer, puis suspendre un client parfaitement à jour.
+            $this->voidSupersededRenewals($sub, $change->invoice_id);
         }
 
         $sub->update($updates);
@@ -508,9 +552,13 @@ class PlanChangeService
             'new_plan_id'      => $target->id,
             'notes'            => sprintf(
                 '%s vers %s (%s).',
-                $change->kind === SubscriptionPlanChange::KIND_UPGRADE ? 'Upgrade' : 'Downgrade',
+                match ($change->kind) {
+                    SubscriptionPlanChange::KIND_SUBSCRIBE => 'Souscription',
+                    SubscriptionPlanChange::KIND_UPGRADE   => 'Upgrade',
+                    default                                => 'Downgrade',
+                },
                 $target->name,
-                $change->kind === SubscriptionPlanChange::KIND_UPGRADE
+                in_array($change->kind, SubscriptionPlanChange::PAID_UPFRONT, true)
                     ? number_format((float) $change->amount_due, 3, '.', '').' TND réglés'
                     : 'effet au cycle suivant',
             ),
@@ -641,27 +689,58 @@ class PlanChangeService
     private function recordEvent(Subscription $sub, SubscriptionPlanChange $change, ?User $actor): void
     {
         $target = $change->toPlan()->first();
+        $amount = number_format((float) $change->amount_due, 3, '.', '');
+
+        $eventType = match ($change->kind) {
+            SubscriptionPlanChange::KIND_SUBSCRIBE => 'subscription_requested',
+            SubscriptionPlanChange::KIND_UPGRADE   => 'upgrade_requested',
+            default                                => 'downgrade_scheduled',
+        };
 
         SubscriptionEvent::create([
             'subscription_id'  => $sub->id,
-            'event_type'       => $change->kind === SubscriptionPlanChange::KIND_UPGRADE
-                ? 'upgrade_requested' : 'downgrade_scheduled',
+            'event_type'       => $eventType,
             'previous_status'  => $sub->status,
             'new_status'       => $sub->status,
             'previous_plan_id' => $sub->plan_id,
             'new_plan_id'      => $change->to_plan_id,
-            'notes'            => $change->kind === SubscriptionPlanChange::KIND_UPGRADE
-                ? sprintf('Upgrade vers %s demandé — %s TND à régler.', $target?->name, number_format((float) $change->amount_due, 3, '.', ''))
-                : sprintf('Downgrade vers %s programmé pour le %s.', $target?->name, $change->effective_at?->format('d/m/Y')),
+            'notes'            => match ($change->kind) {
+                SubscriptionPlanChange::KIND_SUBSCRIBE => sprintf('Souscription à %s demandée — %s TND à régler.', $target?->name, $amount),
+                SubscriptionPlanChange::KIND_UPGRADE   => sprintf('Upgrade vers %s demandé — %s TND à régler.', $target?->name, $amount),
+                default                                => sprintf('Downgrade vers %s programmé pour le %s.', $target?->name, $change->effective_at?->format('d/m/Y')),
+            },
             'performed_by'     => $actor?->id,
             'created_at'       => now(),
         ]);
 
         AuditLogger::log(
-            $change->kind === SubscriptionPlanChange::KIND_UPGRADE ? 'subscription.upgrade_requested' : 'subscription.downgrade_scheduled',
+            "subscription.{$eventType}",
             $sub,
             newValues: ['to_plan' => $target?->slug, 'amount_due' => (string) $change->amount_due],
         );
+    }
+
+    /**
+     * Annule les factures de renouvellement rendues sans objet par un achat
+     * qui vient d'ouvrir une nouvelle période complète.
+     *
+     * Sans cela, le client garde en travers une facture correspondant à une
+     * période qu'il vient de racheter : elle part en relance, puis finit par
+     * le faire suspendre alors qu'il est à jour.
+     */
+    private function voidSupersededRenewals(Subscription $sub, ?string $exceptInvoiceId): void
+    {
+        Invoice::where('subscription_id', $sub->id)
+            ->whereIn('status', ['draft', 'sent', 'overdue'])
+            ->where('metadata->renewal', true)
+            ->when($exceptInvoiceId, fn ($q) => $q->whereKeyNot($exceptInvoiceId))
+            ->get()
+            ->each(function (Invoice $invoice) {
+                $invoice->update(['status' => 'void']);
+                AuditLogger::log('invoice.voided_superseded', $invoice, newValues: [
+                    'reason' => 'Période rachetée par un changement de plan réglé.',
+                ]);
+            });
     }
 
     private function forgetCaches(Subscription $sub): void
@@ -676,8 +755,8 @@ class PlanChangeService
 
     private function notifyApplied(Subscription $sub, SubscriptionPlanChange $change, SubscriptionPlan $target): void
     {
-        $this->notifyClient($sub, $change->kind === SubscriptionPlanChange::KIND_UPGRADE
-            ? 'plan_change_applied' : 'plan_change_applied', [
+        $this->notifyClient($sub, $change->kind === SubscriptionPlanChange::KIND_SUBSCRIBE
+            ? 'subscription_activated' : 'plan_change_applied', [
             'plan_name'  => $target->name,
             'expires_at' => $sub->expires_at?->format('d/m/Y') ?? '—',
         ]);

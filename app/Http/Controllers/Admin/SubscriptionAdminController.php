@@ -223,7 +223,7 @@ class SubscriptionAdminController extends Controller {
                 'plan_name'      => $sub->plan?->name ?? '—',
                 'invoice_number' => $invoice->invoice_number,
                 'credentials_box' => \App\Services\Email\SystemMailer::amountBox(\App\Support\Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number),
-                'cta_button'      => \App\Services\Email\SystemMailer::ctaButton(\App\Services\Email\SystemMailer::frontendUrl('/hotel/settings'), 'Voir la facture'),
+                'cta_button'      => \App\Services\Email\SystemMailer::ctaButton(\App\Services\Email\SystemMailer::frontendUrl('/hotel/subscription'), 'Voir la facture'),
             ]);
         }
 

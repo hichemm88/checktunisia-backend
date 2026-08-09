@@ -137,6 +137,15 @@ HTML,
 {{cta_button}}
 HTML,
         ],
+        'subscription_activated' => [
+            'subject' => "Votre abonnement Qayed est actif — {{plan_name}}",
+            'body_html' => <<<'HTML'
+<p>Bonjour <strong>{{name}}</strong>,</p>
+<p>Votre paiement est confirmé : votre abonnement <strong>{{plan_name}}</strong> est actif jusqu'au <strong>{{expires_at}}</strong>.</p>
+<p>Vous pouvez enregistrer vos voyageurs sans limite de temps. Nous vous enverrons votre prochaine facture avant l'échéance — le règlement reste à votre initiative, aucun prélèvement n'est effectué automatiquement.</p>
+{{cta_button}}
+HTML,
+        ],
         'subscription_reactivated' => [
             'subject' => "Renouvellement rétabli — Qayed",
             'body_html' => <<<'HTML'
@@ -277,6 +286,15 @@ HTML,
 {{cta_button}}
 HTML,
             ],
+            'subscription_activated' => [
+                'subject' => 'Your Qayed subscription is active — {{plan_name}}',
+                'body_html' => <<<'HTML'
+<p>Hello <strong>{{name}}</strong>,</p>
+<p>Your payment is confirmed: your <strong>{{plan_name}}</strong> subscription is active until <strong>{{expires_at}}</strong>.</p>
+<p>You can register your travellers without any time limit. We will send your next invoice before the due date — paying it stays your decision, nothing is charged automatically.</p>
+{{cta_button}}
+HTML,
+            ],
             'subscription_reactivated' => [
                 'subject' => 'Renewal restored — Qayed',
                 'body_html' => <<<'HTML'
@@ -407,6 +425,15 @@ HTML,
 <p>سجّلنا إيقاف تجديد اشتراككم <strong>{{plan_name}}</strong>.</p>
 <p><strong>يبقى وصولكم مفتوحًا حتى {{expires_at}}.</strong> حتى ذلك الحين لا يتغيّر شيء: تواصلون تسجيل مسافريكم كالمعتاد.</p>
 <p>تُحفظ بطاقاتكم وفواتيركم وسجلّكم. يمكنكم استعادة التجديد في أي وقت من مساحتكم.</p>
+{{cta_button}}
+HTML,
+            ],
+            'subscription_activated' => [
+                'subject' => 'اشتراككم في قيد نشط — {{plan_name}}',
+                'body_html' => <<<'HTML'
+<p>مرحبًا <strong>{{name}}</strong>،</p>
+<p>تأكّد دفعكم: اشتراككم <strong>{{plan_name}}</strong> نشط حتى <strong>{{expires_at}}</strong>.</p>
+<p>يمكنكم تسجيل مسافريكم دون حدّ زمني. سنرسل لكم فاتورتكم القادمة قبل موعد الاستحقاق — ويبقى السداد بمبادرة منكم، ولا يُخصم أي مبلغ تلقائيًا.</p>
 {{cta_button}}
 HTML,
             ],

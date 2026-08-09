@@ -59,7 +59,7 @@ class SuspendExpiredSubscriptions extends Command
                 SystemMailer::send('trial_ending', $to, [
                     'name'          => $name,
                     'trial_message' => "Votre essai gratuit s'est terminé le " . $sub->expires_at->format('d/m/Y') . '.',
-                    'cta_button'    => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), 'Voir les abonnements'),
+                    'cta_button'    => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), 'Voir les abonnements'),
                 ]);
             } else {
                 SystemMailer::send('account_suspended', $to, [

@@ -73,8 +73,48 @@ class SubscriptionController extends Controller
                 ],
                 // Changement de plan en cours (attente de paiement ou programmé).
                 'pending_change' => $this->pendingChangePayload($sub),
+                // Prochaine échéance : quand, combien, et si une facture
+                // partira toute seule. Le client ne doit jamais découvrir
+                // le montant sur la facture.
+                'next_renewal'   => $this->nextRenewalPayload($sub),
+                // La période en cours reste-t-elle à régler ? C'est le
+                // backend qui tranche : le front ne rejoue pas la liste des
+                // statuts concernés, elle dériverait.
+                'awaiting_payment' => app(PlanChangeService::class)->awaitsPayment($sub),
             ],
         ]);
+    }
+
+    /**
+     * Ce qui attend le client à l'échéance.
+     *
+     * `auto_invoiced` dit la vérité sur notre capacité réelle : Qayed émet
+     * la facture et prévient, le règlement reste une action du client
+     * (Flouci ne permet aucun prélèvement récurrent). Le front s'appuie
+     * dessus pour ne jamais parler de « prélèvement automatique ».
+     */
+    private function nextRenewalPayload(Subscription $sub): array
+    {
+        $scheduled = SubscriptionPlanChange::where('subscription_id', $sub->id)
+            ->where('status', SubscriptionPlanChange::STATUS_SCHEDULED)
+            ->latest('created_at')
+            ->first();
+
+        // Un downgrade programmé change le montant de la prochaine échéance :
+        // c'est le nouveau plan qui sera facturé, pas l'actuel.
+        $amount = $scheduled
+            ? (float) $scheduled->next_renewal_amount
+            : \App\Services\Subscription\PlanPricing::cycleAmount($sub);
+
+        return [
+            'due_at'        => $sub->expires_at,
+            'amount'        => round($amount, 3),
+            'billing_cycle' => $sub->billing_cycle,
+            'plan_name'     => $scheduled?->toPlan?->name ?? $sub->plan?->name,
+            // Une facture partira-t-elle seule à l'échéance ?
+            'auto_invoiced' => (bool) $sub->auto_renew && $sub->status === 'active',
+            'invoice_lead_days' => \App\Services\Billing\BillingService::RENEWAL_WINDOW_DAYS,
+        ];
     }
 
     /** Le changement en cours, tel que le client doit le voir (null s'il n'y en a pas). */

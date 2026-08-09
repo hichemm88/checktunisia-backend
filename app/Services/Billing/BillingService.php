@@ -97,14 +97,22 @@ class BillingService
             ? $periodStart->copy()->addYear()
             : $periodStart->copy()->addMonth();
 
-        // Déjà facturé pour cette période (ou facture encore ouverte) ? On ne double pas.
-        $open = Invoice::where('subscription_id', $sub->id)
+        // Déjà facturé pour cette période, ou renouvellement déjà en attente ?
+        // On ne double pas.
+        //
+        // Le garde ne regarde QUE les factures de renouvellement : une
+        // facture de changement de plan ou de dépassement encore ouverte ne
+        // doit pas priver le client de son renouvellement. Il expirerait
+        // pour avoir hésité sur un upgrade, ou pour ne pas avoir encore
+        // réglé un dépassement.
+        $openRenewal = Invoice::where('subscription_id', $sub->id)
             ->whereIn('status', ['draft', 'sent', 'overdue'])
+            ->where('metadata->renewal', true)
             ->exists();
         $samePeriod = Invoice::where('subscription_id', $sub->id)
             ->where('metadata->renewal_period_start', $periodStart->toIso8601String())
             ->exists();
-        if ($open || $samePeriod) {
+        if ($openRenewal || $samePeriod) {
             return null;
         }
 
@@ -158,7 +166,7 @@ class BillingService
             'plan_name'       => $sub->plan?->name ?? '—',
             'invoice_number'  => $invoice->invoice_number,
             'credentials_box' => SystemMailer::amountBox(Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number, $locale),
-            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), SystemMailer::label('view_invoice', $locale)),
+            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), SystemMailer::label('view_invoice', $locale)),
         ], $locale);
 
         return $invoice;
@@ -225,7 +233,7 @@ class BillingService
             'plan_name'       => $sub->plan?->name ?? '—',
             'invoice_number'  => $invoice->invoice_number,
             'credentials_box' => SystemMailer::amountBox(Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number, $locale),
-            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), SystemMailer::label('view_invoice', $locale)),
+            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), SystemMailer::label('view_invoice', $locale)),
         ], $locale);
 
         return $invoice;
@@ -306,6 +314,15 @@ class BillingService
             ->get();
 
         foreach ($overdue as $invoice) {
+            // Une facture d'achat de plan abandonnée ne se relance pas et ne
+            // suspend personne : le client n'a jamais eu ce qu'elle vend, et
+            // son abonnement courant reste dû par ailleurs. On referme
+            // proprement la demande pour qu'il puisse en relancer une autre.
+            if (!empty($invoice->metadata['plan_change'])) {
+                $this->abandonPlanChange($invoice);
+                continue;
+            }
+
             $daysLate = (int) $invoice->due_at->copy()->startOfDay()->diffInDays(now()->startOfDay());
             $meta     = $invoice->metadata ?? [];
             $sent     = $meta['dunning_sent'] ?? [];
@@ -331,6 +348,29 @@ class BillingService
         return $stats;
     }
 
+    /**
+     * Referme une demande d'achat de plan restée impayée : la facture est
+     * annulée, le changement passe en `failed`.
+     *
+     * C'est ce qui libère le client — l'index unique n'autorise qu'un seul
+     * changement en vol, un abandon non refermé le bloquerait indéfiniment.
+     */
+    private function abandonPlanChange(Invoice $invoice): void
+    {
+        $invoice->update(['status' => 'void']);
+
+        $changeId = $invoice->metadata['plan_change_id'] ?? null;
+        if ($changeId) {
+            \App\Models\SubscriptionPlanChange::whereKey($changeId)
+                ->where('status', \App\Models\SubscriptionPlanChange::STATUS_PENDING_PAYMENT)
+                ->update(['status' => \App\Models\SubscriptionPlanChange::STATUS_FAILED]);
+        }
+
+        AuditLogger::log('invoice.plan_change_abandoned', $invoice, newValues: [
+            'plan_change_id' => $changeId,
+        ]);
+    }
+
     private function sendOverdueReminder(Invoice $invoice, int $daysLate): void
     {
         $sub = $invoice->subscription;
@@ -345,7 +385,7 @@ class BillingService
             'days_late'       => (string) $daysLate,
             'plan_name'       => $sub?->plan?->name ?? '—',
             'credentials_box' => SystemMailer::amountBox(Money::tnd($invoice->total_amount, $invoice->currency), $invoice->invoice_number, $locale),
-            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/settings'), SystemMailer::label('pay_invoice', $locale)),
+            'cta_button'      => SystemMailer::ctaButton(SystemMailer::frontendUrl('/hotel/subscription'), SystemMailer::label('pay_invoice', $locale)),
         ], $locale);
 
         AuditLogger::log('invoice.reminder_sent', $invoice, newValues: ['days_late' => $daysLate]);
