@@ -65,7 +65,11 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
           sudo apt-get update -qq
           sudo apt-get install -y -qq postgresql-client-18
-          pg_dump --version
+          # Installer ne suffit pas : /usr/bin/pg_dump est un pg_wrapper qui a
+          # continué de servir le client 16 préinstallé sur le runner. On place
+          # explicitement les binaires 18 en tête du PATH des étapes suivantes.
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/pg_dump --version
 
       - name: Cache des dépendances Composer
         uses: actions/cache@v4
