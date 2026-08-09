@@ -41,6 +41,25 @@ class PaymentController extends Controller
             ], 422);
         }
 
+        // Un canal fermé se dit fermé — il ne se casse pas.
+        //
+        // Sans ce garde, une passerelle non configurée partait quand même
+        // appeler Flouci et rendait « Service de paiement indisponible,
+        // réessayez dans quelques instants » : une panne définitive annoncée
+        // comme passagère, sans indiquer au client que sa facture est
+        // réglable par virement. L'API doit dire la même chose que l'écran,
+        // et c'est elle qui fait autorité.
+        if (! \App\Models\PlatformSetting::get()->flouciReady()) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [[
+                    'code'    => 'PAYMENT_METHOD_UNAVAILABLE',
+                    'message' => "Le paiement en ligne n'est pas ouvert. Réglez cette facture par virement depuis l'écran Factures.",
+                    'field'   => null,
+                ]],
+            ], 503);
+        }
+
         // Check if a valid pending payment already exists
         $existing = Payment::where('invoice_id', $invoice->id)
             ->where('status', 'pending')

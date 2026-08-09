@@ -45,6 +45,56 @@ class PlatformSetting extends Model
         ]);
     }
 
+    // ─── Praticabilité des canaux de paiement ────────────────────────────
+    //
+    // Un canal ANNONCÉ doit être un canal PRATICABLE. Le drapeau
+    // `*_enabled` ne dit que l'intention de l'exploitant ; ces méthodes
+    // disent si le règlement peut réellement aboutir. Toute surface qui
+    // propose un paiement doit passer par ici — c'est ce qui empêche
+    // d'ouvrir un canal muet.
+
+    /**
+     * Identifiants Flouci effectifs : la saisie du back-office d'abord, les
+     * variables d'environnement en repli.
+     *
+     * L'écran Paiements expose « App Token » et « App Secret » et les
+     * enregistre ici depuis toujours — mais rien ne les relisait : le service
+     * n'interrogeait que l'environnement. Un exploitant qui configurait la
+     * passerelle par le chemin prévu obtenait donc un canal ouvert dont
+     * chaque paiement échouait.
+     *
+     * @return array{token: string, secret: string}
+     */
+    public function flouciCredentials(): array
+    {
+        return [
+            'token'  => filled($this->flouci_app_token) ? (string) $this->flouci_app_token : (string) config('flouci.app_token'),
+            'secret' => filled($this->flouci_app_secret) ? (string) $this->flouci_app_secret : (string) config('flouci.app_secret'),
+        ];
+    }
+
+    /** Le paiement en ligne peut-il réellement aboutir ? */
+    public function flouciReady(): bool
+    {
+        $credentials = $this->flouciCredentials();
+
+        return (bool) $this->flouci_enabled
+            && filled($credentials['token'])
+            && filled($credentials['secret']);
+    }
+
+    /**
+     * Le virement est-il exploitable par le client ? Sans bénéficiaire ni
+     * compte, il reçoit un formulaire de déclaration sans savoir où envoyer
+     * l'argent.
+     */
+    public function virementReady(): bool
+    {
+        return (bool) $this->virement_enabled
+            && filled($this->virement_beneficiary)
+            && (filled($this->virement_iban) || filled($this->virement_rib));
+    }
+
     /** Public-safe representation (hides API credentials). */
     public function toPublicArray(): array
     {

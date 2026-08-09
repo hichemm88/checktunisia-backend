@@ -22,15 +22,26 @@ use Illuminate\Support\Facades\Log;
  */
 class FlouciService
 {
-    private string $appToken;
-    private string $appSecret;
     private string $baseUrl;
 
     public function __construct()
     {
-        $this->appToken  = config('flouci.app_token');
-        $this->appSecret = config('flouci.app_secret');
-        $this->baseUrl   = rtrim(config('flouci.base_url', 'https://developers.flouci.com/api'), '/');
+        $this->baseUrl = rtrim(config('flouci.base_url', 'https://developers.flouci.com/api'), '/');
+    }
+
+    /**
+     * Identifiants effectifs, résolus À CHAQUE APPEL.
+     *
+     * La source est `PlatformSetting` (saisie du back-office, repli sur
+     * l'environnement) : c'est elle qui porte la règle, en un seul endroit.
+     * Les lire au constructeur les figeait au moment de la résolution du
+     * conteneur, avant même qu'on sache quelle facture est réglée.
+     *
+     * @return array{token: string, secret: string}
+     */
+    private function credentials(): array
+    {
+        return \App\Models\PlatformSetting::get()->flouciCredentials();
     }
 
     /**
@@ -44,9 +55,11 @@ class FlouciService
      */
     public function createPayment(int $amountMillimes, string $trackingId): array
     {
+        $credentials = $this->credentials();
+
         $payload = [
-            'app_token'             => $this->appToken,
-            'app_secret'            => $this->appSecret,
+            'app_token'             => $credentials['token'],
+            'app_secret'            => $credentials['secret'],
             'amount'                => $amountMillimes,
             'accept_card'           => true,
             'session_timeout_secs'  => (int) config('flouci.timeout_secs', 900),
@@ -88,9 +101,11 @@ class FlouciService
      */
     public function verifyPayment(string $paymentId): array
     {
+        $credentials = $this->credentials();
+
         $response = Http::timeout(15)->get("{$this->baseUrl}/verify_payment/{$paymentId}", [
-            'app_token'  => $this->appToken,
-            'app_secret' => $this->appSecret,
+            'app_token'  => $credentials['token'],
+            'app_secret' => $credentials['secret'],
         ]);
 
         if (!$response->successful()) {

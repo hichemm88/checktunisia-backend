@@ -39,10 +39,58 @@ class PlatformSettingController extends Controller
         ]);
 
         $s = PlatformSetting::get();
+
+        // On n'ouvre pas un canal de règlement qu'on n'a pas configuré.
+        //
+        // Le drapeau `*_enabled` était acceptable seul : on pouvait annoncer
+        // le paiement en ligne sans identifiants (chaque règlement échouait),
+        // ou le virement sans bénéficiaire ni compte (le client recevait un
+        // formulaire de déclaration sans savoir où envoyer l'argent). Le
+        // virement étant le seul canal ouvert en production, ce n'est pas une
+        // question d'ergonomie : c'est un client qui ne peut pas payer.
+        if ($error = $this->incompleteChannel($s, $v)) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'PAYMENT_CHANNEL_INCOMPLETE', 'message' => $error[0], 'field' => $error[1]]],
+            ], 422);
+        }
+
         $s->update($v);
 
         // Same reasoning as show(): never round-trip flouci_app_token/flouci_app_secret.
         return response()->json(['data' => $s->fresh()->toPublicArray()]);
+    }
+
+    /**
+     * Le réglage RÉSULTANT ouvre-t-il un canal incomplet ?
+     *
+     * On raisonne sur l'état après fusion, pas sur la seule requête : une
+     * modification partielle (le taux de TVA, le nom de la banque) ne doit
+     * pas exiger de renvoyer une configuration déjà en place. Fermer un canal
+     * n'exige évidemment rien.
+     *
+     * @param  array<string, mixed>  $changes
+     * @return array{0: string, 1: string}|null  [message, champ fautif]
+     */
+    private function incompleteChannel(PlatformSetting $current, array $changes): ?array
+    {
+        $resulting = (clone $current)->fill($changes);
+
+        if ($resulting->flouci_enabled && ! $resulting->flouciReady()) {
+            return [
+                "Renseignez l'App Token et l'App Secret Flouci avant d'ouvrir le paiement en ligne : sans eux, chaque règlement échouerait.",
+                'flouci_app_token',
+            ];
+        }
+
+        if ($resulting->virement_enabled && ! $resulting->virementReady()) {
+            return [
+                'Renseignez le bénéficiaire et un IBAN ou RIB avant d\'ouvrir le virement : sans eux, le client ne sait pas où envoyer son paiement.',
+                'virement_beneficiary',
+            ];
+        }
+
+        return null;
     }
 
     // ── Payments (read-only ledger) ──────────────────────────────────────────
