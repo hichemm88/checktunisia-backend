@@ -83,6 +83,34 @@ déploiement ».
 
 Détails, garde-fous et procédure de vérification : [`docs/session-whatsapp.md`](../docs/session-whatsapp.md).
 
+## Place sur le volume
+
+Le volume Railway est plafonné (500 Mo sur le plan actuel) et un profil
+Chromium en pèse ~100. Trois choses s'y accumulaient sans que rien ne les
+reprenne — le volume était à **87 %** le soir de l'incident d'envoi du
+09/08/2026 :
+
+- les **caches Chromium du profil vivant** (`Cache`, `Code Cache`,
+  `Service Worker/CacheStorage`, `GPUCache`…). Exclus de l'archive parce que
+  reconstructibles, mais jamais effacés du disque — c'est le terme dominant ;
+- les **profils écartés** (`session.revoked-*`, `session.orphan`), purgés
+  uniquement au moment d'en créer un nouveau : après une révocation isolée, ils
+  restaient à demeure ;
+- le dossier `.restore-staging` d'une restauration dont toutes les tentatives
+  échouent.
+
+`sessionStore.reclaimSpace()` reprend cette place **au démarrage**, avant
+Chromium : c'est le seul moment où le navigateur ne tient aucun fichier ouvert
+(sous Linux, effacer un fichier tenu ouvert ne rend pas un octet). L'ordre va du
+moins précieux au plus précieux, et **les credentials ne sont jamais touchés** —
+la liste des caches est un allowlist fixe, jamais un motif ; `IndexedDB` et
+`Local Storage` n'y figurent pas et ne peuvent pas y arriver par accident.
+
+L'occupation est journalisée à chaque démarrage et exposée sur `/health`
+(`volume.usedRatio`). Au-delà de `WHATSAPP_VOLUME_WARN_RATIO` (0,8 par défaut),
+elle est signalée comme un avertissement : un volume plein, c'est un IndexedDB
+qui n'écrit plus, donc des envois qui échouent sans raison visible.
+
 ## Que fait le worker quand un envoi échoue ?
 
 Un échec d'envoi n'est pas un navigateur à jeter. La politique vit dans
@@ -121,7 +149,8 @@ envoyait une fausse alerte à chaque tour de boucle.
 ## Santé
 
 - `GET /health` (ce service) : état local de la session + compteurs, dont
-  `self_restarts_last_hour`, `sending_suspended` et `suspension_reason`.
+  `self_restarts_last_hour`, `sending_suspended`, `suspension_reason` et
+  `volume` (place restante sur le volume).
 - `GET /session-vault?token=…` : session sur le disque + copie en coffre
   (métadonnées seules — jamais un octet de la session).
 - `GET /api/v1/health/whatsapp` (Laravel) : état consolidé + profondeur de file.
@@ -140,6 +169,9 @@ Couvre aussi la politique de reprise (`recovery.test.js`) : une photo
 introuvable ne redémarre pas le conteneur, une page muette est rechargée avant
 d'être recyclée, et le nombre de recyclages reste borné même à travers les
 redémarrages qu'il compte.
+
+Et la reprise de place (`volume-space.test.js`), dont le test qui prime sur tous
+les autres : gagner des mégaoctets ne doit jamais coûter les credentials.
 
 ## Sécurité
 

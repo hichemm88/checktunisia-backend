@@ -59,6 +59,14 @@ const VAULT_ENABLED = String(process.env.WHATSAPP_SESSION_VAULT_ENABLED || '1') 
 const VAULT_FIRST_SNAPSHOT_MS = parseInt(process.env.WHATSAPP_SESSION_SNAPSHOT_DELAY_MS || '180000', 10);
 const VAULT_SNAPSHOT_INTERVAL_MS = parseInt(process.env.WHATSAPP_SESSION_SNAPSHOT_INTERVAL_MS || String(6 * 3600 * 1000), 10);
 
+// ── Place sur le volume ──────────────────────────────────────────────────────
+// Un seul profil écarté conservé par défaut (contre deux auparavant) : sur un
+// volume de 500 Mo, deux profils à ~100 Mo mangeaient 40 % de la place pour un
+// besoin d'analyse d'incident que le plus récent couvre déjà.
+const KEEP_PARKED_PROFILES = parseInt(process.env.WHATSAPP_KEEP_PARKED_PROFILES || '1', 10);
+// Seuil d'occupation au-delà duquel on le dit franchement dans les journaux.
+const VOLUME_WARN_RATIO = parseFloat(process.env.WHATSAPP_VOLUME_WARN_RATIO || '0.8');
+
 if (!WORKER_SECRET) {
   console.error('[whatsapp] FATAL: WHATSAPP_WORKER_SECRET manquant.');
   process.exit(1);
@@ -192,23 +200,23 @@ class NonDestructiveLocalAuth extends LocalAuth {
 }
 
 /**
- * Ne garder que les deux profils révoqués les plus récents : le volume est
- * plafonné (500 Mo) et un profil pèse ~100 Mo. Sans ce ménage, une série de
- * révocations saturerait le disque et empêcherait toute nouvelle session.
+ * Ne garder que les profils écartés les plus récents : le volume est plafonné
+ * (500 Mo) et un profil pèse ~100 Mo. Sans ce ménage, une série de révocations
+ * saturerait le disque et empêcherait toute nouvelle session.
+ *
+ * ⚠️ Ce ménage-ci ne s'exécutait QU'À la création d'un nouveau profil écarté.
+ * Après une révocation isolée, les ~100 Mo restaient donc à demeure jusqu'à la
+ * révocation suivante — qui pouvait ne jamais venir. La reprise de place
+ * complète a lieu désormais au démarrage (sessionStore.reclaimSpace).
  */
-function pruneRevokedProfiles(dataPath, keep = 2) {
+function pruneRevokedProfiles(dataPath, keep = KEEP_PARKED_PROFILES) {
   try {
-    const parked = fs.readdirSync(dataPath)
-      .filter((n) => /^session\.revoked-\d+$/.test(n))
-      .sort()
-      .reverse();
-
-    for (const name of parked.slice(keep)) {
+    for (const name of sessionStore.parkedProfiles(dataPath).slice(keep)) {
       fs.rmSync(path.join(dataPath, name), { recursive: true, force: true });
-      console.log('[whatsapp] ancien profil révoqué purgé :', name);
+      console.log('[whatsapp] ancien profil écarté purgé :', name);
     }
   } catch (err) {
-    console.warn('[whatsapp] purge des profils révoqués :', err.message);
+    console.warn('[whatsapp] purge des profils écartés :', err.message);
   }
 }
 
@@ -316,6 +324,28 @@ async function haltSending(reason) {
     'disconnected',
     `Envois suspendus ${minutes} min après échecs répétés — ${reason}`,
   );
+}
+
+/**
+ * Annonce l'occupation du volume, et la signale franchement quand elle devient
+ * inquiétante. Sans cette ligne, la seule façon de l'apprendre était d'ouvrir
+ * la console Railway — encore fallait-il soupçonner que c'était là qu'il fallait
+ * regarder.
+ */
+function logVolumeSpace(moment) {
+  const space = sessionStore.volumeSpace(SESSION_PATH);
+  if (!space) return;
+
+  const used = Math.round(space.usedRatio * 100);
+  const freeMb = (space.freeBytes / 1048576).toFixed(0);
+  const totalMb = (space.totalBytes / 1048576).toFixed(0);
+  const line = `[whatsapp] volume ${moment} : ${used} % occupé (${freeMb} Mo libres sur ${totalMb} Mo).`;
+
+  if (space.usedRatio >= VOLUME_WARN_RATIO) {
+    console.warn(`${line} ⚠️ Chromium a besoin de place pour écrire sa session : au-delà, les envois échouent sans raison visible.`);
+  } else {
+    console.log(line);
+  }
 }
 
 /** Fin de veille : on redonne sa chance au canal. */
@@ -780,6 +810,9 @@ app.get('/health', (_req, res) => {
     // se réparait en boucle sans que rien, hors des journaux Railway déjà
     // évincés, n'en garde la trace.
     self_restarts_last_hour: recovery.restartsInWindow(),
+    // Un volume plein fait échouer les envois sans rien dire : la place
+    // restante appartient au diagnostic de premier niveau.
+    volume: sessionStore.volumeSpace(SESSION_PATH),
     sending_suspended: suspended,
     suspended_until: suspended ? new Date(sendingSuspendedUntil).toISOString() : null,
     suspension_reason: suspended ? suspensionReason : null,
@@ -974,6 +1007,20 @@ let restoredFromStoredSession = false;
 async function start() {
   reportSession('initializing');
   cleanupStaleLocks(SESSION_PATH); // retire les verrous Chromium périmés avant de démarrer
+
+  /*
+   * Reprendre la place AVANT Chromium, et avant toute restauration : c'est le
+   * seul moment où le navigateur ne tient aucun fichier ouvert — sous Linux,
+   * effacer un fichier qu'un processus tient ouvert ne rend pas un octet.
+   *
+   * Le volume était à 87 % le soir de l'incident d'envoi du 2026-08-09. Rien ne
+   * le vidait jamais : ni les caches Chromium du profil vivant, ni les profils
+   * écartés après une révocation isolée, ni le dossier d'une restauration
+   * interrompue. Un volume plein, c'est un IndexedDB qui n'écrit plus — donc
+   * une page WhatsApp Web qui échoue sans que rien n'en dise la raison.
+   */
+  sessionStore.reclaimSpace({ dataPath: SESSION_PATH, keepParked: KEEP_PARKED_PROFILES });
+  logVolumeSpace('au démarrage');
 
   // AVANT d'initialiser le client : s'il n'y a pas de session exploitable sur
   // le volume, on la réclame au coffre. Une session locale valide n'est jamais
