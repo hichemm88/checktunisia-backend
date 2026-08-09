@@ -25,7 +25,26 @@ class SuspendExpiredSubscriptions extends Command
             ->where('expires_at', '<', now())
             ->get();
 
+        $spared = 0;
+
         foreach ($subscriptions as $sub) {
+            // Échéance dépassée mais recouvrement en cours : on ne coupe pas.
+            // Le client reçoit ses relances J+3 / J+7 / J+14 et sera suspendu
+            // à J+21 par `invoices:dunning` — c'est ce qui lui a été annoncé.
+            // Couper ici rendait ces trois relances mensongères et privait
+            // l'établissement d'une déclaration légalement obligatoire pour
+            // une facture en retard de vingt-quatre heures.
+            //
+            // Le filet reste posé : passé ce terme, si le recouvrement n'a
+            // suspendu personne (facture jamais émise, annulée à la main), on
+            // expire. La grâce est une tolérance bornée, jamais un abonnement
+            // gratuit à durée indéterminée.
+            if ($sub->isInGracePeriod()) {
+                $spared++;
+                $this->line("Grace period for {$sub->id} until ".$sub->graceEndsAt()->format('d/m/Y').'.');
+                continue;
+            }
+
             $wasTrial = $sub->isTrial();
             $newStatus = $wasTrial ? 'trial_expired' : 'expired';
             $previousStatus = $sub->status;
@@ -75,6 +94,6 @@ class SuspendExpiredSubscriptions extends Command
             $this->line(($wasTrial ? 'Trial ended' : 'Expired subscription') . " {$sub->id} ({$name}).");
         }
 
-        $this->info(count($subscriptions) . ' subscription(s) expired.');
+        $this->info((count($subscriptions) - $spared).' subscription(s) expired, '.$spared.' in grace period.');
     }
 }

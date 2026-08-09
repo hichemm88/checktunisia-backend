@@ -78,6 +78,23 @@ class PlanPricing
         return self::detail($sub)['cycle_total'];
     }
 
+    /**
+     * Valeur annuelle pour l'ARR — le montant réellement facturé sur douze
+     * mois, à partir du MÊME détail que le MRR.
+     *
+     * Un annuel vaut son prix annuel tel quel (11 × mensuel, un mois offert,
+     * ou le prix négocié) : c'est le montant de sa facture. Le mensualiser
+     * pour le remultiplier par douze introduirait un écart d'arrondi sur
+     * chaque client annuel.
+     */
+    public static function annualValue(Subscription $sub, ?int $propertyCount = null): float
+    {
+        // cycle_total porte déjà les quatre cas (mensuel/annuel × barème/négocié).
+        $cycle = self::detail($sub, $propertyCount)['cycle_total'];
+
+        return round($sub->billing_cycle === 'yearly' ? $cycle : $cycle * 12, 3);
+    }
+
     /** Valeur mensuelle normalisée pour le MRR (annuel / 12, négocié prioritaire). */
     public static function monthlyValue(Subscription $sub, ?int $propertyCount = null): float
     {

@@ -17,6 +17,17 @@ use Illuminate\Support\Facades\Redis;
  *
  * Aucune donnée personnelle : uniquement des compteurs et des horodatages.
  * Réservé aux administrateurs plateforme.
+ *
+ * QUI OBSERVE QUI. Le battement du planificateur est écrit PAR le
+ * planificateur : aucune tâche planifiée ne peut donc servir d'alarme sur sa
+ * propre mort. L'observateur est ici extérieur au système observé — c'est le
+ * navigateur de l'administrateur qui interroge cet endpoint et voit
+ * « dernier battement il y a 47 minutes ».
+ *
+ * Cela couvre l'exploitation quotidienne, pas la nuit ni le week-end. Pour
+ * une alerte réellement indépendante, il faut une sonde EXTERNE au
+ * déploiement (voir docs/observabilite.md) : rien de ce qui tourne dans ce
+ * conteneur ne peut garantir de crier quand ce conteneur se tait.
  */
 class HealthController extends Controller
 {
@@ -226,13 +237,39 @@ class HealthController extends Controller
                 ->groupBy('status')
                 ->pluck('total', 'status');
 
-            return [
+            $counts = [
                 'pending' => (int) ($rows['pending'] ?? 0),
                 'failed'  => (int) ($rows['failed'] ?? 0),
                 'sent'    => (int) ($rows['sent'] ?? 0),
             ];
         } catch (\Throwable) {
-            return ['pending' => null, 'failed' => null, 'sent' => null];
+            $counts = ['pending' => null, 'failed' => null, 'sent' => null];
         }
+
+        // État de la session elle-même : une file à zéro peut aussi bien dire
+        // « tout est parti » que « rien ne peut partir ». Sans le statut de
+        // session, les deux se ressemblent — et la seconde situation est un
+        // incident de conformité (les fiches n'atteignent pas l'autorité).
+        //
+        // Lecture seule : aucune écriture, aucun appel au worker. Ce bloc ne
+        // peut pas perturber le relais qu'il observe.
+        try {
+            $state = \App\Models\WhatsappSessionState::query()
+                ->where('key', \App\Models\WhatsappSessionState::KEY)
+                ->first();
+
+            $counts['session'] = [
+                'status'        => $state?->status,
+                'paused'        => (bool) $state?->paused,
+                'needs_pairing' => (bool) $state?->needsPairing(),
+                'last_ready_at' => $state?->last_ready_at?->toIso8601String(),
+                'heartbeat_at'  => $state?->heartbeat_at?->toIso8601String(),
+                'revoked_at'    => $state?->revoked_at?->toIso8601String(),
+            ];
+        } catch (\Throwable) {
+            $counts['session'] = null;
+        }
+
+        return $counts;
     }
 }

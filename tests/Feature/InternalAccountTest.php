@@ -103,6 +103,44 @@ class InternalAccountTest extends TestCase
         );
     }
 
+    /**
+     * Le back-office peut émettre une facture à la main (rattrapage, prestation
+     * ponctuelle). C'est le dernier chemin capable de créer de l'argent, et le
+     * seul actionné par un humain : la règle doit y tenir aussi, sinon un clic
+     * suffit à faire réapparaître un compte à nous dans le chiffre d'affaires.
+     */
+    public function test_an_admin_cannot_hand_write_an_invoice_for_an_internal_account(): void
+    {
+        [$org, , , $sub] = $this->account('Compte Interne', Organization::BILLING_INTERNAL);
+
+        $this->actingAs($this->platformAdmin())
+            ->postJson("/api/v1/admin/hosts/{$org->id}/invoices", [
+                'subscription_id' => $sub->id,
+                'amount'          => 199,
+                'tax_amount'      => 0,
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.0.code', 'INTERNAL_ACCOUNT_NOT_BILLABLE');
+
+        $this->assertSame(0, Invoice::count());
+    }
+
+    public function test_an_admin_can_still_hand_write_an_invoice_for_a_real_customer(): void
+    {
+        Mail::fake();
+        [$org, , , $sub] = $this->account('Vrai Client', Organization::BILLING_COMMERCIAL);
+
+        $this->actingAs($this->platformAdmin())
+            ->postJson("/api/v1/admin/hosts/{$org->id}/invoices", [
+                'subscription_id' => $sub->id,
+                'amount'          => 199,
+                'tax_amount'      => 0,
+            ])
+            ->assertCreated();
+
+        $this->assertSame(1, Invoice::count());
+    }
+
     public function test_the_guard_holds_even_when_the_invoice_is_asked_for_directly(): void
     {
         // Le filtre de la commande ne suffit pas : n'importe quel appelant
@@ -166,11 +204,17 @@ class InternalAccountTest extends TestCase
     public function test_an_internal_account_does_not_expire_commercially(): void
     {
         Mail::fake();
+
+        // Les deux comptes sont aussi en retard l'un que l'autre, et tous deux
+        // au-delà de la période de grâce accordée au recouvrement : seul le
+        // périmètre commercial les distingue.
+        $wellPast = now()->subDays(\App\Services\Billing\BillingService::DUNNING_SUSPEND_DAYS + 1);
+
         [, , , $internal] = $this->account('Compte Interne', Organization::BILLING_INTERNAL, 'essentiel', [
-            'expires_at' => now()->subDays(3),
+            'expires_at' => $wellPast,
         ]);
         [, , , $client] = $this->account('Vrai Client', Organization::BILLING_COMMERCIAL, 'essentiel', [
-            'expires_at' => now()->subDays(3),
+            'expires_at' => $wellPast,
         ]);
 
         $this->artisan('subscriptions:expire-overdue')->assertSuccessful();

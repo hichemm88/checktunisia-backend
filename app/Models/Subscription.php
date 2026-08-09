@@ -51,6 +51,64 @@ class Subscription extends Model
         return $this->cancellation_requested_at !== null && !$this->auto_renew;
     }
 
+    // ─── Période de grâce ────────────────────────────────────────────────
+    //
+    // Le recouvrement annonce au client : facture à l'échéance, relances à
+    // J+3 / J+7 / J+14, suspension à J+21. Le service doit donc rester
+    // utilisable jusqu'à ce terme — sinon les relances promettent un délai
+    // que le produit ne donne pas, et l'établissement se retrouve privé
+    // d'une déclaration LÉGALEMENT obligatoire pour un motif comptable.
+    //
+    // Le terme est celui du recouvrement, pas un second réglage : il vient
+    // de BillingService::DUNNING_SUSPEND_DAYS. Deux valeurs finiraient par
+    // diverger, et la divergence se paierait en clients coupés trop tôt.
+
+    /**
+     * Fin de la tolérance après échéance, ou null si la notion ne s'applique
+     * pas (essai, résiliation, abonnement sans échéance).
+     *
+     * Résilier, c'est choisir de partir : aucune facture ne suivra, il n'y a
+     * donc rien à recouvrer et pas de grâce à accorder. Le service s'arrête
+     * au terme payé, exactement comme annoncé au client.
+     */
+    public function graceEndsAt(): ?\Illuminate\Support\Carbon
+    {
+        if ($this->status !== 'active' || !$this->auto_renew || !$this->expires_at) {
+            return null;
+        }
+
+        return $this->expires_at->copy()->addDays(\App\Services\Billing\BillingService::DUNNING_SUSPEND_DAYS);
+    }
+
+    /** L'échéance est passée mais le terme de recouvrement n'est pas atteint. */
+    public function isInGracePeriod(): bool
+    {
+        $end = $this->graceEndsAt();
+
+        return $end !== null && $this->expires_at->isPast() && $end->isFuture();
+    }
+
+    /**
+     * Payload lisible par le client : il doit savoir qu'il est en sursis et
+     * jusqu'à quand, sans avoir à déduire une date d'un statut « actif ».
+     *
+     * @return array{active: bool, ends_at: string|null, days_left: int|null}
+     */
+    public function gracePayload(): array
+    {
+        if (!$this->isInGracePeriod()) {
+            return ['active' => false, 'ends_at' => null, 'days_left' => null];
+        }
+
+        $end = $this->graceEndsAt();
+
+        return [
+            'active'    => true,
+            'ends_at'   => $end->toIso8601String(),
+            'days_left' => max(0, (int) ceil(now()->diffInDays($end, false))),
+        ];
+    }
+
     // ─── Périmètre commercial ────────────────────────────────────────────
 
     /**

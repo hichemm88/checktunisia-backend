@@ -130,11 +130,30 @@ class PaymentController extends Controller
         }
 
         if ($result['success']) {
-            $payment->update([
-                'status'            => 'completed',
-                'completed_at'      => now(),
-                'provider_response' => $result['raw'],
-            ]);
+            // Transition conditionnelle : seule la requête qui fait réellement
+            // passer le paiement de « pending » à « completed » poursuit.
+            //
+            // Un verrou posé plus haut aurait été relâché avant l'appel à
+            // Flouci — le tenir pendant un aller-retour réseau serait pire. Ce
+            // compare-and-set, lui, est atomique : deux retours simultanés de
+            // la page de paiement ne peuvent pas gagner tous les deux.
+            $claimed = Payment::whereKey($payment->id)
+                ->where('status', 'pending')
+                ->update([
+                    'status'            => 'completed',
+                    'completed_at'      => now(),
+                    'provider_response' => $result['raw'],
+                ]);
+
+            if ($claimed === 0) {
+                // L'autre requête a déjà tout enchaîné : on rend son résultat.
+                return response()->json(['data' => [
+                    'status'     => $payment->fresh()->status,
+                    'payment_id' => $payment->id,
+                ]]);
+            }
+
+            $payment->refresh();
 
             // Mark invoice as paid + record payment reference
             $payment->invoice()->update([
