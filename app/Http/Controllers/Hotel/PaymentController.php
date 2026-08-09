@@ -105,7 +105,30 @@ class PaymentController extends Controller
     public function verify(Request $request, string $id): JsonResponse
     {
         $invoiceIds = $this->scopedInvoices($request)->pluck('id');
-        $payment    = Payment::where('id', $id)->whereIn('invoice_id', $invoiceIds)->firstOrFail();
+
+        // Deux identifiants ouvrent la même vérification, à dessein.
+        //
+        // Flouci ne connaît que le SIEN : il renvoie le client sur
+        // `success_link?payment_id=<son identifiant>`, jamais avec le nôtre.
+        // Ne chercher que sur notre clé primaire faisait échouer tous les
+        // retours de paiement — la facture restait impayée, partait en
+        // relance, puis suspendait un client qui avait pourtant réglé.
+        //
+        // Le test `Str::isUuid` n'est pas cosmétique : `payments.id` est une
+        // colonne uuid PostgreSQL, et lui comparer une chaîne quelconque lève
+        // une erreur SQL (22P02) rendue en 500 au lieu d'un 404.
+        //
+        // Le périmètre reste celui de l'appelant (`$invoiceIds`) : un
+        // identifiant de fournisseur n'est pas un secret, il ne donne accès à
+        // rien qui ne soit déjà au tenant.
+        $payment = Payment::whereIn('invoice_id', $invoiceIds)
+            ->where(function ($q) use ($id) {
+                $q->where('provider_payment_id', $id);
+                if (Str::isUuid($id)) {
+                    $q->orWhere('id', $id);
+                }
+            })
+            ->firstOrFail();
 
         // Already resolved — return cached status
         if (in_array($payment->status, ['completed', 'failed', 'expired'])) {
