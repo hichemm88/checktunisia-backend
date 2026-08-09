@@ -257,35 +257,60 @@ class BackupDatabase extends Command
 
     // ── Étapes ───────────────────────────────────────────────────────────────
 
+    /**
+     * Produit l'archive gzip du dump — SANS shell, et sans tube.
+     *
+     * L'implémentation précédente enchaînait `pg_dump | gzip` derrière un
+     * `set -o pipefail`, seul moyen d'empêcher que l'échec de pg_dump ne soit
+     * masqué par le succès de gzip (un tube rend le code de sortie du DERNIER
+     * maillon). Cette garantie reposait donc sur une fonctionnalité du shell
+     * de l'hôte — et `pipefail` n'est pas POSIX :
+     *
+     *   Alpine (busybox ash), Debian 13 (dash ≥ 0.5.12), bash  → supporté
+     *   Debian 12, Ubuntu (dash 0.5.11)                        → REFUSÉ
+     *
+     * Et le refus est brutal : `set` est un utilitaire spécial, un shell non
+     * interactif SORT immédiatement (code 2) sans exécuter le dump. La
+     * sauvegarde ne dépendait donc pas de sa propre logique mais de la version
+     * de dash de l'image sous-jacente — sur la seule protection du registre,
+     * chez un hébergeur qui n'offre ni sauvegarde native ni PITR.
+     *
+     * `pg_dump --compress=9 --file=…` supprime le problème à la racine : un
+     * seul processus, qui compresse lui-même, dont le code de sortie est le
+     * sien. Il n'y a plus de maillon capable d'en masquer un autre — la
+     * propriété que `pipefail` cherchait à obtenir devient structurelle. On
+     * passe en outre un tableau d'arguments plutôt qu'une ligne de commande :
+     * plus aucun shell n'est invoqué, donc plus aucune question de citation.
+     */
     private function runDump(string $outfile): void
     {
         $db = config('database.connections.pgsql');
 
         // --no-owner / --no-privileges : la restauration doit pouvoir viser un
         // rôle différent de celui de production (bac à sable, poste local).
-        // pipefail : sans lui, un échec de pg_dump serait masqué par le succès
-        // de gzip et produirait une archive vide mais « réussie ».
-        $process = Process::fromShellCommandline(
-            'set -o pipefail; pg_dump --no-owner --no-privileges --clean --if-exists '
-            .'-h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" | gzip -9 > "$OUTFILE"'
-        );
+        $process = new Process([
+            'pg_dump',
+            '--no-owner',
+            '--no-privileges',
+            '--clean',
+            '--if-exists',
+            '--compress=9',
+            '--file='.$outfile,
+            '-h', (string) $db['host'],
+            '-p', (string) $db['port'],
+            '-U', (string) $db['username'],
+            '-d', (string) $db['database'],
+        ]);
 
         $process->setTimeout((int) config('backup.timeout_seconds'));
-        $process->setEnv([
-            'PGHOST' => $db['host'],
-            'PGPORT' => (string) $db['port'],
-            'PGUSER' => $db['username'],
-            // Jamais en argument de ligne de commande : visible autrement dans
-            // la liste des processus.
-            'PGPASSWORD' => $db['password'],
-            'PGDATABASE' => $db['database'],
-            'OUTFILE' => $outfile,
-        ]);
+        // Jamais en argument de ligne de commande : le mot de passe serait
+        // visible dans la liste des processus.
+        $process->setEnv(['PGPASSWORD' => $db['password']]);
 
         $process->run();
 
         if (! $process->isSuccessful()) {
-            throw new \RuntimeException('pg_dump/gzip a échoué : '.$this->scrub(trim($process->getErrorOutput())));
+            throw new \RuntimeException('pg_dump a échoué : '.$this->scrub(trim($process->getErrorOutput())));
         }
     }
 
