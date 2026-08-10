@@ -106,10 +106,39 @@ moins précieux au plus précieux, et **les credentials ne sont jamais touchés*
 la liste des caches est un allowlist fixe, jamais un motif ; `IndexedDB` et
 `Local Storage` n'y figurent pas et ne peuvent pas y arriver par accident.
 
+⚠️ La liste reprise (`RECLAIMABLE`) n'est pas tout à fait celle des exclusions
+d'archive (`EXCLUDED`) : le dossier `Default/Service Worker` part **en entier**,
+registre compris. N'effacer que ses caches laisserait Chromium avec une
+inscription de service worker pointant vers un script absent — état incohérent,
+et candidat sérieux à un chargement de WhatsApp Web qui n'aboutit jamais.
+
 L'occupation est journalisée à chaque démarrage et exposée sur `/health`
 (`volume.usedRatio`). Au-delà de `WHATSAPP_VOLUME_WARN_RATIO` (0,8 par défaut),
 elle est signalée comme un avertissement : un volume plein, c'est un IndexedDB
 qui n'écrit plus, donc des envois qui échouent sans raison visible.
+
+## Deux garde-fous de démarrage, et pourquoi il en faut deux
+
+| Garde-fou | Question posée | Se lève sur |
+|-----------|----------------|-------------|
+| `WHATSAPP_WATCHDOG_MS` (7 min) | « est-ce que quelque chose s'est passé ? » | **tout** signe de vie : QR, authentification, écran de chargement |
+| `WHATSAPP_READY_DEADLINE_MS` (15 min) | « est-ce qu'on est devenu utilisable ? » | **`ready` uniquement** |
+
+Le second a été ajouté après le 10/08/2026, où le worker est resté **neuf heures**
+en `initializing` sans jamais rien tenter. Le premier avait été désarmé par un
+`loading_screen` à 1 %, et le heartbeat — qui bat très bien sur une session qui
+n'est pas prête — empêchait l'alerte « worker injoignable » de se déclencher.
+Un démarrage qui commence et n'aboutit jamais était le seul état du système que
+rien ne reprenait.
+
+À l'échéance : recyclage via le frein commun (donc borné, puis veille et alerte).
+**Sauf si un QR est affiché** — là quelqu'un doit scanner, et redémarrer ne
+ferait que remplacer le QR qu'on est peut-être en train de lire.
+
+`/health` expose désormais `phase` et `phaseAt` : « initializing » pendant neuf
+heures ne disait pas si Chromium n'avait jamais démarré, si WhatsApp Web
+chargeait encore, ou si l'authentification était passée sans aboutir — trois
+pannes très différentes sous un seul mot.
 
 ## Que fait le worker quand un envoi échoue ?
 
@@ -149,8 +178,8 @@ envoyait une fausse alerte à chaque tour de boucle.
 ## Santé
 
 - `GET /health` (ce service) : état local de la session + compteurs, dont
-  `self_restarts_last_hour`, `sending_suspended`, `suspension_reason` et
-  `volume` (place restante sur le volume).
+  `phase` / `phaseAt` (où en est le démarrage), `self_restarts_in_window`,
+  `sending_suspended`, `suspension_reason` et `volume` (place restante).
 - `GET /session-vault?token=…` : session sur le disque + copie en coffre
   (métadonnées seules — jamais un octet de la session).
 - `GET /api/v1/health/whatsapp` (Laravel) : état consolidé + profondeur de file.
