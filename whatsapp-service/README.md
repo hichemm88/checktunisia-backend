@@ -106,6 +106,12 @@ moins précieux au plus précieux, et **les credentials ne sont jamais touchés*
 la liste des caches est un allowlist fixe, jamais un motif ; `IndexedDB` et
 `Local Storage` n'y figurent pas et ne peuvent pas y arriver par accident.
 
+⚠️ La liste reprise (`RECLAIMABLE`) n'est pas tout à fait celle des exclusions
+d'archive (`EXCLUDED`) : le dossier `Default/Service Worker` part **en entier**,
+registre compris. N'effacer que ses caches laisserait Chromium avec une
+inscription de service worker pointant vers un script absent — état incohérent,
+et candidat sérieux à un chargement de WhatsApp Web qui n'aboutit jamais.
+
 L'occupation est journalisée à chaque démarrage et exposée sur `/health`
 (`volume.usedRatio`). Au-delà de `WHATSAPP_VOLUME_WARN_RATIO` (0,8 par défaut),
 elle est signalée comme un avertissement : un volume plein, c'est un IndexedDB

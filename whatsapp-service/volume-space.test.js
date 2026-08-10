@@ -91,6 +91,26 @@ test('les caches du profil vivant sont bien rendus', () => {
   assert.ok(!fs.existsSync(path.join(dataPath, 'session', 'Default', 'Service Worker', 'CacheStorage')));
 });
 
+test('le service worker part en entier, registre compris', () => {
+  /*
+   * Effacer `CacheStorage` et `ScriptCache` en laissant `Database` laisserait
+   * Chromium avec une inscription de service worker pointant vers un script
+   * absent — état incohérent, et candidat sérieux à un chargement de WhatsApp
+   * Web qui n'aboutit jamais. Soit tout, soit rien.
+   */
+  const dataPath = tmpRoot();
+  makeProfile(dataPath);
+  const sw = path.join(dataPath, 'session', 'Default', 'Service Worker');
+  fs.mkdirSync(path.join(sw, 'Database'), { recursive: true });
+  fs.writeFileSync(path.join(sw, 'Database', 'CURRENT'), 'registre');
+
+  store.reclaimSpace({ dataPath, log: silent });
+
+  assert.ok(!fs.existsSync(sw), 'le dossier Service Worker doit partir entier');
+  // …sans toucher à ce qui porte réellement la session.
+  assert.strictEqual(store.localSessionState(dataPath).usable, true);
+});
+
 test('un profil sans cache ne libère rien et ne casse rien', () => {
   const dataPath = tmpRoot();
   fs.mkdirSync(path.join(dataPath, 'session', 'Default', 'IndexedDB'), { recursive: true });

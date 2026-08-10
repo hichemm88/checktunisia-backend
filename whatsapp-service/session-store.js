@@ -555,6 +555,28 @@ function safeUnlink(p) {
  * effacer un fichier qu'un processus tient ouvert ne rend aucun octet.
  */
 
+/*
+ * Ce qu'on peut reprendre sur un profil, et qui n'est PAS tout à fait la liste
+ * des exclusions d'archive.
+ *
+ * La différence tient au service worker. EXCLUDED écarte de l'archive
+ * `Service Worker/CacheStorage` et `Service Worker/ScriptCache`, mais garde
+ * `Service Worker/Database` — le registre qui dit « un service worker est
+ * enregistré pour web.whatsapp.com, son script porte l'identifiant N ». Effacer
+ * les caches sans effacer ce registre laisse Chromium avec une inscription qui
+ * pointe vers un script absent : un état incohérent, et un candidat sérieux au
+ * chargement de WhatsApp Web qui n'aboutit jamais.
+ *
+ * On retire donc le dossier `Service Worker` ENTIER. C'est à la fois plus
+ * cohérent (ni registre ni script : Chromium réenregistre proprement au
+ * chargement suivant) et plus généreux en place. Le service worker ne porte
+ * aucun credential : ceux-là vivent dans IndexedDB et Local Storage.
+ */
+const RECLAIMABLE = [
+  ...EXCLUDED.filter((dir) => !dir.startsWith('Default/Service Worker/')),
+  'Default/Service Worker',
+];
+
 /**
  * Efface les caches reconstructibles d'un profil.
  *
@@ -568,7 +590,7 @@ function safeUnlink(p) {
 function pruneCaches(profileRoot) {
   let freed = 0;
 
-  for (const relative of EXCLUDED) {
+  for (const relative of RECLAIMABLE) {
     const target = path.join(profileRoot, relative);
     if (!safeIsDir(target)) continue;
 
@@ -703,6 +725,7 @@ function defaultSleep(ms) {
 
 module.exports = {
   EXCLUDED,
+  RECLAIMABLE,
   PAIRED_MARKER,
   REVOKED_MARKER,
   localSessionState,
