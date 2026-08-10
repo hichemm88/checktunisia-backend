@@ -526,7 +526,7 @@ function pushPageLog(kind, text) {
 }
 let pageHooksAttached = false;
 function attachPageDiagnostics() {
-  if (pageHooksAttached || !client.pupPage) return;
+  if (pageHooksAttached || !client.pupPage) return false;
   pageHooksAttached = true;
   client.pupPage.on('pageerror', (err) => pushPageLog('pageerror', err.message));
   client.pupPage.on('error', (err) => pushPageLog('error', err.message));
@@ -534,6 +534,33 @@ function attachPageDiagnostics() {
     const t = msg.type();
     if (t === 'error' || t === 'warning') pushPageLog('console:' + t, msg.text());
   });
+
+  return true;
+}
+
+/*
+ * Brancher les diagnostics DÈS QUE la page existe, sans attendre « ready ».
+ *
+ * Ils n'étaient posés qu'une fois la session prête — donc jamais dans le seul
+ * cas où l'on en a vraiment besoin : un démarrage qui n'aboutit pas. Le
+ * 2026-08-10, le worker est resté en phase « démarrage » sans qu'aucun
+ * événement de la bibliothèque ne survienne, et /debug ne pouvait rien montrer
+ * de la page — le tampon était vide par construction.
+ */
+function watchForPage() {
+  const started = Date.now();
+  const timer = setInterval(() => {
+    if (attachPageDiagnostics()) {
+      clearInterval(timer);
+      console.log('[whatsapp] diagnostics de page branchés.');
+      pushPageLog('worker', `page disponible après ${Math.round((Date.now() - started) / 1000)}s`);
+    } else if (Date.now() - started > 120000) {
+      // Deux minutes sans page : Chromium lui-même n'a pas abouti.
+      clearInterval(timer);
+      state.phase = 'aucune page Chromium après 2 min';
+      console.error('[whatsapp] aucune page Chromium après 2 min — le navigateur n\'a pas démarré.');
+    }
+  }, 1000);
 }
 
 client.on('ready', () => {
@@ -884,7 +911,15 @@ app.get('/health', (_req, res) => {
 // Diagnostic : version WhatsApp Web réellement chargée dans Chromium (permet de
 // vérifier que le pin webVersionCache s'applique) + réactivité de la page.
 app.get('/debug', requireToken, async (_req, res) => {
-  const out = { ready, session: state.session };
+  const out = {
+    ready,
+    session: state.session,
+    // Sans ces trois-là, /debug ne disait rien d'un démarrage qui n'aboutit
+    // pas — le cas où on l'ouvre pourtant en premier.
+    phase: state.phase,
+    phase_at: state.phaseAt,
+    has_page: !!client.pupPage,
+  };
   try {
     out.wweb_version = await withTimeout(client.getWWebVersion(), 10000, 'getWWebVersion');
   } catch (err) {
@@ -1099,7 +1134,23 @@ async function start() {
     await reportSession('logged_out', 'Coffre antérieur à la révocation WhatsApp — ré-appairage par QR nécessaire.');
   }
 
-  client.initialize();
+  watchForPage();
+
+  /*
+   * `initialize()` n'était ni attendu ni surveillé : son rejet finissait dans
+   * le gestionnaire global d'unhandledRejection, noyé parmi les avertissements,
+   * et le worker restait « initializing » sans que la raison n'apparaisse nulle
+   * part. C'est pourtant LE point où un démarrage échoue silencieusement —
+   * lancement de Chromium, ouverture du profil, chargement de WhatsApp Web.
+   */
+  client.initialize().catch((err) => {
+    state.phase = `échec d'initialisation : ${err.message}`;
+    state.phaseAt = new Date().toISOString();
+    console.error('[whatsapp] initialisation impossible :', err.message);
+    pushPageLog('initialize', err.stack || err.message);
+    // On ne recycle pas ici : les échéances s'en chargent, avec leur frein.
+  });
+
   loop();
 }
 
