@@ -161,6 +161,38 @@ test('le budget de redémarrages est plafonné sur une fenêtre glissante', () =
   assert.strictEqual(recovery.restartBudgetExhausted(), false);
 });
 
+test('le frein serre vraiment contre une boucle de démarrages ratés', () => {
+  /*
+   * Le piège : si la fenêtre n'est pas nettement plus large que le temps qu'il
+   * faut pour consommer le budget, le premier recyclage sort de la fenêtre
+   * juste à temps pour autoriser le suivant — et le worker redémarre pour
+   * l'éternité à raison d'un budget par fenêtre. C'est exactement la boucle
+   * qu'on prétend arrêter.
+   *
+   * Cas réel : échéance de mise en service à 15 min, budget de 4.
+   */
+  const dataPath = tmpRoot();
+  const deadlineMs = 15 * 60000;
+  let now = Date.parse('2026-08-10T08:00:00Z');
+  const recovery = createRecovery({
+    dataPath,
+    maxRestarts: 4,
+    restartWindowMs: 4 * 3600000,
+    clock: () => now,
+  });
+
+  let restarts = 0;
+  for (let i = 0; i < 12; i += 1) {
+    now += deadlineMs; // le worker retombe en panne à chaque échéance
+    if (recovery.restartBudgetExhausted()) break;
+    recovery.noteRestart('session jamais prête');
+    restarts += 1;
+  }
+
+  assert.strictEqual(restarts, 4, 'le budget doit être consommé, puis le frein serrer');
+  assert.strictEqual(recovery.restartBudgetExhausted(), true, 'après quoi le worker se met en veille au lieu de s\'acharner');
+});
+
 test('le compteur de redémarrages survit au redémarrage qu\'il compte', () => {
   // Le point de tout l'exercice : un compteur en mémoire serait remis à zéro
   // par l'événement même qu'il doit borner. Il vit donc sur le volume.

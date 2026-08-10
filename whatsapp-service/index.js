@@ -44,7 +44,15 @@ const ERROR_BACKOFF_MS = parseInt(process.env.WHATSAPP_ERROR_BACKOFF_MS || '1500
 const MAX_CONSECUTIVE_SEND_FAILURES = parseInt(process.env.WHATSAPP_MAX_SEND_FAILURES || '3', 10);
 const MAX_PAGE_RELOADS = parseInt(process.env.WHATSAPP_MAX_PAGE_RELOADS || '2', 10);
 const MAX_SELF_RESTARTS = parseInt(process.env.WHATSAPP_MAX_SELF_RESTARTS || '4', 10);
-const SELF_RESTART_WINDOW_MS = parseInt(process.env.WHATSAPP_SELF_RESTART_WINDOW_MS || String(3600 * 1000), 10);
+/*
+ * La fenêtre doit être NETTEMENT plus large que le temps qu'il faut pour
+ * consommer le budget, sinon le frein ne serre jamais : avec une échéance de
+ * mise en service à 15 min et une fenêtre d'une heure, les recyclages tombent à
+ * 15, 30, 45 et 60 min — et le premier sort de la fenêtre juste à temps pour
+ * autoriser le suivant. Le worker redémarrerait indéfiniment à raison de
+ * quatre fois par heure, ce qui est précisément la boucle qu'on veut arrêter.
+ */
+const SELF_RESTART_WINDOW_MS = parseInt(process.env.WHATSAPP_SELF_RESTART_WINDOW_MS || String(4 * 3600 * 1000), 10);
 // Durée de la mise en veille quand le budget de redémarrages est épuisé : au
 // bout du compte à rebours, le worker retente — une panne qui s'est résorbée
 // seule (backend rétabli, WhatsApp Web réparé) ne doit pas exiger un humain.
@@ -83,6 +91,12 @@ const api = axios.create({
 const state = {
   session: 'initializing', // initializing | ready | disconnected | logged_out | auth_failure
   reason: null,
+  // Où en est le démarrage, et depuis quand. « initializing » pendant neuf
+  // heures ne disait pas si Chromium n'avait jamais démarré, si WhatsApp Web
+  // chargeait encore, ou si l'authentification était passée sans jamais
+  // aboutir — trois pannes très différentes sous un seul mot.
+  phase: 'démarrage',
+  phaseAt: new Date().toISOString(),
   lastSendAt: null,
   lastPollAt: null,
   sentCount: 0,
@@ -396,11 +410,58 @@ const watchdog = setTimeout(() => {
 /** Désarme le compte à rebours dès qu'un signe de vie arrive, quel qu'il soit. */
 let watchdogDisarmed = false;
 function disarmWatchdog(signal) {
+  state.phase = signal;
+  state.phaseAt = new Date().toISOString();
+
   if (watchdogDisarmed) return;
   watchdogDisarmed = true;
   clearTimeout(watchdog);
   console.log(`[whatsapp] démarrage confirmé (${signal}).`);
 }
+
+/*
+ * ÉCHÉANCE DE MISE EN SERVICE — le garde-fou qui manquait.
+ *
+ * Constaté le 2026-08-10 : le worker est resté NEUF HEURES en « initializing »
+ * sans jamais tenter quoi que ce soit. Pas de QR, pas de recyclage, pas
+ * d'alerte du worker — et pour cause :
+ *
+ *   • le watchdog de démarrage ci-dessus est désarmé DÉFINITIVEMENT au premier
+ *     signe de vie, y compris un `loading_screen` à 1 %. Il répond à « est-ce
+ *     que quelque chose s'est passé ? », jamais à « est-ce qu'on est devenu
+ *     utilisable ? » ;
+ *   • le heartbeat, lui, continuait de battre — la boucle d'envoi tourne très
+ *     bien sur une session qui n'est pas prête. Le backend voyait donc un
+ *     worker parfaitement vivant, et son alerte « worker injoignable » ne
+ *     pouvait pas se déclencher.
+ *
+ * Résultat : un worker qui commence à démarrer et n'y arrive jamais était le
+ * seul état du système que RIEN ne reprenait. Les fiches s'accumulaient en
+ * silence, exactement comme au premier jour.
+ *
+ * Cette échéance-ci ne se désarme QUE sur « ready ». Un signe de vie prouve
+ * que le démarrage progresse, jamais qu'il aboutira.
+ */
+const READY_DEADLINE_MS = parseInt(process.env.WHATSAPP_READY_DEADLINE_MS || '900000', 10);
+const readyDeadline = setTimeout(() => {
+  if (ready) return;
+
+  /*
+   * Un QR affiché attend un geste humain. Redémarrer le remplacerait par un
+   * autre sans rien réparer — et ferait disparaître celui que quelqu'un est
+   * peut-être en train de scanner. On le DIT, au lieu de s'agiter.
+   */
+  if (state.qrDataUrl) {
+    console.error(`[whatsapp] QR affiché et non scanné depuis ${Math.round(READY_DEADLINE_MS / 60000)} min — ré-appairage attendu, aucun recyclage.`);
+    reportSession('logged_out', 'Un QR attend d\'être scanné — ré-appairage nécessaire pour que les fiches repartent.');
+
+    return;
+  }
+
+  console.error(`[whatsapp] session jamais prête après ${Math.round(READY_DEADLINE_MS / 60000)} min (phase : ${state.phase}) — recyclage.`);
+  selfRestart(`session jamais prête après ${Math.round(READY_DEADLINE_MS / 60000)} min (phase : ${state.phase})`)
+    .catch((err) => console.warn('[whatsapp] recyclage sur échéance :', err.message));
+}, READY_DEADLINE_MS);
 
 /*
  * Cadence d'impression du QR dans les journaux.
@@ -477,6 +538,7 @@ function attachPageDiagnostics() {
 
 client.on('ready', () => {
   disarmWatchdog('session prête');
+  clearTimeout(readyDeadline); // seul événement qui lève l'échéance de mise en service
   ready = true;
   state.qrDataUrl = null; // plus besoin du QR une fois connecté
   console.log('[whatsapp] session prête.');
@@ -809,7 +871,7 @@ app.get('/health', (_req, res) => {
     // Rend visible ce qui était le plus difficile à diagnostiquer : le worker
     // se réparait en boucle sans que rien, hors des journaux Railway déjà
     // évincés, n'en garde la trace.
-    self_restarts_last_hour: recovery.restartsInWindow(),
+    self_restarts_in_window: recovery.restartsInWindow(),
     // Un volume plein fait échouer les envois sans rien dire : la place
     // restante appartient au diagnostic de premier niveau.
     volume: sessionStore.volumeSpace(SESSION_PATH),
