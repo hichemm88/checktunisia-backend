@@ -119,6 +119,53 @@ class KonnectPaymentTest extends TestCase
         $this->assertSame('KONNECT-REF-1', $payment->provider_payment_id);
     }
 
+    /**
+     * Après une bascule simulation → production, un paiement encore valide ne
+     * doit PAS être resservi : son lien mène au guichet d'essai.
+     *
+     * C'est le piège de la mise en service. L'exploitant bascule, reclique sur
+     * la même facture dans le quart d'heure, et se retrouve sur la page de
+     * simulation sans que rien ne le signale. S'il y « paie », le règlement
+     * est constaté chez nous alors qu'aucun argent n'est arrivé.
+     */
+    public function test_a_pending_payment_from_another_environment_is_never_reused(): void
+    {
+        Http::fakeSequence('*init-payment*')
+            ->push(['payUrl' => 'https://gateway.sandbox.konnect.network/pay?p=SIM', 'paymentRef' => 'REF-SIMULATION'])
+            ->push(['payUrl' => 'https://gateway.konnect.network/pay?p=PROD', 'paymentRef' => 'REF-PRODUCTION']);
+
+        $this->konnectConfigured(['konnect_environment' => 'sandbox']);
+        $this->initiate()->assertCreated();
+
+        // L'exploitant bascule en production, sans rien attendre.
+        $this->konnectConfigured(['konnect_environment' => 'production']);
+
+        $this->initiate()
+            ->assertCreated()
+            ->assertJsonPath('data.payment_url', 'https://gateway.konnect.network/pay?p=PROD');
+
+        $this->assertSame(2, Payment::where('invoice_id', $this->invoice->id)->count());
+        $this->assertSame(
+            'production',
+            Payment::where('provider_payment_id', 'REF-PRODUCTION')->value('provider_environment'),
+        );
+        Http::assertSent(fn ($request) => str_starts_with($request->url(), 'https://api.konnect.network/api/v2/'));
+    }
+
+    /** À environnement inchangé, la réutilisation reste la règle : pas de session en double. */
+    public function test_a_pending_payment_of_the_same_environment_is_reused(): void
+    {
+        $this->konnectConfigured();
+        $this->fakeInit('REF-UNIQUE');
+
+        $this->initiate()->assertCreated();
+        $this->initiate()
+            ->assertOk()
+            ->assertJsonPath('data.payment_url', 'https://gateway.sandbox.konnect.network/pay?payment_ref=REF-UNIQUE');
+
+        $this->assertSame(1, Payment::where('invoice_id', $this->invoice->id)->count());
+    }
+
     /** Les trois moyens de règlement demandés doivent être proposés au client. */
     public function test_the_three_payment_methods_are_offered(): void
     {

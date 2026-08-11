@@ -20,6 +20,7 @@ class Payment extends Model
         'provider',
         'provider_payment_id',
         'provider_tracking_id',
+        'provider_environment',
         'declared_reference',
         'declared_at',
         'status',

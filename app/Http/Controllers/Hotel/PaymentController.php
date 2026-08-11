@@ -71,10 +71,28 @@ class PaymentController extends Controller
             ], 503);
         }
 
-        // Check if a valid pending payment already exists
+        // Environnement sous lequel ce paiement va être ouvert. Konnect en a
+        // deux ; les autres canaux n'en ont pas.
+        $environment = $provider === 'konnect'
+            ? \App\Models\PlatformSetting::get()->konnectCredentials()['environment']
+            : null;
+
+        // Un paiement encore valide se réutilise — mais seulement s'il mène au
+        // MÊME guichet.
+        //
+        // Le lien de paiement est fabriqué par le prestataire et conservé tel
+        // quel : il porte en lui la passerelle et l'environnement du moment.
+        // Après une bascule de la simulation vers la production, le rendre à
+        // nouveau renvoyait le client payer sur le guichet d'essai, sans
+        // qu'aucun écran ne le signale — l'argent n'arrivait jamais, et le
+        // règlement était pourtant constaté.
         $existing = Payment::where('invoice_id', $invoice->id)
             ->where('status', 'pending')
             ->where('expires_at', '>', now())
+            ->where('provider', $provider)
+            ->where(fn ($q) => $environment === null
+                ? $q->whereNull('provider_environment')
+                : $q->where('provider_environment', $environment))
             ->latest()
             ->first();
 
@@ -120,6 +138,7 @@ class PaymentController extends Controller
             'provider'             => $provider,
             'provider_payment_id'  => $result['payment_id'],
             'provider_tracking_id' => $trackingId,
+            'provider_environment' => $environment,
             'status'               => 'pending',
             'amount'               => $invoice->total_amount,
             'currency'             => $invoice->currency,
