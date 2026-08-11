@@ -67,14 +67,20 @@ return [
     | Konnect renvoie le client avec ?payment_ref=<référence>. Le front
     | transmet cette référence à GET /hotel/payments/{id}/verify, qui la
     | reconnaît au même titre que notre propre UUID.
+    |
+    | Le repli est le site PUBLIC, jamais une adresse locale : ces URL sont
+    | remises à Konnect, qui y renvoie un client qui vient de payer. Un repli
+    | sur localhost enverrait ce client sur une page morte — sur SA machine,
+    | où rien n'écoute. Même repli que SystemMailer::frontendUrl(), pour que
+    | les liens d'e-mail et les retours de paiement ne divergent jamais.
     */
     'success_url' => env(
         'KONNECT_SUCCESS_URL',
-        env('FRONTEND_URL', 'http://localhost:5173') . '/hotel/payment/success'
+        rtrim(env('FRONTEND_URL', 'https://qayed.tn'), '/') . '/hotel/payment/success'
     ),
     'fail_url' => env(
         'KONNECT_FAIL_URL',
-        env('FRONTEND_URL', 'http://localhost:5173') . '/hotel/payment/failed'
+        rtrim(env('FRONTEND_URL', 'https://qayed.tn'), '/') . '/hotel/payment/failed'
     ),
 
     /*
