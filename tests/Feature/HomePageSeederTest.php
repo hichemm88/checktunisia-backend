@@ -89,30 +89,54 @@ class HomePageSeederTest extends TestCase
         $this->assertSame(HomePageSeeder::fingerprint($a), HomePageSeeder::fingerprint($b));
     }
 
-    public function test_home_content_carries_no_emoji_and_no_authority_claim(): void
+    /**
+     * Ce qui ne doit pas revenir sur la landing. La section « autorités » et
+     * ses mentions du Ministère, elles, sont assumées : décision produit
+     * explicite après la v2 (cf. en-tête du seeder).
+     */
+    public function test_home_content_carries_no_emoji_and_no_invented_testimonial(): void
     {
         $this->seed(HomePageSeeder::class);
         $json = json_encode(Page::where('slug', 'home')->firstOrFail()->content, JSON_UNESCAPED_UNICODE);
 
-        $this->assertSame(0, preg_match('/[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}\x{FE0F}]/u', $json), 'La homepage ne doit contenir aucun emoji.');
-        foreach (['Ministère', 'Interpol', 'watchlist', 'UW AGENCY'] as $forbidden) {
-            $this->assertStringNotContainsString($forbidden, $json, "« {$forbidden} » ne doit plus figurer sur la landing.");
+        $this->assertSame(0, preg_match('/[\x{1F300}-\x{1FAFF}]/u', $json), 'La homepage ne doit contenir aucun emoji.');
+        foreach (['Mohamed Karray', 'Sarra Ben Amor', 'Riadh Ayari', 'UW AGENCY'] as $forbidden) {
+            $this->assertStringNotContainsString($forbidden, $json, "« {$forbidden} » ne doit pas figurer sur la landing.");
         }
+
+        $types = array_column(Page::where('slug', 'home')->firstOrFail()->content['fr']['content'], 'type');
+        $this->assertNotContains('Testimonials', $types, 'Aucun bloc de témoignages tant qu\'il n\'y a pas de témoignage réel.');
     }
 
-    public function test_renames_the_legacy_security_menu_entry(): void
+    /** La v2 avait renommé l'entrée ; la section sombre a repris l'ancre #securite. */
+    public function test_restores_the_security_menu_entry_renamed_by_v2(): void
     {
         MenuItem::create([
             'location' => 'navbar',
-            'label' => ['fr' => 'Sécurité', 'en' => 'Security', 'ar' => 'الأمان'],
-            'external_url' => '/#securite',
+            'label' => ['fr' => 'Conformité', 'en' => 'Compliance', 'ar' => 'الامتثال'],
+            'external_url' => '/#conformite',
             'sort_order' => 3,
         ]);
 
         $this->seed(HomePageSeeder::class);
 
         $item = MenuItem::where('location', 'navbar')->firstOrFail();
-        $this->assertSame('/#conformite', $item->external_url);
-        $this->assertSame('Conformité', $item->label['fr']);
+        $this->assertSame('/#securite', $item->external_url);
+        $this->assertSame('Sécurité', $item->label['fr']);
+    }
+
+    /** Une entrée renommée à la main dans l'admin ne doit pas être écrasée. */
+    public function test_leaves_a_hand_edited_menu_entry_alone(): void
+    {
+        MenuItem::create([
+            'location' => 'navbar',
+            'label' => ['fr' => 'Nos garanties', 'en' => 'Our guarantees', 'ar' => 'ضماناتنا'],
+            'external_url' => '/#conformite',
+            'sort_order' => 3,
+        ]);
+
+        $this->seed(HomePageSeeder::class);
+
+        $this->assertSame('Nos garanties', MenuItem::where('location', 'navbar')->firstOrFail()->label['fr']);
     }
 }
