@@ -159,8 +159,7 @@ class TestKonnectPayment extends Command
             $this->line('  '.$result['payment_url']);
             $this->newLine();
 
-            $webhook = config('konnect.webhook_token') ? 'transmise' : 'ABSENTE (KONNECT_WEBHOOK_TOKEN non défini)';
-            $this->line("  URL de rappel serveur : {$webhook}");
+            $this->line('  Rappel serveur : '.$this->webhookLine($gateway));
             $this->line('  Après paiement, contrôlez : facture « paid », abonnement prolongé, un seul e-mail « paiement reçu ».');
         }
 
@@ -168,6 +167,34 @@ class TestKonnectPayment extends Command
         $this->comment("Pensez à « --cleanup » après l'essai : sans quoi cette facture partira en relance réelle, puis suspendra ce compte à 21 jours de retard.");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * L'URL de rappel RÉELLEMENT transmise à Konnect, jeton masqué.
+     *
+     * Poser KONNECT_WEBHOOK_TOKEN ne suffit pas : c'est la base
+     * (KONNECT_WEBHOOK_URL, à défaut APP_URL) qui décide où Konnect appellera.
+     * Une base fausse — une adresse locale, un domaine périmé — donne un
+     * webhook parfaitement silencieux, impossible à distinguer d'un webhook
+     * absent sans l'avoir regardé. D'où l'affichage.
+     *
+     * Le jeton est tronqué : il n'a rien à faire dans un historique de
+     * terminal, et voir la base suffit à trancher.
+     */
+    private function webhookLine(object $gateway): string
+    {
+        if (! method_exists($gateway, 'webhookUrl')) {
+            return 'sans objet pour cette passerelle';
+        }
+
+        $url = $gateway->webhookUrl();
+
+        if ($url === null) {
+            return 'ABSENT — KONNECT_WEBHOOK_TOKEN non défini. Un client qui ne revient pas après avoir payé ne sera jamais constaté.';
+        }
+
+        return preg_replace('#/([0-9a-f]{4})[0-9a-f]+$#i', '/$1…', $url)
+            .'  (vérifiez que ce domaine est bien celui de votre API, joignable depuis Internet)';
     }
 
     private function cleanup(string $subscriptionId, string $orgName): int

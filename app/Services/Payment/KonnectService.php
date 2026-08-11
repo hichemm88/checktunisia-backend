@@ -233,8 +233,14 @@ class KonnectService implements PaymentGateway
      *
      * Sans jeton configuré, aucune URL n'est transmise : mieux vaut un webhook
      * absent qu'un webhook ouvert à tous.
+     *
+     * Publique parce qu'elle se VÉRIFIE : poser le jeton ne suffit pas, c'est
+     * la base (KONNECT_WEBHOOK_URL, à défaut APP_URL) qui décide où Konnect
+     * appellera réellement. Une base fausse donne un webhook silencieux, et
+     * rien ne le distingue d'un webhook absent tant qu'on ne l'a pas regardé.
+     * @see \App\Console\Commands\TestKonnectPayment
      */
-    private function webhookUrl(): ?string
+    public function webhookUrl(): ?string
     {
         $token = (string) config('konnect.webhook_token', '');
 

@@ -52,6 +52,13 @@ class PlatformSettingController extends Controller
         // formulaire de déclaration sans savoir où envoyer l'argent). Le
         // virement étant le seul canal ouvert en production, ce n'est pas une
         // question d'ergonomie : c'est un client qui ne peut pas payer.
+        if ($error = $this->environmentSwitchedWithoutCredentials($s, $v)) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'PAYMENT_CHANNEL_INCOMPLETE', 'message' => $error[0], 'field' => $error[1]]],
+            ], 422);
+        }
+
         if ($error = $this->incompleteChannel($s, $v)) {
             return response()->json([
                 'data'   => null,
@@ -64,6 +71,47 @@ class PlatformSettingController extends Controller
         // Same reasoning as show(): les identifiants de passerelle (Flouci
         // comme Konnect) ne repartent jamais vers le navigateur.
         return response()->json(['data' => $s->fresh()->toPublicArray()]);
+    }
+
+    /**
+     * Change-t-on d'environnement en gardant les identifiants de l'autre ?
+     *
+     * Simulation et production sont deux COMPTES distincts chez Konnect, avec
+     * chacun leur clé et leur portefeuille. Or les champs d'identifiants sont
+     * en écriture seule et se laissent vides pour « ne pas changer » : passer
+     * la liste déroulante en production sans les ressaisir conservait donc la
+     * clé de simulation, envoyée à l'API de production qui la rejette.
+     *
+     * Le symptôme est trompeur — « Service de paiement indisponible,
+     * réessayez dans quelques instants » — et l'écran, lui, affiche fièrement
+     * « Production ». Rien ne relie la panne à sa cause.
+     *
+     * Changer d'environnement sans fournir les identifiants correspondants
+     * n'a aucun usage légitime : on le refuse plutôt que de laisser un canal
+     * ouvert dont chaque règlement échoue.
+     *
+     * @param  array<string, mixed>  $changes
+     * @return array{0: string, 1: string}|null  [message, champ fautif]
+     */
+    private function environmentSwitchedWithoutCredentials(PlatformSetting $current, array $changes): ?array
+    {
+        if (! array_key_exists('konnect_environment', $changes)) {
+            return null;
+        }
+
+        if ($changes['konnect_environment'] === $current->konnect_environment) {
+            return null;
+        }
+
+        if (filled($changes['konnect_api_key'] ?? null) && filled($changes['konnect_wallet_id'] ?? null)) {
+            return null;
+        }
+
+        return [
+            'Changer d\'environnement Konnect exige de ressaisir la clé d\'API ET l\'identifiant de portefeuille : '
+            .'la simulation et la production sont deux comptes distincts, et les identifiants de l\'un sont rejetés par l\'autre.',
+            'konnect_api_key',
+        ];
     }
 
     /**

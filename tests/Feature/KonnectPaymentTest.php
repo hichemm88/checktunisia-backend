@@ -305,27 +305,35 @@ class KonnectPaymentTest extends TestCase
      * Deuxième enregistrement, champs d'identifiants laissés VIDES (« laisser
      * vide pour ne pas changer »). Le front ne les transmet alors pas du tout :
      * le garde doit s'appuyer sur ce qui est déjà en base, sinon toute
-     * modification ultérieure refermerait le canal.
+     * modification ultérieure refermerait le canal — ou pire, effacerait les
+     * identifiants en place.
+     *
+     * À environnement inchangé, s'entend : en changer exige de les ressaisir,
+     * c'est l'objet d'un autre test.
      */
     public function test_a_later_save_without_retyping_the_credentials_keeps_the_channel_open(): void
     {
         PlatformSetting::get()->update([
-            'konnect_enabled'   => true,
-            'konnect_api_key'   => '5f7a209aeb3f76490ac4a3d1:secret',
-            'konnect_wallet_id' => '5f7a209aeb3f76490ac4a3d1',
+            'konnect_enabled'     => true,
+            'konnect_environment' => 'sandbox',
+            'konnect_api_key'     => '5f7a209aeb3f76490ac4a3d1:secret',
+            'konnect_wallet_id'   => '5f7a209aeb3f76490ac4a3d1',
         ]);
 
         $this->actingAs($this->admin)
             ->patchJson('/api/v1/admin/platform-settings', [
                 'konnect_enabled'     => true,
-                'konnect_environment' => 'production',
+                'konnect_environment' => 'sandbox',
+                'company_name'        => 'UW Agency',
             ])
             ->assertOk()
-            ->assertJsonPath('data.konnect_enabled', true);
+            ->assertJsonPath('data.konnect_enabled', true)
+            ->assertJsonPath('data.online_payment_enabled', true);
 
         $fresh = PlatformSetting::get()->fresh();
-        $this->assertSame('production', $fresh->konnect_environment);
+        $this->assertSame('UW Agency', $fresh->company_name);
         $this->assertSame('5f7a209aeb3f76490ac4a3d1:secret', $fresh->konnect_api_key, "les identifiants ne sont pas effacés");
+        $this->assertSame('5f7a209aeb3f76490ac4a3d1', $fresh->konnect_wallet_id);
     }
 
     /**
@@ -386,6 +394,72 @@ class KonnectPaymentTest extends TestCase
             ])
             ->assertStatus(422)
             ->assertJsonPath('errors.0.code', 'PAYMENT_CHANNEL_INCOMPLETE');
+    }
+
+    /**
+     * Simulation et production sont deux comptes distincts chez Konnect.
+     *
+     * Les champs d'identifiants étant en écriture seule, basculer la liste
+     * déroulante sans les ressaisir conservait la clé de l'autre
+     * environnement. Chaque règlement échouait ensuite sur un « Service de
+     * paiement indisponible » que rien ne reliait à sa cause, tandis que
+     * l'écran affichait « Production ».
+     */
+    public function test_changing_environment_without_retyping_the_credentials_is_refused(): void
+    {
+        PlatformSetting::get()->update([
+            'konnect_enabled'     => true,
+            'konnect_environment' => 'sandbox',
+            'konnect_api_key'     => 'cle-de-simulation',
+            'konnect_wallet_id'   => 'portefeuille-de-simulation',
+        ]);
+
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'konnect_enabled'     => true,
+                'konnect_environment' => 'production',
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.0.field', 'konnect_api_key');
+
+        $this->assertSame('sandbox', PlatformSetting::get()->fresh()->konnect_environment);
+    }
+
+    public function test_changing_environment_with_the_matching_credentials_is_accepted(): void
+    {
+        PlatformSetting::get()->update([
+            'konnect_enabled'     => true,
+            'konnect_environment' => 'sandbox',
+            'konnect_api_key'     => 'cle-de-simulation',
+            'konnect_wallet_id'   => 'portefeuille-de-simulation',
+        ]);
+
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'konnect_enabled'     => true,
+                'konnect_environment' => 'production',
+                'konnect_api_key'     => 'cle-de-production',
+                'konnect_wallet_id'   => 'portefeuille-de-production',
+            ])
+            ->assertOk();
+
+        $fresh = PlatformSetting::get()->fresh();
+        $this->assertSame('production', $fresh->konnect_environment);
+        $this->assertSame('cle-de-production', $fresh->konnect_api_key);
+    }
+
+    /** Un enregistrement qui ne touche pas à l'environnement n'exige rien. */
+    public function test_saving_without_touching_the_environment_needs_no_credentials(): void
+    {
+        $this->konnectConfigured();
+
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'konnect_enabled'     => true,
+                'konnect_environment' => 'sandbox',
+                'tax_rate'            => 19,
+            ])
+            ->assertOk();
     }
 
     public function test_switching_konnect_on_without_credentials_is_refused_at_the_back_office(): void
