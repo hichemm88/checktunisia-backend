@@ -392,6 +392,24 @@ class BillingService
         ]);
     }
 
+    /**
+     * Relance UNE facture, sans toucher au reste du portefeuille.
+     *
+     * `runDunning()` balaie toutes les factures en retard : c'est ce qu'on
+     * veut du planificateur, jamais d'un essai. Lancer la relance globale pour
+     * vérifier un e-mail enverrait de vraies relances à de vrais clients, et
+     * suspendrait ceux qui ont passé les 21 jours. D'où cette porte étroite,
+     * qui emprunte exactement le même code.
+     */
+    public function remindOverdue(Invoice $invoice, ?int $daysLate = null): void
+    {
+        $daysLate ??= $invoice->due_at
+            ? (int) $invoice->due_at->copy()->startOfDay()->diffInDays(now()->startOfDay())
+            : 0;
+
+        $this->sendOverdueReminder($invoice, $daysLate);
+    }
+
     private function sendOverdueReminder(Invoice $invoice, int $daysLate): void
     {
         $sub = $invoice->subscription;
