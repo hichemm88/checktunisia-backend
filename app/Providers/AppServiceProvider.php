@@ -78,6 +78,12 @@ class AppServiceProvider extends ServiceProvider
         // UUID de scans si le secret partagé venait à fuiter (SEC-21).
         // Indexée sur l'IP : le worker n'a pas d'utilisateur.
         RateLimiter::for('internal-worker', fn (Request $request) => Limit::perMinute(240)->by($request->ip()));
+
+        // Rappel serveur de Konnect. Il n'y a pas d'utilisateur derrière : la
+        // limite est indexée sur l'IP du prestataire. Un paiement engendre un
+        // ou deux appels ; 60/min laisse la place à une rafale de rejeux après
+        // une coupure sans ouvrir la porte au martèlement d'une URL publique.
+        RateLimiter::for('konnect-webhook', fn (Request $request) => Limit::perMinute(60)->by($request->ip()));
     }
 
     /**

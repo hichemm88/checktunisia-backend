@@ -40,6 +40,7 @@ use App\Http\Controllers\Hotel\ScanEventController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Hotel\WatchlistHitController;
 use App\Http\Controllers\Internal\AiUsageIngestController;
+use App\Http\Controllers\Payment\KonnectWebhookController;
 use App\Http\Controllers\Notifications\DeviceController;
 use App\Http\Controllers\Notifications\NotificationController;
 use App\Http\Controllers\Public\PublicCmsController;
@@ -78,6 +79,12 @@ Route::get('public/pages/{slug}', [PublicCmsController::class, 'page']);
 Route::get('public/menus', [PublicCmsController::class, 'menus']);
 Route::get('public/media/{id}', [PublicCmsController::class, 'media']);
 Route::get('public/sitemap.xml', [PublicCmsController::class, 'sitemap']);
+
+// Rappel serveur de Konnect. Sans session : c'est le prestataire qui prévient,
+// pas un utilisateur. Le jeton est un segment de chemin et la vérité vient d'un
+// appel sortant — voir KonnectWebhookController.
+Route::match(['get', 'post'], 'payments/konnect/webhook/{token}', KonnectWebhookController::class)
+    ->middleware('throttle:konnect-webhook');
 
 /*
 |--------------------------------------------------------------------------

@@ -13,6 +13,10 @@ class PlatformSetting extends Model
         'flouci_enabled',
         'flouci_app_token',
         'flouci_app_secret',
+        'konnect_enabled',
+        'konnect_environment',
+        'konnect_api_key',
+        'konnect_wallet_id',
         'virement_enabled',
         'virement_rib',
         'virement_iban',
@@ -27,6 +31,10 @@ class PlatformSetting extends Model
     {
         return [
             'flouci_enabled'   => 'boolean',
+            'konnect_enabled'  => 'boolean',
+            // La clé Konnect ouvre les encaissements à elle seule : elle ne
+            // reste pas en clair dans la base.
+            'konnect_api_key'  => 'encrypted',
             'virement_enabled' => 'boolean',
             'tax_rate'         => 'decimal:2',
             'timbre_fiscal'    => 'decimal:3',
@@ -84,6 +92,70 @@ class PlatformSetting extends Model
     }
 
     /**
+     * Identifiants Konnect effectifs — même règle que Flouci : la saisie du
+     * back-office d'abord, l'environnement en repli, résolue À CHAQUE APPEL.
+     *
+     * `base_url` ne se saisit pas : elle est DÉDUITE de l'environnement. C'est
+     * ce qui rend impossible le pire scénario de la bascule — encaisser en
+     * simulation en croyant être en production, ou l'inverse.
+     *
+     * @return array{api_key: string, wallet_id: string, environment: string, base_url: string}
+     */
+    public function konnectCredentials(): array
+    {
+        $environment = filled($this->konnect_environment)
+            ? (string) $this->konnect_environment
+            : (string) config('konnect.environment', 'sandbox');
+
+        $baseUrls = (array) config('konnect.base_urls', []);
+
+        return [
+            'api_key'     => filled($this->konnect_api_key) ? (string) $this->konnect_api_key : (string) config('konnect.api_key'),
+            'wallet_id'   => filled($this->konnect_wallet_id) ? (string) $this->konnect_wallet_id : (string) config('konnect.wallet_id'),
+            'environment' => $environment,
+            'base_url'    => rtrim((string) ($baseUrls[$environment] ?? $baseUrls['sandbox'] ?? ''), '/'),
+        ];
+    }
+
+    /** Le paiement Konnect peut-il réellement aboutir ? */
+    public function konnectReady(): bool
+    {
+        $credentials = $this->konnectCredentials();
+
+        return (bool) $this->konnect_enabled
+            && filled($credentials['api_key'])
+            && filled($credentials['wallet_id'])
+            && filled($credentials['base_url']);
+    }
+
+    /**
+     * Le canal « paiement en ligne », quel que soit le prestataire derrière.
+     *
+     * C'est ce que doivent interroger toutes les surfaces (API, écrans) :
+     * elles n'ont pas à savoir QUI encaisse. Le jour où le prestataire change,
+     * rien ne bouge au-dessus de cette ligne.
+     */
+    public function onlinePaymentReady(): bool
+    {
+        return $this->onlineProvider() !== null;
+    }
+
+    /**
+     * Prestataire à utiliser pour un NOUVEAU paiement en ligne, ou null si le
+     * canal est fermé. Konnect d'abord ; Flouci ne sert plus que s'il est
+     * explicitement rallumé (paiements historiques mis à part, qui se
+     * vérifient toujours par leur propre passerelle).
+     */
+    public function onlineProvider(): ?string
+    {
+        if ($this->konnectReady()) {
+            return 'konnect';
+        }
+
+        return $this->flouciReady() ? 'flouci' : null;
+    }
+
+    /**
      * Le virement est-il exploitable par le client ? Sans bénéficiaire ni
      * compte, il reçoit un formulaire de déclaration sans savoir où envoyer
      * l'argent.
@@ -104,6 +176,13 @@ class PlatformSetting extends Model
             'company_rc'           => $this->company_rc,
             'company_address'      => $this->company_address,
             'flouci_enabled'       => $this->flouci_enabled,
+            'konnect_enabled'      => $this->konnect_enabled,
+            'konnect_environment'  => $this->konnect_environment,
+            // Le seul drapeau que les écrans doivent lire : il dit si le
+            // règlement en ligne peut RÉELLEMENT aboutir, sans nommer le
+            // prestataire. Un bouton « Payer en ligne » ne doit jamais
+            // s'afficher au-dessus d'un canal muet.
+            'online_payment_enabled' => $this->onlinePaymentReady(),
             'virement_enabled'     => $this->virement_enabled,
             'virement_rib'         => $this->virement_rib,
             'virement_iban'        => $this->virement_iban,

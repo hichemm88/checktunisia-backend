@@ -19,8 +19,13 @@ use Illuminate\Support\Facades\Log;
  * Required env vars:
  *   FLOUCI_APP_TOKEN   — provided by Flouci merchant dashboard
  *   FLOUCI_APP_SECRET  — provided by Flouci merchant dashboard
+ *
+ * CANAL HISTORIQUE. Les nouveaux paiements passent par Konnect
+ * (@see KonnectService) ; ce service reste en service pour CONSTATER les
+ * paiements Flouci antérieurs à la bascule. Il ne redevient un canal ouvert
+ * que si `flouci_enabled` est explicitement rallumé au back-office.
  */
-class FlouciService
+class FlouciService implements PaymentGateway
 {
     private string $baseUrl;
 
@@ -49,11 +54,14 @@ class FlouciService
      *
      * @param  int    $amountMillimes  Amount in TND millimes (1.500 TND = 1500)
      * @param  string $trackingId      Our internal reference (UUID), stored as developer_tracking_id
+     * @param  array<string, mixed> $context  Ignoré : Flouci ne préremplit rien
+     *                                        sur sa page hébergée. Présent pour
+     *                                        satisfaire le contrat commun.
      * @return array{payment_id: string, payment_url: string}
      *
      * @throws \RuntimeException  if the gateway is unavailable or returns an error
      */
-    public function createPayment(int $amountMillimes, string $trackingId): array
+    public function createPayment(int $amountMillimes, string $trackingId, array $context = []): array
     {
         $credentials = $this->credentials();
 
@@ -96,7 +104,7 @@ class FlouciService
     /**
      * Verify a Flouci payment by ID (server-side check after redirect).
      *
-     * @return array{success: bool, status: string, payment_id: string, raw: array}
+     * @return array{success: bool, pending: bool, status: string, payment_id: string, raw: array}
      * @throws \RuntimeException
      */
     public function verifyPayment(string $paymentId): array
@@ -123,6 +131,9 @@ class FlouciService
 
         return [
             'success'    => $status === 'SUCCESS',
+            // Flouci n'a pas de webhook : rien n'arrivera après ce constat, et
+            // il n'y a donc pas d'attente à préserver. Comportement inchangé.
+            'pending'    => false,
             'status'     => $status,
             'payment_id' => $paymentId,
             'raw'        => $data,

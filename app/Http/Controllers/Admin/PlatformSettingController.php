@@ -28,6 +28,10 @@ class PlatformSettingController extends Controller
             'flouci_enabled'       => ['sometimes', 'boolean'],
             'flouci_app_token'     => ['sometimes', 'nullable', 'string', 'max:255'],
             'flouci_app_secret'    => ['sometimes', 'nullable', 'string', 'max:255'],
+            'konnect_enabled'      => ['sometimes', 'boolean'],
+            'konnect_environment'  => ['sometimes', 'string', 'in:sandbox,production'],
+            'konnect_api_key'      => ['sometimes', 'nullable', 'string', 'max:255'],
+            'konnect_wallet_id'    => ['sometimes', 'nullable', 'string', 'max:100'],
             'virement_enabled'     => ['sometimes', 'boolean'],
             'virement_rib'         => ['sometimes', 'nullable', 'string', 'max:50'],
             'virement_iban'        => ['sometimes', 'nullable', 'string', 'max:34'],
@@ -57,7 +61,8 @@ class PlatformSettingController extends Controller
 
         $s->update($v);
 
-        // Same reasoning as show(): never round-trip flouci_app_token/flouci_app_secret.
+        // Same reasoning as show(): les identifiants de passerelle (Flouci
+        // comme Konnect) ne repartent jamais vers le navigateur.
         return response()->json(['data' => $s->fresh()->toPublicArray()]);
     }
 
@@ -75,6 +80,13 @@ class PlatformSettingController extends Controller
     private function incompleteChannel(PlatformSetting $current, array $changes): ?array
     {
         $resulting = (clone $current)->fill($changes);
+
+        if ($resulting->konnect_enabled && ! $resulting->konnectReady()) {
+            return [
+                "Renseignez la clé d'API et l'identifiant de portefeuille Konnect avant d'ouvrir le paiement en ligne : sans eux, chaque règlement échouerait.",
+                'konnect_api_key',
+            ];
+        }
 
         if ($resulting->flouci_enabled && ! $resulting->flouciReady()) {
             return [
