@@ -6,23 +6,28 @@ use App\Http\Controllers\Controller;
 use App\Models\Invoice;
 use App\Models\Payment;
 use App\Services\Audit\AuditLogger;
-use App\Services\Payment\FlouciService;
+use App\Services\Payment\PaymentGatewayResolver;
+use App\Services\Payment\PaymentSettlement;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 /**
- * Hotel payment flow via Flouci.
+ * Hotel payment flow via la passerelle en ligne du moment (Konnect ; Flouci
+ * pour les paiements antérieurs à la bascule).
  *
- * POST /hotel/payments/initiate     — create a Flouci payment for an invoice
- * GET  /hotel/payments/{id}/verify  — verify payment status after redirect
+ * POST /hotel/payments/initiate     — ouvre une session de paiement pour une facture
+ * GET  /hotel/payments/{id}/verify  — constate le sort du paiement au retour
  */
 class PaymentController extends Controller
 {
-    public function __construct(private readonly FlouciService $flouci) {}
+    public function __construct(
+        private readonly PaymentGatewayResolver $gateways,
+        private readonly PaymentSettlement $settlement,
+    ) {}
 
     /**
-     * Initiate a Flouci payment session for a pending invoice.
+     * Ouvre une session de paiement en ligne pour une facture en attente.
      */
     public function initiate(Request $request): JsonResponse
     {
@@ -44,12 +49,18 @@ class PaymentController extends Controller
         // Un canal fermé se dit fermé — il ne se casse pas.
         //
         // Sans ce garde, une passerelle non configurée partait quand même
-        // appeler Flouci et rendait « Service de paiement indisponible,
-        // réessayez dans quelques instants » : une panne définitive annoncée
-        // comme passagère, sans indiquer au client que sa facture est
-        // réglable par virement. L'API doit dire la même chose que l'écran,
-        // et c'est elle qui fait autorité.
-        if (! \App\Models\PlatformSetting::get()->flouciReady()) {
+        // appeler le prestataire et rendait « Service de paiement
+        // indisponible, réessayez dans quelques instants » : une panne
+        // définitive annoncée comme passagère, sans indiquer au client que sa
+        // facture est réglable par virement. L'API doit dire la même chose que
+        // l'écran, et c'est elle qui fait autorité.
+        //
+        // Le garde interroge le CANAL, pas un prestataire nommé : le jour où
+        // celui-ci change, il n'y a rien à retoucher ici.
+        $gateway  = $this->gateways->forNewPayment();
+        $provider = \App\Models\PlatformSetting::get()->onlineProvider();
+
+        if ($gateway === null || $provider === null) {
             return response()->json([
                 'data'   => null,
                 'errors' => [[
@@ -79,12 +90,24 @@ class PaymentController extends Controller
             ]);
         }
 
-        // Convert TND to millimes (Flouci expects integer millimes)
+        // Convert TND to millimes (les deux passerelles comptent en millimes)
         $amountMillimes = (int) round((float) $invoice->total_amount * 1000);
         $trackingId     = Str::uuid()->toString();
+        $user           = $request->user();
 
         try {
-            $result = $this->flouci->createPayment($amountMillimes, $trackingId);
+            $result = $gateway->createPayment($amountMillimes, $trackingId, [
+                // Préremplissage de la page hébergée : le client ne ressaisit
+                // pas ce que nous connaissons déjà. `order_id` porte le numéro
+                // de facture — c'est par lui qu'on rapproche un encaissement
+                // dans le tableau de bord du prestataire.
+                'order_id'    => $invoice->invoice_number,
+                'description' => 'Qayed — facture '.$invoice->invoice_number,
+                'first_name'  => $user?->first_name,
+                'last_name'   => $user?->last_name,
+                'email'       => $user?->email,
+                'phone'       => $user?->phone,
+            ]);
         } catch (\RuntimeException $e) {
             return response()->json([
                 'errors' => [['code' => 'PAYMENT_GATEWAY_ERROR', 'message' => 'Service de paiement indisponible. Réessayez dans quelques instants.', 'field' => null]],
@@ -94,14 +117,14 @@ class PaymentController extends Controller
         $payment = Payment::create([
             'invoice_id'           => $invoice->id,
             'hotel_id'             => $invoice->hotel_id,
-            'provider'             => 'flouci',
+            'provider'             => $provider,
             'provider_payment_id'  => $result['payment_id'],
             'provider_tracking_id' => $trackingId,
             'status'               => 'pending',
             'amount'               => $invoice->total_amount,
             'currency'             => $invoice->currency,
             'payment_url'          => $result['payment_url'],
-            'expires_at'           => now()->addSeconds((int) config('flouci.timeout_secs', 900)),
+            'expires_at'           => now()->addSeconds($this->lifespanSeconds($provider)),
         ]);
 
         AuditLogger::log('payment.initiated', $invoice, actor: $request->user());
@@ -118,8 +141,8 @@ class PaymentController extends Controller
     }
 
     /**
-     * Verify a payment after the user returns from Flouci's hosted page.
-     * Frontend calls this after landing on success_url / fail_url.
+     * Constate le sort d'un paiement au retour de la page hébergée.
+     * Le front appelle cette route en atterrissant sur success_url / fail_url.
      */
     public function verify(Request $request, string $id): JsonResponse
     {
@@ -127,11 +150,12 @@ class PaymentController extends Controller
 
         // Deux identifiants ouvrent la même vérification, à dessein.
         //
-        // Flouci ne connaît que le SIEN : il renvoie le client sur
-        // `success_link?payment_id=<son identifiant>`, jamais avec le nôtre.
-        // Ne chercher que sur notre clé primaire faisait échouer tous les
-        // retours de paiement — la facture restait impayée, partait en
-        // relance, puis suspendait un client qui avait pourtant réglé.
+        // Le prestataire ne connaît que le SIEN : il renvoie le client sur
+        // `successUrl?payment_ref=<sa référence>` (Flouci : `?payment_id=`),
+        // jamais avec le nôtre. Ne chercher que sur notre clé primaire faisait
+        // échouer tous les retours de paiement — la facture restait impayée,
+        // partait en relance, puis suspendait un client qui avait pourtant
+        // réglé.
         //
         // Le test `Str::isUuid` n'est pas cosmétique : `payments.id` est une
         // colonne uuid PostgreSQL, et lui comparer une chaîne quelconque lève
@@ -163,67 +187,47 @@ class PaymentController extends Controller
             return response()->json(['data' => ['status' => 'expired', 'payment_id' => $payment->id]]);
         }
 
+        $gateway = $this->gateways->forPayment($payment);
+
+        // Un paiement hors ligne (virement) n'a personne à interroger : on rend
+        // son état tel qu'il est plutôt que d'appeler une passerelle qui ne le
+        // connaît pas. Même chose pour un prestataire retiré du service.
+        if ($gateway === null) {
+            return response()->json(['data' => [
+                'status'     => $payment->status,
+                'payment_id' => $payment->id,
+            ]]);
+        }
+
         try {
-            $result = $this->flouci->verifyPayment($payment->provider_payment_id);
+            $result = $gateway->verifyPayment($payment->provider_payment_id);
         } catch (\RuntimeException) {
             return response()->json([
                 'errors' => [['code' => 'PAYMENT_GATEWAY_ERROR', 'message' => 'Impossible de vérifier le paiement.', 'field' => null]],
             ], 502);
         }
 
-        if ($result['success']) {
-            // Transition conditionnelle : seule la requête qui fait réellement
-            // passer le paiement de « pending » à « completed » poursuit.
-            //
-            // Un verrou posé plus haut aurait été relâché avant l'appel à
-            // Flouci — le tenir pendant un aller-retour réseau serait pire. Ce
-            // compare-and-set, lui, est atomique : deux retours simultanés de
-            // la page de paiement ne peuvent pas gagner tous les deux.
-            $claimed = Payment::whereKey($payment->id)
-                ->where('status', 'pending')
-                ->update([
-                    'status'            => 'completed',
-                    'completed_at'      => now(),
-                    'provider_response' => $result['raw'],
-                ]);
-
-            if ($claimed === 0) {
-                // L'autre requête a déjà tout enchaîné : on rend son résultat.
-                return response()->json(['data' => [
-                    'status'     => $payment->fresh()->status,
-                    'payment_id' => $payment->id,
-                ]]);
-            }
-
-            $payment->refresh();
-
-            // Mark invoice as paid + record payment reference
-            $payment->invoice()->update([
-                'status'            => 'paid',
-                'paid_at'           => now(),
-                'payment_method'    => 'flouci',
-                'payment_reference' => $payment->provider_payment_id,
-            ]);
-
-            AuditLogger::log('payment.completed', $payment->invoice, actor: $request->user());
-
-            // Réactivation/prolongation automatique de l'abonnement + email
-            // « Paiement reçu » — même circuit que le virement validé.
-            app(\App\Services\Billing\BillingService::class)
-                ->handleInvoicePaid($payment->invoice()->first(), $request->user()?->id);
-        } else {
-            $payment->update([
-                'status'            => 'failed',
-                'provider_response' => $result['raw'],
-            ]);
-        }
+        // L'encaissement lui-même vit dans PaymentSettlement : le webhook du
+        // prestataire emprunte EXACTEMENT le même chemin, sans copie.
+        $status = $this->settlement->apply($payment, $result, $request->user());
 
         return response()->json([
             'data' => [
-                'status'     => $payment->status,
+                'status'     => $status,
                 'payment_id' => $payment->id,
             ],
         ]);
+    }
+
+    /**
+     * Durée de validité du lien de paiement, selon le prestataire.
+     * Konnect compte en minutes, Flouci comptait en secondes.
+     */
+    private function lifespanSeconds(string $provider): int
+    {
+        return $provider === 'konnect'
+            ? ((int) config('konnect.lifespan_minutes', 15)) * 60
+            : (int) config('flouci.timeout_secs', 900);
     }
 
     /**
