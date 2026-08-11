@@ -167,6 +167,53 @@ class PlatformSetting extends Model
             && (filled($this->virement_iban) || filled($this->virement_rib));
     }
 
+    /**
+     * Vue du BACK-OFFICE : la vue publique, plus un aperçu masqué des
+     * identifiants enregistrés.
+     *
+     * Un champ vide ne dit pas s'il l'est parce que rien n'est enregistré ou
+     * parce que le secret est simplement caché. Cette ambiguïté a un coût
+     * réel : on ressaisit par précaution, on doute d'un enregistrement qui a
+     * pourtant réussi, on cherche une panne là où il n'y en a pas.
+     *
+     * Montrer les extrémités lève le doute sans rien livrer : on reconnaît
+     * SA clé, on voit qu'elle est là, et on distingue celle de simulation de
+     * celle de production. Le milieu, lui, ne sort jamais.
+     *
+     * Réservé à l'écran d'administration — jamais /public/settings.
+     */
+    public function toAdminArray(): array
+    {
+        return $this->toPublicArray() + [
+            'konnect_api_key_hint'   => self::maskSecret($this->konnect_api_key),
+            'konnect_wallet_id_hint' => self::maskSecret($this->konnect_wallet_id),
+            'flouci_app_token_hint'  => self::maskSecret($this->flouci_app_token),
+            'flouci_app_secret_hint' => self::maskSecret($this->flouci_app_secret),
+        ];
+    }
+
+    /**
+     * Extrémités visibles, milieu masqué. Null si rien n'est enregistré —
+     * c'est ce null qui dit « ce champ est réellement vide ».
+     *
+     * En dessous de douze caractères, on ne montre rien : sur un secret court,
+     * début et fin en dévoileraient une part appréciable.
+     */
+    public static function maskSecret(?string $value): ?string
+    {
+        $value = (string) $value;
+
+        if ($value === '') {
+            return null;
+        }
+
+        if (mb_strlen($value) < 12) {
+            return str_repeat('•', 8);
+        }
+
+        return mb_substr($value, 0, 4).str_repeat('•', 8).mb_substr($value, -3);
+    }
+
     /** Public-safe representation (hides API credentials). */
     public function toPublicArray(): array
     {

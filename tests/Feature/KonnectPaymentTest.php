@@ -305,27 +305,35 @@ class KonnectPaymentTest extends TestCase
      * Deuxième enregistrement, champs d'identifiants laissés VIDES (« laisser
      * vide pour ne pas changer »). Le front ne les transmet alors pas du tout :
      * le garde doit s'appuyer sur ce qui est déjà en base, sinon toute
-     * modification ultérieure refermerait le canal.
+     * modification ultérieure refermerait le canal — ou pire, effacerait les
+     * identifiants en place.
+     *
+     * À environnement inchangé, s'entend : en changer exige de les ressaisir,
+     * c'est l'objet d'un autre test.
      */
     public function test_a_later_save_without_retyping_the_credentials_keeps_the_channel_open(): void
     {
         PlatformSetting::get()->update([
-            'konnect_enabled'   => true,
-            'konnect_api_key'   => '5f7a209aeb3f76490ac4a3d1:secret',
-            'konnect_wallet_id' => '5f7a209aeb3f76490ac4a3d1',
+            'konnect_enabled'     => true,
+            'konnect_environment' => 'sandbox',
+            'konnect_api_key'     => '5f7a209aeb3f76490ac4a3d1:secret',
+            'konnect_wallet_id'   => '5f7a209aeb3f76490ac4a3d1',
         ]);
 
         $this->actingAs($this->admin)
             ->patchJson('/api/v1/admin/platform-settings', [
                 'konnect_enabled'     => true,
-                'konnect_environment' => 'production',
+                'konnect_environment' => 'sandbox',
+                'company_name'        => 'UW Agency',
             ])
             ->assertOk()
-            ->assertJsonPath('data.konnect_enabled', true);
+            ->assertJsonPath('data.konnect_enabled', true)
+            ->assertJsonPath('data.online_payment_enabled', true);
 
         $fresh = PlatformSetting::get()->fresh();
-        $this->assertSame('production', $fresh->konnect_environment);
+        $this->assertSame('UW Agency', $fresh->company_name);
         $this->assertSame('5f7a209aeb3f76490ac4a3d1:secret', $fresh->konnect_api_key, "les identifiants ne sont pas effacés");
+        $this->assertSame('5f7a209aeb3f76490ac4a3d1', $fresh->konnect_wallet_id);
     }
 
     /**
@@ -386,6 +394,72 @@ class KonnectPaymentTest extends TestCase
             ])
             ->assertStatus(422)
             ->assertJsonPath('errors.0.code', 'PAYMENT_CHANNEL_INCOMPLETE');
+    }
+
+    /**
+     * Simulation et production sont deux comptes distincts chez Konnect.
+     *
+     * Les champs d'identifiants étant en écriture seule, basculer la liste
+     * déroulante sans les ressaisir conservait la clé de l'autre
+     * environnement. Chaque règlement échouait ensuite sur un « Service de
+     * paiement indisponible » que rien ne reliait à sa cause, tandis que
+     * l'écran affichait « Production ».
+     */
+    public function test_changing_environment_without_retyping_the_credentials_is_refused(): void
+    {
+        PlatformSetting::get()->update([
+            'konnect_enabled'     => true,
+            'konnect_environment' => 'sandbox',
+            'konnect_api_key'     => 'cle-de-simulation',
+            'konnect_wallet_id'   => 'portefeuille-de-simulation',
+        ]);
+
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'konnect_enabled'     => true,
+                'konnect_environment' => 'production',
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.0.field', 'konnect_api_key');
+
+        $this->assertSame('sandbox', PlatformSetting::get()->fresh()->konnect_environment);
+    }
+
+    public function test_changing_environment_with_the_matching_credentials_is_accepted(): void
+    {
+        PlatformSetting::get()->update([
+            'konnect_enabled'     => true,
+            'konnect_environment' => 'sandbox',
+            'konnect_api_key'     => 'cle-de-simulation',
+            'konnect_wallet_id'   => 'portefeuille-de-simulation',
+        ]);
+
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'konnect_enabled'     => true,
+                'konnect_environment' => 'production',
+                'konnect_api_key'     => 'cle-de-production',
+                'konnect_wallet_id'   => 'portefeuille-de-production',
+            ])
+            ->assertOk();
+
+        $fresh = PlatformSetting::get()->fresh();
+        $this->assertSame('production', $fresh->konnect_environment);
+        $this->assertSame('cle-de-production', $fresh->konnect_api_key);
+    }
+
+    /** Un enregistrement qui ne touche pas à l'environnement n'exige rien. */
+    public function test_saving_without_touching_the_environment_needs_no_credentials(): void
+    {
+        $this->konnectConfigured();
+
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'konnect_enabled'     => true,
+                'konnect_environment' => 'sandbox',
+                'tax_rate'            => 19,
+            ])
+            ->assertOk();
     }
 
     public function test_switching_konnect_on_without_credentials_is_refused_at_the_back_office(): void
@@ -579,6 +653,66 @@ class KonnectPaymentTest extends TestCase
     }
 
     // ── Les secrets ne repartent jamais vers le navigateur ───────────────────
+
+    /**
+     * L'écran d'administration doit pouvoir dire « une clé est enregistrée, et
+     * c'est celle-ci » — un champ vide ne distingue pas un secret caché d'une
+     * absence, et ce doute fait ressaisir, douter, chercher une panne
+     * inexistante. On montre donc les extrémités, jamais le milieu.
+     */
+    public function test_the_admin_screen_sees_the_ends_of_the_key_but_never_its_middle(): void
+    {
+        $cle = '5f7a209aeb3f76490ac4a3d1:Rp2dpHPb0mBpj3_51s86zzp3PXs5w1';
+        PlatformSetting::get()->update(['konnect_enabled' => true, 'konnect_api_key' => $cle, 'konnect_wallet_id' => '5f7a209aeb3f76490ac4a3d1']);
+
+        $reponse = $this->actingAs($this->admin)->getJson('/api/v1/admin/platform-settings')->assertOk();
+
+        $indice = $reponse->json('data.konnect_api_key_hint');
+
+        $this->assertStringStartsWith('5f7a', $indice);
+        $this->assertStringEndsWith('5w1', $indice);
+        $this->assertStringNotContainsString('Rp2dpHPb0mBpj3', $indice, 'le milieu du secret ne sort jamais');
+        $this->assertStringNotContainsString($cle, $reponse->getContent(), 'la clé complète non plus');
+    }
+
+    /** Rien d'enregistré : l'indice est nul, et l'écran peut le dire franchement. */
+    public function test_an_empty_credential_is_reported_as_absent_not_as_hidden(): void
+    {
+        PlatformSetting::get()->update(['konnect_api_key' => null, 'konnect_wallet_id' => null]);
+
+        $this->actingAs($this->admin)
+            ->getJson('/api/v1/admin/platform-settings')
+            ->assertOk()
+            ->assertJsonPath('data.konnect_api_key_hint', null);
+    }
+
+    /** Un secret court ne se laisse pas deviner par ses extrémités. */
+    public function test_a_short_secret_shows_nothing_of_itself(): void
+    {
+        PlatformSetting::get()->update(['konnect_api_key' => 'court']);
+
+        $indice = $this->actingAs($this->admin)
+            ->getJson('/api/v1/admin/platform-settings')->assertOk()
+            ->json('data.konnect_api_key_hint');
+
+        $this->assertSame('••••••••', $indice);
+    }
+
+    /**
+     * L'aperçu est réservé au back-office. La route publique ne doit rien en
+     * livrer — pas même une extrémité, pas même le portefeuille.
+     */
+    public function test_the_public_route_shows_no_fragment_of_any_credential(): void
+    {
+        $this->konnectConfigured();
+
+        $public = $this->getJson('/api/v1/public/settings')->assertOk();
+
+        $public->assertJsonMissingPath('data.konnect_api_key_hint');
+        $public->assertJsonMissingPath('data.konnect_wallet_id_hint');
+        $public->assertJsonMissingPath('data.flouci_app_token_hint');
+        $this->assertStringNotContainsString('5f7a', $public->getContent());
+    }
 
     public function test_the_konnect_key_never_travels_back_to_any_screen(): void
     {
