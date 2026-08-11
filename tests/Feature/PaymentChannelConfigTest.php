@@ -187,8 +187,20 @@ class PaymentChannelConfigTest extends TestCase
         $this->assertFalse((bool) PlatformSetting::get()->fresh()->flouci_enabled);
     }
 
+    /**
+     * Note sur le point de départ des deux tests suivants : ils OUVRENT le
+     * canal, ils partent donc d'un canal fermé.
+     *
+     * La ligne de réglages livrée par défaut ouvre le virement avec un
+     * bénéficiaire mais sans compte — un état déjà incomplet. Partir de là ne
+     * testait pas l'ouverture d'un canal muet mais l'enregistrement d'un
+     * défaut préexistant, ce qui verrouillait l'écran entier au lieu de garder
+     * une porte (voir `incompleteChannel()`).
+     */
     public function test_switching_on_the_bank_transfer_without_a_beneficiary_is_refused(): void
     {
+        PlatformSetting::get()->update(['virement_enabled' => false]);
+
         $this->actingAs($this->admin)
             ->patchJson('/api/v1/admin/platform-settings', [
                 'virement_enabled'     => true,
@@ -201,6 +213,8 @@ class PaymentChannelConfigTest extends TestCase
 
     public function test_switching_on_the_bank_transfer_without_an_account_is_refused(): void
     {
+        PlatformSetting::get()->update(['virement_enabled' => false]);
+
         $this->actingAs($this->admin)
             ->patchJson('/api/v1/admin/platform-settings', [
                 'virement_enabled'     => true,
