@@ -19,11 +19,6 @@ class HomePageSeederTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function seed(): void
-    {
-        (new HomePageSeeder())->run();
-    }
-
     /** Contenu v1 (extrait suffisant) tel qu'il était stocké avant la refonte. */
     private function legacyContentFingerprintSample(): array
     {
@@ -36,7 +31,7 @@ class HomePageSeederTest extends TestCase
 
     public function test_creates_and_publishes_the_home_page(): void
     {
-        $this->seed();
+        $this->seed(HomePageSeeder::class);
 
         $page = Page::where('slug', 'home')->firstOrFail();
         $this->assertSame('published', $page->status);
@@ -46,11 +41,11 @@ class HomePageSeederTest extends TestCase
 
     public function test_seeding_twice_is_idempotent(): void
     {
-        $this->seed();
+        $this->seed(HomePageSeeder::class);
         $before = Page::where('slug', 'home')->firstOrFail();
         $updatedAt = $before->updated_at;
 
-        $this->seed();
+        $this->seed(HomePageSeeder::class);
 
         $after = Page::where('slug', 'home')->firstOrFail();
         $this->assertEquals($updatedAt, $after->updated_at);
@@ -58,11 +53,11 @@ class HomePageSeederTest extends TestCase
 
     public function test_never_overwrites_a_page_edited_in_the_admin(): void
     {
-        $this->seed();
+        $this->seed(HomePageSeeder::class);
         $page = Page::where('slug', 'home')->firstOrFail();
         $page->update(['content' => ['fr' => $this->legacyContentFingerprintSample()]]);
 
-        $this->seed();
+        $this->seed(HomePageSeeder::class);
 
         $page->refresh();
         $this->assertSame(
@@ -73,7 +68,7 @@ class HomePageSeederTest extends TestCase
 
     public function test_refresh_command_forces_the_seeder_content_back(): void
     {
-        $this->seed();
+        $this->seed(HomePageSeeder::class);
         Page::where('slug', 'home')->firstOrFail()
             ->update(['content' => ['fr' => $this->legacyContentFingerprintSample()]]);
 
@@ -96,7 +91,7 @@ class HomePageSeederTest extends TestCase
 
     public function test_home_content_carries_no_emoji_and_no_authority_claim(): void
     {
-        $this->seed();
+        $this->seed(HomePageSeeder::class);
         $json = json_encode(Page::where('slug', 'home')->firstOrFail()->content, JSON_UNESCAPED_UNICODE);
 
         $this->assertSame(0, preg_match('/[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}\x{FE0F}]/u', $json), 'La homepage ne doit contenir aucun emoji.');
@@ -114,7 +109,7 @@ class HomePageSeederTest extends TestCase
             'sort_order' => 3,
         ]);
 
-        $this->seed();
+        $this->seed(HomePageSeeder::class);
 
         $item = MenuItem::where('location', 'navbar')->firstOrFail();
         $this->assertSame('/#conformite', $item->external_url);
