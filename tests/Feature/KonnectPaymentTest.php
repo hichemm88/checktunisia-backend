@@ -462,6 +462,45 @@ class KonnectPaymentTest extends TestCase
             ->assertOk();
     }
 
+    /**
+     * Un identifiant se colle, et un copier-coller emporte volontiers un
+     * espace ou un retour à la ligne. Invisible à l'écran, il part pourtant
+     * dans l'en-tête d'authentification : Konnect répond « Invalid Api Key »
+     * pour une clé pourtant juste, et rien ne permet de le voir.
+     */
+    public function test_a_pasted_credential_is_stripped_of_its_invisible_whitespace(): void
+    {
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'konnect_enabled'     => true,
+                'konnect_environment' => 'sandbox',
+                'konnect_api_key'     => "  5f7a209aeb3f76490ac4a3d1:secret\n",
+                'konnect_wallet_id'   => " 5f7a209aeb3f76490ac4a3d1 ",
+            ])
+            ->assertOk();
+
+        $fresh = PlatformSetting::get()->fresh();
+        $this->assertSame('5f7a209aeb3f76490ac4a3d1:secret', $fresh->konnect_api_key);
+        $this->assertSame('5f7a209aeb3f76490ac4a3d1', $fresh->konnect_wallet_id);
+    }
+
+    /** Et ce qui part chez Konnect est bien la valeur nettoyée. */
+    public function test_the_cleaned_credential_is_the_one_sent_to_the_gateway(): void
+    {
+        PlatformSetting::get()->update(['konnect_enabled' => true, 'konnect_environment' => 'sandbox']);
+
+        $this->actingAs($this->admin)->patchJson('/api/v1/admin/platform-settings', [
+            'konnect_environment' => 'sandbox',
+            'konnect_api_key'     => "5f7a209aeb3f76490ac4a3d1:secret\n",
+            'konnect_wallet_id'   => "5f7a209aeb3f76490ac4a3d1\n",
+        ])->assertOk();
+
+        $this->fakeInit();
+        $this->initiate()->assertCreated();
+
+        Http::assertSent(fn ($request) => $request->hasHeader('x-api-key', '5f7a209aeb3f76490ac4a3d1:secret'));
+    }
+
     public function test_switching_konnect_on_without_credentials_is_refused_at_the_back_office(): void
     {
         $this->actingAs($this->admin)
