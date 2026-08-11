@@ -13,9 +13,11 @@ class PlatformSettingController extends Controller
     public function show(): JsonResponse
     {
         $s = PlatformSetting::get();
-        // toPublicArray() hides flouci_app_token/flouci_app_secret — never round-trip API
-        // credentials to the browser, even for platform_admin.
-        return response()->json(['data' => $s->toPublicArray()]);
+        // Les identifiants ne repartent jamais en clair vers le navigateur,
+        // même pour un platform_admin — seulement leurs extrémités, pour que
+        // l'écran puisse dire « une clé est enregistrée, et c'est celle-ci »
+        // au lieu d'un champ vide indistinguable d'une absence.
+        return response()->json(['data' => $s->toAdminArray()]);
     }
 
     public function update(Request $request): JsonResponse
@@ -69,8 +71,8 @@ class PlatformSettingController extends Controller
         $s->update($v);
 
         // Same reasoning as show(): les identifiants de passerelle (Flouci
-        // comme Konnect) ne repartent jamais vers le navigateur.
-        return response()->json(['data' => $s->fresh()->toPublicArray()]);
+        // comme Konnect) ne repartent jamais en clair vers le navigateur.
+        return response()->json(['data' => $s->fresh()->toAdminArray()]);
     }
 
     /**

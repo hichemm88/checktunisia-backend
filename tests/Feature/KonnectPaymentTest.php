@@ -654,6 +654,66 @@ class KonnectPaymentTest extends TestCase
 
     // ── Les secrets ne repartent jamais vers le navigateur ───────────────────
 
+    /**
+     * L'écran d'administration doit pouvoir dire « une clé est enregistrée, et
+     * c'est celle-ci » — un champ vide ne distingue pas un secret caché d'une
+     * absence, et ce doute fait ressaisir, douter, chercher une panne
+     * inexistante. On montre donc les extrémités, jamais le milieu.
+     */
+    public function test_the_admin_screen_sees_the_ends_of_the_key_but_never_its_middle(): void
+    {
+        $cle = '5f7a209aeb3f76490ac4a3d1:Rp2dpHPb0mBpj3_51s86zzp3PXs5w1';
+        PlatformSetting::get()->update(['konnect_enabled' => true, 'konnect_api_key' => $cle, 'konnect_wallet_id' => '5f7a209aeb3f76490ac4a3d1']);
+
+        $reponse = $this->actingAs($this->admin)->getJson('/api/v1/admin/platform-settings')->assertOk();
+
+        $indice = $reponse->json('data.konnect_api_key_hint');
+
+        $this->assertStringStartsWith('5f7a', $indice);
+        $this->assertStringEndsWith('5w1', $indice);
+        $this->assertStringNotContainsString('Rp2dpHPb0mBpj3', $indice, 'le milieu du secret ne sort jamais');
+        $this->assertStringNotContainsString($cle, $reponse->getContent(), 'la clé complète non plus');
+    }
+
+    /** Rien d'enregistré : l'indice est nul, et l'écran peut le dire franchement. */
+    public function test_an_empty_credential_is_reported_as_absent_not_as_hidden(): void
+    {
+        PlatformSetting::get()->update(['konnect_api_key' => null, 'konnect_wallet_id' => null]);
+
+        $this->actingAs($this->admin)
+            ->getJson('/api/v1/admin/platform-settings')
+            ->assertOk()
+            ->assertJsonPath('data.konnect_api_key_hint', null);
+    }
+
+    /** Un secret court ne se laisse pas deviner par ses extrémités. */
+    public function test_a_short_secret_shows_nothing_of_itself(): void
+    {
+        PlatformSetting::get()->update(['konnect_api_key' => 'court']);
+
+        $indice = $this->actingAs($this->admin)
+            ->getJson('/api/v1/admin/platform-settings')->assertOk()
+            ->json('data.konnect_api_key_hint');
+
+        $this->assertSame('••••••••', $indice);
+    }
+
+    /**
+     * L'aperçu est réservé au back-office. La route publique ne doit rien en
+     * livrer — pas même une extrémité, pas même le portefeuille.
+     */
+    public function test_the_public_route_shows_no_fragment_of_any_credential(): void
+    {
+        $this->konnectConfigured();
+
+        $public = $this->getJson('/api/v1/public/settings')->assertOk();
+
+        $public->assertJsonMissingPath('data.konnect_api_key_hint');
+        $public->assertJsonMissingPath('data.konnect_wallet_id_hint');
+        $public->assertJsonMissingPath('data.flouci_app_token_hint');
+        $this->assertStringNotContainsString('5f7a', $public->getContent());
+    }
+
     public function test_the_konnect_key_never_travels_back_to_any_screen(): void
     {
         $this->konnectConfigured();
