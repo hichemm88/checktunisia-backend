@@ -67,12 +67,27 @@ class PlatformSettingController extends Controller
     }
 
     /**
-     * Le réglage RÉSULTANT ouvre-t-il un canal incomplet ?
+     * Le réglage RÉSULTANT ouvre-t-il un canal incomplet — et est-ce CETTE
+     * requête qui l'a rendu tel ?
      *
      * On raisonne sur l'état après fusion, pas sur la seule requête : une
      * modification partielle (le taux de TVA, le nom de la banque) ne doit
      * pas exiger de renvoyer une configuration déjà en place. Fermer un canal
      * n'exige évidemment rien.
+     *
+     * ET on ne refuse pas un enregistrement pour un défaut qu'il n'introduit
+     * pas. Le garde interdisait toute écriture tant qu'UN canal, quel qu'il
+     * soit, était ouvert sans être praticable. Or l'écran envoie les trois
+     * canaux à chaque enregistrement : la ligne de réglages livrée par défaut
+     * — virement ouvert, bénéficiaire renseigné, mais NI IBAN NI RIB —
+     * suffisait donc à verrouiller l'écran entier. L'exploitant qui venait
+     * configurer sa passerelle de paiement voyait sa saisie refusée en
+     * accusant un champ de virement auquel il n'avait pas touché, et rien ne
+     * s'enregistrait jamais — pas même le virement qu'on lui demandait de
+     * corriger, puisque le refus est global.
+     *
+     * Un écran de configuration ne doit pas être une prison : on empêche
+     * d'OUVRIR un canal muet, on n'empêche pas de réparer quoi que ce soit.
      *
      * @param  array<string, mixed>  $changes
      * @return array{0: string, 1: string}|null  [message, champ fautif]
@@ -81,25 +96,38 @@ class PlatformSettingController extends Controller
     {
         $resulting = (clone $current)->fill($changes);
 
-        if ($resulting->konnect_enabled && ! $resulting->konnectReady()) {
-            return [
+        $channels = [
+            [
+                fn (PlatformSetting $s) => $s->konnect_enabled && ! $s->konnectReady(),
                 "Renseignez la clé d'API et l'identifiant de portefeuille Konnect avant d'ouvrir le paiement en ligne : sans eux, chaque règlement échouerait.",
                 'konnect_api_key',
-            ];
-        }
-
-        if ($resulting->flouci_enabled && ! $resulting->flouciReady()) {
-            return [
+            ],
+            [
+                fn (PlatformSetting $s) => $s->flouci_enabled && ! $s->flouciReady(),
                 "Renseignez l'App Token et l'App Secret Flouci avant d'ouvrir le paiement en ligne : sans eux, chaque règlement échouerait.",
                 'flouci_app_token',
-            ];
-        }
-
-        if ($resulting->virement_enabled && ! $resulting->virementReady()) {
-            return [
+            ],
+            [
+                fn (PlatformSetting $s) => $s->virement_enabled && ! $s->virementReady(),
                 'Renseignez le bénéficiaire et un IBAN ou RIB avant d\'ouvrir le virement : sans eux, le client ne sait pas où envoyer son paiement.',
                 'virement_beneficiary',
-            ];
+            ],
+        ];
+
+        foreach ($channels as [$isBroken, $message, $field]) {
+            // Sain à l'arrivée : rien à dire.
+            if (! $isBroken($resulting)) {
+                continue;
+            }
+
+            // Déjà dans cet état AVANT la requête : le défaut préexiste, cet
+            // enregistrement ne l'introduit pas. Le bloquer n'y changerait
+            // rien et empêcherait toute correction.
+            if ($isBroken($current)) {
+                continue;
+            }
+
+            return [$message, $field];
         }
 
         return null;

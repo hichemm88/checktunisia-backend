@@ -219,6 +219,128 @@ class KonnectPaymentTest extends TestCase
         Http::assertNothingSent();
     }
 
+    /**
+     * LE geste réel du back-office : on lève l'interrupteur ET on saisit les
+     * identifiants dans le MÊME enregistrement.
+     *
+     * Le garde de complétude raisonne sur l'état RÉSULTANT, donc sur un clone
+     * rempli avec la requête. La clé d'API étant chiffrée par un cast, ce
+     * chemin — écrire puis relire une valeur chiffrée sur un modèle jamais
+     * enregistré — n'était couvert par aucun test. S'il échoue, l'exploitant
+     * voit son canal refuser de s'ouvrir sans jamais comprendre pourquoi :
+     * il a pourtant rempli les deux champs.
+     */
+    public function test_konnect_opens_when_the_switch_and_the_credentials_are_saved_together(): void
+    {
+        PlatformSetting::get()->update([
+            'konnect_enabled' => false, 'konnect_api_key' => null, 'konnect_wallet_id' => null,
+        ]);
+        config(['konnect.api_key' => '', 'konnect.wallet_id' => '']);
+
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'konnect_enabled'     => true,
+                'konnect_environment' => 'sandbox',
+                'konnect_api_key'     => '5f7a209aeb3f76490ac4a3d1:secret',
+                'konnect_wallet_id'   => '5f7a209aeb3f76490ac4a3d1',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.konnect_enabled', true)
+            ->assertJsonPath('data.online_payment_enabled', true);
+
+        $fresh = PlatformSetting::get()->fresh();
+        $this->assertTrue((bool) $fresh->konnect_enabled, "l'interrupteur reste levé après enregistrement");
+        $this->assertSame('5f7a209aeb3f76490ac4a3d1:secret', $fresh->konnect_api_key);
+        $this->assertTrue($fresh->konnectReady());
+    }
+
+    /**
+     * Deuxième enregistrement, champs d'identifiants laissés VIDES (« laisser
+     * vide pour ne pas changer »). Le front ne les transmet alors pas du tout :
+     * le garde doit s'appuyer sur ce qui est déjà en base, sinon toute
+     * modification ultérieure refermerait le canal.
+     */
+    public function test_a_later_save_without_retyping_the_credentials_keeps_the_channel_open(): void
+    {
+        PlatformSetting::get()->update([
+            'konnect_enabled'   => true,
+            'konnect_api_key'   => '5f7a209aeb3f76490ac4a3d1:secret',
+            'konnect_wallet_id' => '5f7a209aeb3f76490ac4a3d1',
+        ]);
+
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'konnect_enabled'     => true,
+                'konnect_environment' => 'production',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.konnect_enabled', true);
+
+        $fresh = PlatformSetting::get()->fresh();
+        $this->assertSame('production', $fresh->konnect_environment);
+        $this->assertSame('5f7a209aeb3f76490ac4a3d1:secret', $fresh->konnect_api_key, "les identifiants ne sont pas effacés");
+    }
+
+    /**
+     * L'écran de configuration n'est pas une prison.
+     *
+     * La ligne de réglages livrée par défaut ouvre le virement avec un
+     * bénéficiaire mais NI IBAN NI RIB. Comme l'écran renvoie les trois canaux
+     * à chaque enregistrement, ce seul défaut refusait TOUTE écriture : on
+     * venait configurer Konnect, on se voyait opposer un champ de virement
+     * jamais touché, et rien ne s'enregistrait — pas même la correction du
+     * virement, puisque le refus est global.
+     */
+    public function test_an_unrelated_channel_already_incomplete_does_not_block_the_save(): void
+    {
+        PlatformSetting::get()->update([
+            'virement_enabled'     => true,
+            'virement_beneficiary' => 'Kasbahost Sarl',
+            'virement_iban'        => null,
+            'virement_rib'         => null,
+            'konnect_enabled'      => false,
+            'konnect_api_key'      => null,
+            'konnect_wallet_id'    => null,
+        ]);
+        config(['konnect.api_key' => '', 'konnect.wallet_id' => '']);
+
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'konnect_enabled'     => true,
+                'konnect_environment' => 'production',
+                'konnect_api_key'     => '5f7a209aeb3f76490ac4a3d1:secret',
+                'konnect_wallet_id'   => '5f7a209aeb3f76490ac4a3d1',
+                // L'écran renvoie aussi le virement, tel qu'il est.
+                'virement_enabled'     => true,
+                'virement_beneficiary' => 'Kasbahost Sarl',
+                'virement_iban'        => '',
+                'virement_rib'         => '',
+            ])
+            ->assertOk();
+
+        $this->assertTrue((bool) PlatformSetting::get()->fresh()->konnect_enabled);
+    }
+
+    /** Mais on n'ouvre toujours pas un canal muet : la protection tient. */
+    public function test_opening_a_healthy_channel_into_an_unusable_state_is_still_refused(): void
+    {
+        PlatformSetting::get()->update([
+            'virement_enabled'     => true,
+            'virement_beneficiary' => 'Kasbahost Sarl',
+            'virement_iban'        => 'TN5910006035010054930010',
+        ]);
+
+        // Le virement était praticable : le vider est bien introduit ICI.
+        $this->actingAs($this->admin)
+            ->patchJson('/api/v1/admin/platform-settings', [
+                'virement_enabled' => true,
+                'virement_iban'    => '',
+                'virement_rib'     => '',
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.0.code', 'PAYMENT_CHANNEL_INCOMPLETE');
+    }
+
     public function test_switching_konnect_on_without_credentials_is_refused_at_the_back_office(): void
     {
         $this->actingAs($this->admin)
