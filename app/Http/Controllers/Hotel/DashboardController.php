@@ -265,6 +265,27 @@ class DashboardController extends Controller
             $avgStayNights = round($sumNights / $stays->count(), 1);
         }
 
+        // ── Taux d'occupation moyen — 30 derniers jours ───────────────────────
+        // Moyenne des taux quotidiens sur [j-29, j], calculée par buildOccupancy :
+        // c'est la MÊME règle que le graphique 7 jours (une nuit J est occupée si
+        // arrivée <= J < départ, départ réel s'il est connu). Passer par une
+        // seconde définition ferait tôt ou tard diverger les deux chiffres sous
+        // les yeux du gérant.
+        //
+        // null — et non 0 — quand aucune chambre n'est configurée : buildOccupancy
+        // ramène le diviseur à 1 pour ne pas diviser par zéro, ce qui afficherait
+        // un taux absurde là où la bonne réponse est « pas encore mesurable ».
+        $avgOccupancy30d = null;
+        if ($hotel->room_count > 0) {
+            $window = $this->buildOccupancy(
+                $hotel,
+                $today->copy()->subDays(29),
+                $today->copy(),
+                $activeCheckIns,
+            );
+            $avgOccupancy30d = (int) round(collect($window)->avg('rate'));
+        }
+
         // ── Watchlist hits pending acknowledgement ────────────────────────────
         $pendingWatchlistHits = WatchlistHit::where('hotel_id', $hotel->id)
             ->whereNull('acknowledged_at')
@@ -317,6 +338,8 @@ class DashboardController extends Controller
                         : null,
                     'avg_stay_nights' => $avgStayNights,
                     'stay_sample'     => $stays->count(),
+                    // Pourcentage entier, ou null si aucune chambre configurée.
+                    'avg_occupancy_30d' => $avgOccupancy30d,
                 ],
             ],
         ]);
