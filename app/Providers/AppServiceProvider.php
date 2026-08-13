@@ -93,12 +93,15 @@ class AppServiceProvider extends ServiceProvider
         // Ces routes sont publiques : sans limite, elles laisseraient créer des
         // challenges à volonté et marteler la vérification.
         //
-        // Plus haut que /auth/login (5/min) à dessein : une connexion par
-        // passkey légitime coûte DEUX requêtes (options puis vérification), et
-        // un utilisateur qui annule Face ID puis recommence en consomme deux de
-        // plus. Le facteur limitant reste cryptographique, pas le débit : une
-        // assertion sans la clé privée ne peut pas être forgée.
-        RateLimiter::for('webauthn', fn (Request $request) => Limit::perMinute(20)->by($this->signature($request)));
+        // Plus haut que /auth/login (5/min) à dessein. Une connexion par
+        // passkey légitime coûte DEUX requêtes (options puis vérification) ;
+        // le seul affichage de la page de connexion en consomme une de plus
+        // quand le navigateur propose le remplissage conditionnel ; et une
+        // réception à plusieurs postes partage une seule IP publique. Le
+        // facteur limitant reste cryptographique, pas le débit : une assertion
+        // sans la clé privée ne peut pas être forgée, quel que soit le nombre
+        // d'essais.
+        RateLimiter::for('webauthn', fn (Request $request) => Limit::perMinute(30)->by($this->signature($request)));
     }
 
     /**

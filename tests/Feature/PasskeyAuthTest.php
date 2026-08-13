@@ -339,6 +339,22 @@ class PasskeyAuthTest extends TestCase
             ->assertJsonPath('errors.0.code', 'AUTH_ACCOUNT_SUSPENDED');
     }
 
+    public function test_a_soft_deleted_account_cannot_open_a_session_with_its_passkey(): void
+    {
+        [$user, $token] = $this->hotelUser();
+        $auth = new VirtualAuthenticator();
+        $this->registerPasskey($token, $auth)->assertCreated();
+
+        // Suppression logique : /auth/login l'écarte explicitement
+        // (whereNull('deleted_at')). La connexion par passkey doit appliquer
+        // la même règle, sans quoi elle rouvrirait une porte fermée.
+        $user->delete();
+
+        $this->loginWithPasskey($auth, $user)
+            ->assertStatus(401)
+            ->assertJsonPath('errors.0.code', 'PASSKEY_VERIFICATION_FAILED');
+    }
+
     public function test_a_session_opened_by_passkey_expires_like_any_other(): void
     {
         [$user, $token] = $this->hotelUser();
