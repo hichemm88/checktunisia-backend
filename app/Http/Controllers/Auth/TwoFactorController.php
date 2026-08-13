@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Services\Audit\AuditLogger;
+use App\Services\Auth\SessionIssuer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
@@ -132,34 +133,11 @@ class TwoFactorController extends Controller
 
         // Revoke partial token, issue full token
         $partialToken->delete();
-        $fullToken = $user->createToken('api-token', ['*'], now()->addHours(8));
 
         AuditLogger::log('auth.2fa_verified', $user, actor: $user);
 
-        $hotel = $user->isHotelStaff() ? $user->hotel() : null;
-
         return response()->json([
-            'data' => [
-                'token'      => $fullToken->plainTextToken,
-                'token_type' => 'Bearer',
-                'expires_at' => $fullToken->accessToken->expires_at,
-                'user'       => [
-                    'id'                => $user->id,
-                    'email'             => $user->email,
-                    'first_name'        => $user->first_name,
-                    'last_name'         => $user->last_name,
-                    'role'              => $user->primary_role,
-                    'role_org'          => $user->role_org,
-                    'hotel'             => $hotel ? [
-                        'id'                  => $hotel->id,
-                        'name'                => $hotel->name,
-                        'slug'                => $hotel->slug,
-                        'subscription_status' => $hotel->activeSubscription?->status ?? 'none',
-                    ] : null,
-                    'authority_profile' => $this->buildAuthorityProfile($user),
-                    'permissions'       => $user->getAllPermissions()->pluck('name'),
-                ],
-            ],
+            'data' => SessionIssuer::issue($user, SessionIssuer::METHOD_TOTP),
         ]);
     }
 
@@ -197,25 +175,5 @@ class TwoFactorController extends Controller
         AuditLogger::log('auth.2fa_disabled', $user, actor: $user);
 
         return response()->json(['data' => ['disabled' => true]]);
-    }
-
-    // ─── Private ─────────────────────────────────────────────────────────────
-
-    private function buildAuthorityProfile(\App\Models\User $user): ?array
-    {
-        $profile = $user->authorityProfile?->load('organization');
-        if (!$profile) {
-            return null;
-        }
-
-        return [
-            'org_id'       => $profile->organization_id,
-            'org_name'     => $profile->organization?->name,
-            'org_type'     => $profile->organization?->type,
-            'governorate'  => $profile->organization?->governorate,
-            'badge_number' => $profile->badge_number,
-            'rank'         => $profile->rank,
-            'expires_at'   => $profile->expires_at,
-        ];
     }
 }

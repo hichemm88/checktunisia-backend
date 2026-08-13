@@ -19,6 +19,10 @@ class AppServiceProvider extends ServiceProvider
             \App\Services\OCR\OcrService::class,
             fn () => new \App\Services\OCR\OcrService((string) config('ocr.driver', 'mock')),
         );
+
+        // Le service WebAuthn construit un sérialiseur Symfony complet à
+        // l'instanciation : une seule fois par requête suffit.
+        $this->app->singleton(\App\Services\Webauthn\WebauthnService::class);
     }
 
     public function boot(): void
@@ -84,6 +88,17 @@ class AppServiceProvider extends ServiceProvider
         // ou deux appels ; 60/min laisse la place à une rafale de rejeux après
         // une coupure sans ouvrir la porte au martèlement d'une URL publique.
         RateLimiter::for('konnect-webhook', fn (Request $request) => Limit::perMinute(60)->by($request->ip()));
+
+        // Cérémonies WebAuthn (émission de challenge, vérification d'assertion).
+        // Ces routes sont publiques : sans limite, elles laisseraient créer des
+        // challenges à volonté et marteler la vérification.
+        //
+        // Plus haut que /auth/login (5/min) à dessein : une connexion par
+        // passkey légitime coûte DEUX requêtes (options puis vérification), et
+        // un utilisateur qui annule Face ID puis recommence en consomme deux de
+        // plus. Le facteur limitant reste cryptographique, pas le débit : une
+        // assertion sans la clé privée ne peut pas être forgée.
+        RateLimiter::for('webauthn', fn (Request $request) => Limit::perMinute(20)->by($this->signature($request)));
     }
 
     /**

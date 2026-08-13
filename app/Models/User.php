@@ -38,12 +38,16 @@ class User extends Authenticatable
         'metadata',
         'two_factor_secret',
         'two_factor_confirmed_at',
+        'webauthn_user_handle',
     ];
 
     protected $hidden = [
         'password',
         'remember_token',
         'two_factor_secret',  // never expose the encrypted secret
+        // Identifiant opaque présenté aux authentificateurs : il n'a aucune
+        // raison de circuler dans les réponses d'API.
+        'webauthn_user_handle',
     ];
 
     protected function casts(): array
@@ -77,6 +81,17 @@ class User extends Authenticatable
     public function checkIns(): HasMany
     {
         return $this->hasMany(CheckIn::class, 'created_by');
+    }
+
+    /** Passkeys enregistrées — la sécurité est portée par le COMPTE, pas par le rôle. */
+    public function webauthnCredentials(): HasMany
+    {
+        return $this->hasMany(WebauthnCredential::class);
+    }
+
+    public function recoveryCodes(): HasMany
+    {
+        return $this->hasMany(UserRecoveryCode::class);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────
@@ -118,6 +133,30 @@ class User extends Authenticatable
     public function isOrgOwner(): bool
     {
         return $this->role_org === 'owner';
+    }
+
+    public function hasPasskey(): bool
+    {
+        return $this->webauthnCredentials()->exists();
+    }
+
+    /**
+     * Identifiant opaque présenté à l'authentificateur (user.id WebAuthn).
+     *
+     * Aléatoire et distinct de l'UUID interne comme de l'e-mail : c'est la
+     * valeur que l'appareil renvoie lors d'une connexion sans identifiant, et
+     * elle est stockée en clair dans le trousseau de l'appareil. Créé à la
+     * demande, à la première passkey.
+     */
+    public function webauthnUserHandle(): string
+    {
+        if (! $this->webauthn_user_handle) {
+            $this->forceFill([
+                'webauthn_user_handle' => rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '='),
+            ])->save();
+        }
+
+        return $this->webauthn_user_handle;
     }
 
     public function getFullNameAttribute(): string

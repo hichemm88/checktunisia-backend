@@ -18,6 +18,9 @@ use App\Http\Controllers\Admin\PlatformSettingController;
 use App\Http\Controllers\Admin\PlatformUserAdminController;
 use App\Http\Controllers\Admin\SubscriptionAdminController;
 use App\Http\Controllers\Auth\AuthController;
+use App\Http\Controllers\Auth\PasskeyAuthController;
+use App\Http\Controllers\Auth\PasskeyController;
+use App\Http\Controllers\Auth\RecoveryCodeController;
 use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Authority\AuthorityDashboardController;
 use App\Http\Controllers\Authority\AuthoritySearchController;
@@ -60,6 +63,16 @@ Route::prefix('auth')->middleware('throttle:5,1')->group(function () {
     Route::post('login', [AuthController::class, 'login']);
     Route::post('password/forgot', [AuthController::class, 'forgotPassword']);
     Route::post('password/reset', [AuthController::class, 'resetPassword']);
+});
+
+// Connexion par passkey (WebAuthn). Publique par nature : l'utilisateur n'est
+// pas encore authentifié, et aucun identifiant n'est demandé — c'est
+// l'appareil qui propose les passkeys qu'il détient pour ce domaine.
+// Limiteur dédié : une connexion légitime coûte deux requêtes, là où le
+// login classique n'en coûte qu'une.
+Route::prefix('auth/passkey')->middleware('throttle:webauthn')->group(function () {
+    Route::post('options', [PasskeyAuthController::class, 'options']);
+    Route::post('verify', [PasskeyAuthController::class, 'verify']);
 });
 
 Route::get('referential/countries', [ReferentialController::class, 'countries']);
@@ -145,10 +158,37 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
     // Throttled: a TOTP code is only 6 digits (1M possibilities) — without a
     // rate limit it's crackable well within its ~30s validity window.
     Route::post('auth/2fa/verify', [TwoFactorController::class, 'verify'])->middleware('throttle:5,1');
+
+    // Repli du second facteur : code de récupération à la place du TOTP, pour
+    // l'utilisateur qui a perdu l'appareil portant sa passkey ou son
+    // application d'authentification. Même token partiel, même limiteur.
+    Route::post('auth/2fa/recovery', [RecoveryCodeController::class, 'verify'])->middleware('throttle:5,1');
+
     Route::middleware('require.2fa')->group(function () {
         Route::get('auth/2fa/setup', [TwoFactorController::class, 'setup']);
         Route::post('auth/2fa/setup/confirm', [TwoFactorController::class, 'confirmSetup'])->middleware('throttle:5,1');
         Route::delete('auth/2fa/setup', [TwoFactorController::class, 'disable'])->middleware('throttle:5,1');
+
+        /*
+        |------------------------------------------------------------------
+        | Passkeys — Profil → Sécurité → Passkeys
+        |
+        | Rattachées au COMPTE : mêmes routes et mêmes règles pour un
+        | établissement, un administrateur plateforme ou un compte autorité.
+        | Token complet exigé (une session 2fa-pending n'y accède pas).
+        |------------------------------------------------------------------
+        */
+        Route::get('auth/passkeys', [PasskeyController::class, 'index']);
+        Route::post('auth/passkeys/options', [PasskeyController::class, 'options'])->middleware('throttle:webauthn');
+        Route::post('auth/passkeys', [PasskeyController::class, 'store'])->middleware('throttle:webauthn');
+        Route::patch('auth/passkeys/{id}', [PasskeyController::class, 'update']);
+        Route::delete('auth/passkeys/{id}', [PasskeyController::class, 'destroy']);
+
+        // Codes de récupération. La régénération vérifie le mot de passe
+        // courant, d'où le limiteur des endpoints à mot de passe.
+        Route::get('auth/recovery-codes', [RecoveryCodeController::class, 'status']);
+        Route::post('auth/recovery-codes', [RecoveryCodeController::class, 'regenerate'])
+            ->middleware('throttle:credential-check');
 
         // Ces deux routes VÉRIFIENT le mot de passe courant : sans limiteur
         // dédié, elles n'étaient couvertes que par le repli global à 120/min,

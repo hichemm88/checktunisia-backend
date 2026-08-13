@@ -14,7 +14,11 @@
         "pragmarx/google2fa": "^9.0",
         "resend/resend-php": "^1.4",
         "sentry/sentry-laravel": "^4.27",
-        "spatie/laravel-permission": "^6.10"
+        "spatie/laravel-permission": "^6.10",
+        "symfony/property-access": "^7.4",
+        "symfony/property-info": "^7.4",
+        "symfony/serializer": "^7.4",
+        "web-auth/webauthn-lib": "^5.3"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
