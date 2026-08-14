@@ -139,9 +139,25 @@ class PasskeyController extends Controller
                 'reason' => $e->getMessage(),
             ]);
 
+            // La cause EXACTE est renvoyée, contrairement à la connexion — et
+            // c'est délibéré. Ici l'appelant est déjà authentifié, enregistre
+            // son propre appareil, et un échec à ce stade n'est jamais le fait
+            // d'un attaquant : une signature invalide ne se fabrique pas, et
+            // le seul échec réaliste est une configuration inexacte (origine
+            // absente de la liste, RP ID mal posé). Sans cette phrase,
+            // l'utilisateur ne voyait que « réessayez » et réessayait en
+            // boucle, pendant que la vraie raison dormait dans le journal
+            // d'audit. Ces messages ne révèlent rien de secret : le RP ID est
+            // envoyé à chaque cérémonie, et l'origine est celle de la page
+            // qu'il a sous les yeux.
             return response()->json([
                 'data'   => null,
-                'errors' => [['code' => 'PASSKEY_INVALID', 'message' => "Cette passkey n'a pas pu être vérifiée. Réessayez.", 'field' => null]],
+                'errors' => [[
+                    'code'    => 'PASSKEY_INVALID',
+                    'message' => "Cette passkey n'a pas pu être vérifiée. Réessayez.",
+                    'detail'  => $e->getMessage(),
+                    'field'   => null,
+                ]],
             ], 422);
         }
 

@@ -43,9 +43,32 @@ class HealthController extends Controller
                 'scheduler' => $this->scheduler(),
                 'backup'    => $this->backup(),
                 'whatsapp'  => $this->whatsappOutbox(),
+                'webauthn'  => $this->webauthn(),
                 'checked_at' => now()->toIso8601String(),
             ],
         ]);
+    }
+
+    /**
+     * Configuration WebAuthn effective.
+     *
+     * Une origine légitime absente de la liste n'échoue pas gentiment :
+     * l'appareil crée bien la passkey, le serveur la rejette ensuite, et
+     * l'utilisateur reste devant « cette passkey n'a pas pu être vérifiée »
+     * sans rien pouvoir y faire. La cause est dans le journal d'audit, ce qui
+     * suppose de savoir où regarder — d'où cette lecture directe.
+     *
+     * Rien de secret ici : le RP ID est envoyé à chaque cérémonie et l'origine
+     * est celle de la page que le visiteur a déjà sous les yeux.
+     */
+    private function webauthn(): array
+    {
+        return [
+            'rp_id'             => config('webauthn.rp_id'),
+            'origins'           => config('webauthn.origins'),
+            'user_verification' => config('webauthn.user_verification'),
+            'credentials'       => \App\Models\WebauthnCredential::count(),
+        ];
     }
 
     /**

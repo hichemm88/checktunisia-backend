@@ -272,6 +272,36 @@ class PasskeyAuthTest extends TestCase
             ->assertJsonPath('errors.0.code', 'PASSKEY_VERIFICATION_FAILED');
     }
 
+    public function test_a_visitor_arriving_by_www_can_register_and_log_in(): void
+    {
+        // Panne constatée en production : la passkey était bien créée par
+        // l'appareil, puis refusée à la vérification, parce que la liste
+        // d'origines déduite de FRONTEND_URL ne contenait que l'apex. Le
+        // navigateur masquant souvent le préfixe « www », l'utilisateur ne
+        // pouvait ni comprendre ni contourner.
+        config([
+            'webauthn.rp_id'   => 'qayed.tn',
+            'webauthn.origins' => \App\Support\WebauthnOrigins::resolve(null, 'https://qayed.tn'),
+        ]);
+
+        [$user, $token] = $this->hotelUser();
+        $auth = new VirtualAuthenticator();
+
+        $options = $this->api($token)->postJson('/api/v1/auth/passkeys/options')->assertOk()->json('data');
+
+        $this->api($token)->postJson('/api/v1/auth/passkeys', [
+            'challenge_id' => $options['challenge_id'],
+            // L'utilisateur est sur www ; le RP ID reste l'apex, ce que le
+            // navigateur accepte puisque l'un est suffixe de l'autre.
+            'credential'   => $auth->register($options['public_key'], 'https://www.qayed.tn'),
+        ])->assertCreated();
+
+        $this->loginWithPasskey($auth, $user, origin: 'https://www.qayed.tn')->assertOk();
+
+        // Et l'apex continue évidemment de fonctionner.
+        $this->loginWithPasskey($auth, $user, origin: 'https://qayed.tn')->assertOk();
+    }
+
     public function test_a_registration_from_another_origin_is_refused(): void
     {
         [, $token] = $this->hotelUser();
@@ -279,12 +309,31 @@ class PasskeyAuthTest extends TestCase
         $options    = $this->api($token)->postJson('/api/v1/auth/passkeys/options')->json('data');
         $credential = (new VirtualAuthenticator())->register($options['public_key'], 'https://attaquant.example');
 
-        $this->api($token)->postJson('/api/v1/auth/passkeys', [
+        $response = $this->api($token)->postJson('/api/v1/auth/passkeys', [
             'challenge_id' => $options['challenge_id'],
             'credential'   => $credential,
         ])->assertStatus(422)->assertJsonPath('errors.0.code', 'PASSKEY_INVALID');
 
+        // La cause exacte accompagne le refus : l'appelant est authentifié et
+        // enregistre son propre appareil ; sans elle, une configuration
+        // inexacte se traduit par « réessayez » à l'infini.
+        $this->assertStringContainsString('origin', strtolower((string) $response->json('errors.0.detail')));
+
         $this->assertSame(0, WebauthnCredential::count());
+    }
+
+    public function test_the_login_ceremony_never_explains_why_it_failed(): void
+    {
+        // Pendant du test ci-dessus : sur la route PUBLIQUE, aucune cause n'est
+        // divulguée. Un attaquant y apprendrait quels credentials existent et
+        // quelle règle il vient de violer.
+        [$user, $token] = $this->hotelUser();
+        $auth = new VirtualAuthenticator();
+        $this->registerPasskey($token, $auth)->assertCreated();
+
+        $response = $this->loginWithPasskey($auth, $user, origin: 'https://attaquant.example')->assertStatus(401);
+
+        $this->assertNull($response->json('errors.0.detail'));
     }
 
     public function test_a_response_without_user_verification_is_refused(): void
