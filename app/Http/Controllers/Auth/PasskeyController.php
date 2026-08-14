@@ -135,8 +135,15 @@ class PasskeyController extends Controller
 
             $record = $this->webauthn->verifyRegistration($response, $options);
         } catch (Throwable $e) {
+            // « Invalid origin » sans dire LAQUELLE laisse deviner : le
+            // navigateur masque parfois le préfixe « www », et l'exploitant
+            // compare alors une liste correcte à une adresse qu'il croit
+            // connaître. On rapporte donc côte à côte ce que l'appareil a
+            // signé et ce que le serveur attendait.
+            $reason = $e->getMessage().' '.$this->configContext($validated['credential']);
+
             AuditLogger::log('auth.passkey_registration_failed', $user, actor: $user, newValues: [
-                'reason' => $e->getMessage(),
+                'reason' => $reason,
             ]);
 
             // La cause EXACTE est renvoyée, contrairement à la connexion — et
@@ -155,7 +162,7 @@ class PasskeyController extends Controller
                 'errors' => [[
                     'code'    => 'PASSKEY_INVALID',
                     'message' => "Cette passkey n'a pas pu être vérifiée. Réessayez.",
-                    'detail'  => $e->getMessage(),
+                    'detail'  => $reason,
                     'field'   => null,
                 ]],
             ], 422);
@@ -265,6 +272,35 @@ class PasskeyController extends Controller
     }
 
     // ─── Private ─────────────────────────────────────────────────────────────
+
+    /**
+     * Ce que l'appareil a signé, face à ce que le serveur attendait.
+     *
+     * L'origine est lue dans le clientDataJSON — c'est-à-dire dans ce que
+     * l'appareil a effectivement signé, pas dans un en-tête que n'importe qui
+     * peut écrire. Elle ne sert donc à rien d'autre qu'à s'afficher : la
+     * vérification, elle, a déjà eu lieu et a déjà échoué.
+     */
+    private function configContext(array $credential): string
+    {
+        $presented = null;
+
+        $clientData = $credential['response']['clientDataJSON'] ?? null;
+        if (is_string($clientData)) {
+            $decoded = json_decode(
+                (string) base64_decode(strtr($clientData, '-_', '+/'), false),
+                true,
+            );
+            $presented = is_array($decoded) ? ($decoded['origin'] ?? null) : null;
+        }
+
+        return sprintf(
+            '[origine présentée : %s | attendues : %s | RP ID : %s]',
+            is_string($presented) ? $presented : 'illisible',
+            implode(', ', $this->webauthn->allowedOrigins()) ?: 'aucune',
+            $this->webauthn->rpId() ?: 'aucun',
+        );
+    }
 
     private function challengeError(): JsonResponse
     {
