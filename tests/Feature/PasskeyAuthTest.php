@@ -272,6 +272,36 @@ class PasskeyAuthTest extends TestCase
             ->assertJsonPath('errors.0.code', 'PASSKEY_VERIFICATION_FAILED');
     }
 
+    public function test_a_visitor_arriving_by_www_can_register_and_log_in(): void
+    {
+        // Panne constatée en production : la passkey était bien créée par
+        // l'appareil, puis refusée à la vérification, parce que la liste
+        // d'origines déduite de FRONTEND_URL ne contenait que l'apex. Le
+        // navigateur masquant souvent le préfixe « www », l'utilisateur ne
+        // pouvait ni comprendre ni contourner.
+        config([
+            'webauthn.rp_id'   => 'qayed.tn',
+            'webauthn.origins' => \App\Support\WebauthnOrigins::resolve(null, 'https://qayed.tn'),
+        ]);
+
+        [$user, $token] = $this->hotelUser();
+        $auth = new VirtualAuthenticator();
+
+        $options = $this->api($token)->postJson('/api/v1/auth/passkeys/options')->assertOk()->json('data');
+
+        $this->api($token)->postJson('/api/v1/auth/passkeys', [
+            'challenge_id' => $options['challenge_id'],
+            // L'utilisateur est sur www ; le RP ID reste l'apex, ce que le
+            // navigateur accepte puisque l'un est suffixe de l'autre.
+            'credential'   => $auth->register($options['public_key'], 'https://www.qayed.tn'),
+        ])->assertCreated();
+
+        $this->loginWithPasskey($auth, $user, origin: 'https://www.qayed.tn')->assertOk();
+
+        // Et l'apex continue évidemment de fonctionner.
+        $this->loginWithPasskey($auth, $user, origin: 'https://qayed.tn')->assertOk();
+    }
+
     public function test_a_registration_from_another_origin_is_refused(): void
     {
         [, $token] = $this->hotelUser();

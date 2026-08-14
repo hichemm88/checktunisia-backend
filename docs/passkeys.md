@@ -72,6 +72,37 @@ WEBAUTHN_ORIGINS=https://qayed.tn,https://www.qayed.tn
 passkey est liée au domaine pour lequel elle a été créée ; c'est ce qui la rend
 impossible à hameçonner. Les utilisateurs devraient toutes les recréer.
 
+### Ce qui se passe si rien n'est configuré
+
+`WEBAUTHN_RP_ID` vide → l'hôte de `FRONTEND_URL`, privé de son `www.`
+(l'apex couvre le www, l'inverse est faux).
+
+`WEBAUTHN_ORIGINS` vide → l'origine de `FRONTEND_URL` **et son jumeau
+www/apex**. Ce jumeau n'est pas un élargissement de confiance : le RP ID couvre
+déjà tout le domaine enregistrable par construction, `CorsOrigins` traite depuis
+toujours les deux formes comme équivalentes, et les navigateurs masquent
+souvent le préfixe `www` — l'utilisateur ne sait même pas laquelle des deux il
+visite.
+
+Une valeur explicite de `WEBAUTHN_ORIGINS` est prise **telle quelle** : une
+liste écrite à la main est une décision, rien n'y est ajouté. Les règles sont
+dans `App\Support\WebauthnOrigins`, testées dans `tests/Unit/WebauthnOriginsTest`.
+
+### Diagnostiquer un refus
+
+Une origine légitime absente de la liste n'échoue pas gentiment : l'appareil
+crée bien la passkey (elle apparaît dans le trousseau iCloud ou Google), puis le
+serveur la rejette, et l'utilisateur reste devant « cette passkey n'a pas pu
+être vérifiée » sans rien pouvoir y faire.
+
+Deux endroits pour trancher en quelques secondes :
+
+- `GET /api/v1/admin/health` → bloc `webauthn` : le RP ID et la liste d'origines
+  réellement en vigueur.
+- Journal d'audit, action `auth.passkey_registration_failed` (ou
+  `auth.passkey_login_failed`) → `new_values.reason` porte le message exact de
+  la bibliothèque, par exemple « Invalid origin. Subdomains are not allowed. ».
+
 Les autres réglages (`WEBAUTHN_USER_VERIFICATION`, `WEBAUTHN_CHALLENGE_TTL`,
 `WEBAUTHN_TIMEOUT`, `WEBAUTHN_MAX_CREDENTIALS`, `WEBAUTHN_RECOVERY_CODES`) sont
 documentés dans `.env.example`.

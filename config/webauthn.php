@@ -27,17 +27,24 @@
 
 return [
 
-    // Domaine de la partie de confiance. Repli : l'hôte de FRONTEND_URL.
-    'rp_id' => env('WEBAUTHN_RP_ID') ?: parse_url((string) env('FRONTEND_URL', 'http://localhost:5173'), PHP_URL_HOST),
+    // Domaine de la partie de confiance. Repli : l'hôte de FRONTEND_URL, privé
+    // de son « www. » — une passkey créée pour `qayed.tn` vaut sur
+    // `www.qayed.tn`, l'inverse est faux.
+    'rp_id' => \App\Support\WebauthnOrigins::resolveRpId(
+        env('WEBAUTHN_RP_ID'),
+        env('FRONTEND_URL', 'http://localhost:5173'),
+    ),
 
     // Nom affiché par le système au moment de Face ID / Touch ID / Windows Hello.
     'rp_name' => env('WEBAUTHN_RP_NAME', 'Qayed'),
 
-    // Origines autorisées, séparées par des virgules. Repli : FRONTEND_URL.
-    'origins' => array_values(array_filter(array_map(
-        'trim',
-        explode(',', (string) (env('WEBAUTHN_ORIGINS') ?: env('FRONTEND_URL', 'http://localhost:5173')))
-    ))),
+    // Origines autorisées, séparées par des virgules. À défaut : déduites de
+    // FRONTEND_URL, jumeau www/apex compris. Règles et raisons dans
+    // App\Support\WebauthnOrigins, testées dans tests/Unit/WebauthnOriginsTest.
+    'origins' => \App\Support\WebauthnOrigins::resolve(
+        env('WEBAUTHN_ORIGINS'),
+        env('FRONTEND_URL', 'http://localhost:5173'),
+    ),
 
     /*
     | Vérification de l'utilisateur (biométrie, code de l'appareil, PIN de clé).
