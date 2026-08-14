@@ -4,12 +4,19 @@ namespace App\Services\Webauthn;
 
 use App\Models\User;
 use App\Models\WebauthnCredential;
+use Cose\Algorithm\Manager as CoseManager;
+use Cose\Algorithm\Signature\ECDSA\ES256;
+use Cose\Algorithm\Signature\RSA\RS256;
 use ParagonIE\ConstantTime\Base64UrlSafe;
 use Symfony\Component\Serializer\Normalizer\AbstractObjectNormalizer;
 use Symfony\Component\Serializer\SerializerInterface;
 use Throwable;
+use Webauthn\AttestationStatement\AndroidKeyAttestationStatementSupport;
+use Webauthn\AttestationStatement\AppleAttestationStatementSupport;
 use Webauthn\AttestationStatement\AttestationStatementSupportManager;
+use Webauthn\AttestationStatement\FidoU2FAttestationStatementSupport;
 use Webauthn\AttestationStatement\NoneAttestationStatementSupport;
+use Webauthn\AttestationStatement\PackedAttestationStatementSupport;
 use Webauthn\AuthenticatorAssertionResponse;
 use Webauthn\AuthenticatorAssertionResponseValidator;
 use Webauthn\AuthenticatorAttestationResponse;
@@ -48,16 +55,45 @@ class WebauthnService
     public function __construct()
     {
         $attestationSupport = AttestationStatementSupportManager::create();
-        // Attestation « none » uniquement : nous ne cherchons pas à identifier
-        // le modèle d'authentificateur (ce serait un traceur, et cela n'apporte
-        // rien ici). Le navigateur ne transmet donc aucun certificat.
+
+        // Nous demandons `attestation: none` : nous ne cherchons pas à
+        // identifier le modèle d'authentificateur (ce serait un traceur, et
+        // cela n'apporte rien ici).
         $attestationSupport->add(NoneAttestationStatementSupport::create());
+
+        // Mais demander ne suffit pas. La spec dit que le client DEVRAIT
+        // remplacer l'attestation par « none » ; certaines implémentations —
+        // navigateurs embarquant un moteur tiers, gestionnaires de mots de
+        // passe externes, clés FIDO2 — renvoient malgré tout leur format
+        // d'origine. N'accepter que « none » revenait alors à refuser un
+        // enregistrement parfaitement valide, sans que l'utilisateur ni
+        // l'exploitant ne puissent rien y faire.
+        //
+        // Les déclarer ici ne fait qu'autoriser leur LECTURE et la
+        // vérification de leur signature ; aucune chaîne de certificats n'est
+        // exigée tant que le support des métadonnées FIDO n'est pas activé
+        // (il ne l'est pas). La décision de ne pas se servir de l'attestation
+        // reste donc entière.
+        $attestationSupport->add(PackedAttestationStatementSupport::create($this->algorithms()));
+        $attestationSupport->add(AppleAttestationStatementSupport::create());
+        $attestationSupport->add(AndroidKeyAttestationStatementSupport::create());
+        $attestationSupport->add(FidoU2FAttestationStatementSupport::create());
 
         $this->serializer = (new WebauthnSerializerFactory($attestationSupport))->create();
 
         $this->ceremonyFactory = new CeremonyStepManagerFactory();
         $this->ceremonyFactory->setAttestationStatementSupportManager($attestationSupport);
         $this->ceremonyFactory->setAllowedOrigins($this->allowedOrigins());
+    }
+
+    /**
+     * Algorithmes de signature acceptés — ES256 (Face ID, Touch ID, Android,
+     * Windows Hello) et RS256 (TPM plus anciens). Les mêmes que ceux annoncés
+     * dans `pubKeyCredParams`.
+     */
+    private function algorithms(): CoseManager
+    {
+        return CoseManager::create()->add(ES256::create(), RS256::create());
     }
 
     // ── Configuration ────────────────────────────────────────────────────────

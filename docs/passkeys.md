@@ -95,13 +95,33 @@ crée bien la passkey (elle apparaît dans le trousseau iCloud ou Google), puis 
 serveur la rejette, et l'utilisateur reste devant « cette passkey n'a pas pu
 être vérifiée » sans rien pouvoir y faire.
 
-Deux endroits pour trancher en quelques secondes :
+Trois endroits pour trancher en quelques secondes :
 
+- **L'écran lui-même.** L'enregistrement d'une passkey affiche la cause exacte
+  sous le message d'erreur. C'est délibérément l'inverse de la connexion, qui
+  reste opaque : ici l'appelant est authentifié, enregistre son propre appareil,
+  et l'échec n'est jamais le fait d'un attaquant — une signature ne se fabrique
+  pas. Le seul échec réaliste est une configuration inexacte.
 - `GET /api/v1/admin/health` → bloc `webauthn` : le RP ID et la liste d'origines
   réellement en vigueur.
 - Journal d'audit, action `auth.passkey_registration_failed` (ou
   `auth.passkey_login_failed`) → `new_values.reason` porte le message exact de
   la bibliothèque, par exemple « Invalid origin. Subdomains are not allowed. ».
+
+### Formats d'attestation
+
+Nous demandons `attestation: none` : le modèle de l'authentificateur ne nous
+intéresse pas, et le réclamer reviendrait à collecter un traceur.
+
+La spec dit que le client *devrait* alors remplacer l'attestation par « none ».
+Certaines implémentations renvoient malgré tout leur format d'origine —
+navigateurs embarquant un moteur tiers, gestionnaires de mots de passe
+externes, clés FIDO2. Les formats `packed`, `apple`, `android-key` et `fido-u2f`
+sont donc acceptés **en lecture** : leur signature est vérifiée, aucune chaîne
+de certificats n'est exigée (le support des métadonnées FIDO n'est pas activé),
+et l'attestation n'est toujours pas utilisée pour décider quoi que ce soit.
+N'accepter que « none » revenait à refuser des enregistrements parfaitement
+valides.
 
 Les autres réglages (`WEBAUTHN_USER_VERIFICATION`, `WEBAUTHN_CHALLENGE_TTL`,
 `WEBAUTHN_TIMEOUT`, `WEBAUTHN_MAX_CREDENTIALS`, `WEBAUTHN_RECOVERY_CODES`) sont

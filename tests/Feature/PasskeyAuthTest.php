@@ -309,12 +309,31 @@ class PasskeyAuthTest extends TestCase
         $options    = $this->api($token)->postJson('/api/v1/auth/passkeys/options')->json('data');
         $credential = (new VirtualAuthenticator())->register($options['public_key'], 'https://attaquant.example');
 
-        $this->api($token)->postJson('/api/v1/auth/passkeys', [
+        $response = $this->api($token)->postJson('/api/v1/auth/passkeys', [
             'challenge_id' => $options['challenge_id'],
             'credential'   => $credential,
         ])->assertStatus(422)->assertJsonPath('errors.0.code', 'PASSKEY_INVALID');
 
+        // La cause exacte accompagne le refus : l'appelant est authentifié et
+        // enregistre son propre appareil ; sans elle, une configuration
+        // inexacte se traduit par « réessayez » à l'infini.
+        $this->assertStringContainsString('origin', strtolower((string) $response->json('errors.0.detail')));
+
         $this->assertSame(0, WebauthnCredential::count());
+    }
+
+    public function test_the_login_ceremony_never_explains_why_it_failed(): void
+    {
+        // Pendant du test ci-dessus : sur la route PUBLIQUE, aucune cause n'est
+        // divulguée. Un attaquant y apprendrait quels credentials existent et
+        // quelle règle il vient de violer.
+        [$user, $token] = $this->hotelUser();
+        $auth = new VirtualAuthenticator();
+        $this->registerPasskey($token, $auth)->assertCreated();
+
+        $response = $this->loginWithPasskey($auth, $user, origin: 'https://attaquant.example')->assertStatus(401);
+
+        $this->assertNull($response->json('errors.0.detail'));
     }
 
     public function test_a_response_without_user_verification_is_refused(): void
