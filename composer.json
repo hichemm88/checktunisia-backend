@@ -18,6 +18,7 @@
         "symfony/property-access": "^7.4",
         "symfony/property-info": "^7.4",
         "symfony/serializer": "^7.4",
+        "symfony/type-info": "^7.4",
         "web-auth/webauthn-lib": "^5.3"
     },
     "require-dev": {
@@ -67,6 +68,9 @@
         "optimize-autoloader": true,
         "preferred-install": "dist",
         "sort-packages": true,
+        "platform": {
+            "php": "8.3.0"
+        },
         "allow-plugins": {
             "pestphp/pest-plugin": true,
             "php-http/discovery": true
