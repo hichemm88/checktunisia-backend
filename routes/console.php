@@ -39,6 +39,13 @@ Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone(
 // au-delà de la rétention (24 h). Minimisation des données.
 Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
 
+// Challenges WebAuthn périmés. Ils sont déjà inutilisables passé leur
+// expiration (et purgés au fil de l'eau à chaque émission) : ce passage
+// quotidien évite simplement que la table enfle sur une longue période creuse.
+Schedule::call(fn () => app(\App\Services\Webauthn\ChallengeStore::class)->pruneExpired())
+    ->name('webauthn-prune-challenges')
+    ->dailyAt('04:30');
+
 // Rapport « prochain check-in » à la demande : inerte tant que non armé
 // (Cache 'checkin_report.watch'), s'auto-désarme après envoi.
 Schedule::command('checkins:report-next')->everyMinute()->withoutOverlapping();
