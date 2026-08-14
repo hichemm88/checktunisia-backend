@@ -317,7 +317,15 @@ class PasskeyAuthTest extends TestCase
         // La cause exacte accompagne le refus : l'appelant est authentifié et
         // enregistre son propre appareil ; sans elle, une configuration
         // inexacte se traduit par « réessayez » à l'infini.
-        $this->assertStringContainsString('origin', strtolower((string) $response->json('errors.0.detail')));
+        $detail = (string) $response->json('errors.0.detail');
+        $this->assertStringContainsString('origin', strtolower($detail));
+
+        // Et surtout : l'origine RÉELLEMENT présentée, face à celles attendues.
+        // « Invalid origin » sans dire laquelle laisse comparer une liste
+        // correcte à une adresse que le navigateur affiche tronquée.
+        $this->assertStringContainsString('https://attaquant.example', $detail);
+        $this->assertStringContainsString(self::ORIGIN, $detail);
+        $this->assertStringContainsString(self::RP_ID, $detail);
 
         $this->assertSame(0, WebauthnCredential::count());
     }
