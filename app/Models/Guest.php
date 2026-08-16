@@ -30,6 +30,13 @@ class Guest extends Model
         'phone',
         'address',
         'metadata',
+        // Champs arabes de la CIN tunisienne (scan Claude vision).
+        'last_name_ar',
+        'first_name_ar',
+        'filiation_ar',
+        'spouse_ar',
+        'birth_place_ar',
+        'card_format',
     ];
 
     protected function casts(): array
