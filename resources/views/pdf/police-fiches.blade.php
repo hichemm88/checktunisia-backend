@@ -31,7 +31,11 @@
   .scan { margin-top: 8px; padding-top: 7px; border-top: 1px solid #f0eefb; }
   .scan-label { font-size: 8px; text-transform: uppercase; letter-spacing: .5px;
                 color: #9ca3af; margin-bottom: 3px; }
-  .scan img { max-width: 260px; max-height: 170px; border: 1px solid #e5e7eb; border-radius: 4px; }
+  /* Dimensions FIXES, pas des maxima. Les pièces sont déjà ramenées à un
+     cadre commun côté serveur (FicheScanImage) ; les borner ici par des
+     maxima laissait chaque photo à sa propre taille selon son format
+     d'origine, ce qui donnait un document en accordéon. */
+  .scan img { width: 300px; height: 200px; border: 1px solid #e5e7eb; border-radius: 4px; }
 
   .foot { margin-top: 7px; font-size: 8px; color: #b6b6b6; }
 </style>
