@@ -718,4 +718,21 @@ class DeliveryChannelTest extends TestCase
             ->expectsOutputToContain('Invalid OAuth access token')
             ->assertExitCode(1);
     }
+
+    public function test_templates_command_can_target_another_account(): void
+    {
+        /*
+         * Deux comptes coexistent pendant la bascule : celui du numéro de test
+         * et celui de production, encore en revue. Un modèle créé sur le mauvais
+         * compte est invisible du numéro qui émet — et l'erreur d'envoi est
+         * alors la même que s'il n'existait pas du tout. Cas réellement
+         * rencontré le 17/08.
+         */
+        $this->configureWaba();
+        Http::fake(['graph.facebook.com/*' => Http::response(['data' => []], 200)]);
+
+        $this->artisan('whatsapp:cloud-templates', ['waba' => '9999999999'])->assertExitCode(0);
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/9999999999/message_templates'));
+    }
 }
