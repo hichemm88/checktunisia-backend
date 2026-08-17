@@ -141,6 +141,36 @@ return [
         'base_url' => env('WHATSAPP_CLOUD_BASE_URL', 'https://graph.facebook.com'),
         'api_version' => env('WHATSAPP_CLOUD_API_VERSION', 'v21.0'),
         'timeout' => (int) env('WHATSAPP_CLOUD_TIMEOUT', 30),
+
+        /*
+        | Modèle de message approuvé par Meta.
+        |
+        | Hors de la fenêtre de 24 h suivant un message du destinataire, la
+        | Cloud API REFUSE le texte libre (erreur 131047). Or nos destinataires
+        | ne répondent jamais — le module ignore tout message entrant, par
+        | exigence de sécurité. Donc TOUS nos envois sont hors fenêtre, et
+        | passent obligatoirement par un modèle.
+        |
+        | Contrainte décisive : une variable de modèle ne peut contenir ni
+        | retour à la ligne, ni tabulation, ni plus de quatre espaces
+        | consécutifs. La fiche est multi-ligne : elle ne peut donc PAS être
+        | injectée dans une variable.
+        |
+        | D'où la forme retenue : la fiche part en PIÈCE JOINTE PDF (en-tête
+        | « document » du modèle), et le corps ne porte que deux variables
+        | courtes. Bénéfice collatéral : la photo de la pièce d'identité
+        | revient dans le message, puisqu'elle est dans le PDF.
+        |
+        | Le modèle à faire approuver, catégorie UTILITY :
+        |   En-tête : DOCUMENT
+        |   Corps   : Fiche de police — {{1}} — {{2}}
+        |             ({{1}} = établissement, {{2}} = voyageur)
+        |
+        | Vide => envoi en texte libre (comportement historique), utilisable
+        | seulement dans la fenêtre de 24 h — donc en test.
+        */
+        'template_name' => env('WHATSAPP_CLOUD_TEMPLATE'),
+        'template_language' => env('WHATSAPP_CLOUD_TEMPLATE_LANG', 'fr'),
     ],
 
     /*

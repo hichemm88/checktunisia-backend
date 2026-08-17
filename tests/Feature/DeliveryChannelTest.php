@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\CheckIn;
 use App\Models\Hotel;
 use App\Models\WhatsappSendLog;
 use App\Services\Delivery\DeliveryChannelManager;
@@ -45,8 +46,8 @@ class DeliveryChannelTest extends TestCase
 
     public function test_the_two_channels_format_recipients_differently(): void
     {
-        $web = new WhatsAppWebChannel();
-        $cloud = new WhatsAppCloudChannel();
+        $web = new WhatsAppWebChannel;
+        $cloud = new WhatsAppCloudChannel;
 
         // C'est précisément ce détail qui aurait fuité partout sans interface.
         $this->assertSame('21620123456@c.us', $web->formatRecipient('+216 20 123 456'));
@@ -55,7 +56,7 @@ class DeliveryChannelTest extends TestCase
 
     public function test_cloud_channel_rejects_truncated_numbers(): void
     {
-        $cloud = new WhatsAppCloudChannel();
+        $cloud = new WhatsAppCloudChannel;
 
         $this->assertNull($cloud->formatRecipient('123'), 'Un numéro tronqué doit être refusé, pas transmis.');
         $this->assertNull($cloud->formatRecipient(null));
@@ -66,7 +67,7 @@ class DeliveryChannelTest extends TestCase
         // La transmission passe par le worker Node ; appeler send() ici serait
         // un bug d'appelant, il doit être bruyant.
         $this->expectException(\LogicException::class);
-        (new WhatsAppWebChannel())->send(new WhatsappSendLog());
+        (new WhatsAppWebChannel)->send(new WhatsappSendLog);
     }
 
     // ── Transmission par la Cloud API ────────────────────────────────────────
@@ -91,7 +92,7 @@ class DeliveryChannelTest extends TestCase
 
         $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'Fiche voyageur']);
 
-        $result = (new WhatsAppCloudChannel())->send($job);
+        $result = (new WhatsAppCloudChannel)->send($job);
 
         $this->assertTrue($result->success);
         $this->assertSame('wamid.TEST', $result->messageId);
@@ -109,7 +110,7 @@ class DeliveryChannelTest extends TestCase
             'graph.facebook.com/*' => Http::response(['error' => ['message' => 'Invalid recipient']], 400),
         ]);
 
-        $result = (new WhatsAppCloudChannel())->send(
+        $result = (new WhatsAppCloudChannel)->send(
             new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x'])
         );
 
@@ -127,7 +128,7 @@ class DeliveryChannelTest extends TestCase
         foreach ([500, 503, 429] as $status) {
             Http::fake(['graph.facebook.com/*' => Http::response(['error' => ['message' => 'oops']], $status)]);
 
-            $result = (new WhatsAppCloudChannel())->send(
+            $result = (new WhatsAppCloudChannel)->send(
                 new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x'])
             );
 
@@ -142,7 +143,7 @@ class DeliveryChannelTest extends TestCase
 
         Http::fake();
 
-        $result = (new WhatsAppCloudChannel())->send(
+        $result = (new WhatsAppCloudChannel)->send(
             new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x'])
         );
 
@@ -207,5 +208,161 @@ class DeliveryChannelTest extends TestCase
 
         // Se comparer à soi-même ne produirait que du bruit.
         $this->assertNull(app(DeliveryChannelManager::class)->shadow());
+    }
+
+    // ── Modèle approuvé + fiche en pièce jointe ──────────────────────────────
+
+    /**
+     * Hors fenêtre de 24 h, la Cloud API refuse le texte libre (131047), et nos
+     * destinataires ne répondent JAMAIS — le module ignore tout message entrant.
+     * En production, un envoi qui n'est pas un modèle est un envoi qui échoue.
+     */
+    public function test_cloud_channel_sends_a_template_when_one_is_configured(): void
+    {
+        $this->configureCloud();
+        config(['whatsapp.cloud.template_name' => 'fiche_police', 'whatsapp.cloud.template_language' => 'fr']);
+
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+
+        $hotel = Hotel::factory()->withActiveSubscription()->create(['name' => 'Dar Test']);
+        $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => "Ligne 1\nLigne 2", 'hotel_id' => $hotel->id]);
+
+        $result = (new WhatsAppCloudChannel)->send($job);
+
+        $this->assertTrue($result->success);
+        Http::assertSent(function ($request) {
+            if (!str_ends_with($request->url(), '/messages')) {
+                return false;
+            }
+
+            return $request['type'] === 'template'
+                && $request['template']['name'] === 'fiche_police'
+                && $request['template']['language']['code'] === 'fr';
+        });
+    }
+
+    public function test_template_parameters_never_carry_a_line_break(): void
+    {
+        /*
+         * Meta rejette le message ENTIER si un paramètre contient un saut de
+         * ligne, une tabulation ou plus de quatre espaces consécutifs. Un nom
+         * d'établissement collé depuis un tableur suffit à tout faire tomber.
+         */
+        $this->configureCloud();
+        config(['whatsapp.cloud.template_name' => 'fiche_police']);
+
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+
+        $hotel = Hotel::factory()->withActiveSubscription()->create(['name' => "Dar\nTest    Sousse"]);
+        $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x', 'hotel_id' => $hotel->id]);
+
+        (new WhatsAppCloudChannel)->send($job);
+
+        Http::assertSent(function ($request) {
+            if (!str_ends_with($request->url(), '/messages')) {
+                return false;
+            }
+            foreach ($request['template']['components'] as $component) {
+                if (($component['type'] ?? null) !== 'body') {
+                    continue;
+                }
+                foreach ($component['parameters'] as $param) {
+                    if (preg_match('/[\r\n\t]|\s{5,}/', $param['text'])) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        });
+    }
+
+    public function test_a_refused_media_upload_is_retryable_not_a_lost_fiche(): void
+    {
+        // Le /media peut tomber sans que la fiche soit en cause : elle doit
+        // repartir au tour suivant, pas être abandonnée.
+        $this->configureCloud();
+        config(['whatsapp.cloud.template_name' => 'fiche_police']);
+
+        Http::fake([
+            '*/media' => Http::response(['error' => ['message' => 'Service indisponible']], 503),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.T']]], 200),
+        ]);
+
+        $checkIn = CheckIn::factory()
+            ->for(Hotel::factory()->withActiveSubscription()->create())
+            ->active()->withGuest('Martin', 'Ostermeier')->create();
+
+        $job = WhatsappSendLog::create([
+            'hotel_id' => $checkIn->hotel_id,
+            'check_in_id' => $checkIn->id,
+            'guest_id' => $checkIn->guests()->first()->id,
+            'recipient' => '21620123456',
+            'caption' => 'Fiche',
+            'status' => 'pending',
+            'queued_at' => now(),
+        ]);
+
+        $result = (new WhatsAppCloudChannel)->send($job);
+
+        $this->assertFalse($result->success);
+        $this->assertTrue($result->retryable, 'un /media en panne ne condamne pas la fiche');
+        Http::assertNotSent(fn ($request) => str_ends_with($request->url(), '/messages'));
+    }
+
+    public function test_a_real_fiche_travels_as_an_uploaded_pdf(): void
+    {
+        // La fiche est multi-ligne : aucune variable de modèle ne peut
+        // l'accueillir. Elle doit donc partir en pièce jointe — et c'est ce qui
+        // ramène au passage la photo de la pièce d'identité.
+        $this->configureCloud();
+        config(['whatsapp.cloud.template_name' => 'fiche_police']);
+
+        Http::fake([
+            '*/media' => Http::response(['id' => 'MEDIA-42'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.T']]], 200),
+        ]);
+
+        $checkIn = CheckIn::factory()
+            ->for(Hotel::factory()->withActiveSubscription()->create(['name' => 'Dar Test']))
+            ->active()->withGuest('Martin', 'Ostermeier')->create();
+
+        $job = WhatsappSendLog::create([
+            'hotel_id' => $checkIn->hotel_id,
+            'check_in_id' => $checkIn->id,
+            'guest_id' => $checkIn->guests()->first()->id,
+            'recipient' => '21620123456',
+            'caption' => 'Fiche',
+            'status' => 'pending',
+            'queued_at' => now(),
+        ]);
+
+        $this->assertTrue((new WhatsAppCloudChannel)->send($job)->success);
+
+        Http::assertSent(function ($request) {
+            if (!str_ends_with($request->url(), '/messages')) {
+                return false;
+            }
+            $header = collect($request['template']['components'])->firstWhere('type', 'header');
+
+            return $header !== null
+                && $header['parameters'][0]['document']['id'] === 'MEDIA-42'
+                && str_ends_with($header['parameters'][0]['document']['filename'], '.pdf');
+        });
+    }
+
+    public function test_a_test_job_without_a_checkin_still_goes_out(): void
+    {
+        // Le message [TEST] sert précisément à valider la chaîne : il ne doit
+        // pas être le seul à ne pas pouvoir l'emprunter, faute de PDF.
+        $this->configureCloud();
+        config(['whatsapp.cloud.template_name' => 'fiche_police']);
+
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+
+        $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => '[TEST]', 'is_test' => true]);
+
+        $this->assertTrue((new WhatsAppCloudChannel)->send($job)->success);
+        Http::assertNotSent(fn ($request) => str_ends_with($request->url(), '/media'));
     }
 }
