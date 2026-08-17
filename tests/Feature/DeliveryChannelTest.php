@@ -621,4 +621,32 @@ class DeliveryChannelTest extends TestCase
 
         Http::assertNothingSent();
     }
+
+    public function test_cloud_test_command_accepts_a_positional_recipient(): void
+    {
+        // La console web de Railway avale les doubles tirets : « --to=216… » y
+        // arrive en « to216… ». C'est pourtant depuis cette console qu'on
+        // exerce le canal en production.
+        $this->configureCloud();
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+
+        $this->artisan('whatsapp:cloud-test', ['destinataire' => '21699888777'])->assertExitCode(0);
+
+        Http::assertSent(fn ($request) => !str_ends_with($request->url(), '/media')
+            && $request['to'] === '21699888777');
+    }
+
+    public function test_cloud_test_command_falls_back_to_the_configured_recipient(): void
+    {
+        // Sans aucun argument : c'est la forme utilisable partout, y compris
+        // dans une console qui abîme les tirets.
+        $this->configureCloud();
+        config(['whatsapp.recipient' => '21693116000@c.us']);
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+
+        $this->artisan('whatsapp:cloud-test')->assertExitCode(0);
+
+        Http::assertSent(fn ($request) => !str_ends_with($request->url(), '/media')
+            && $request['to'] === '21693116000');
+    }
 }
