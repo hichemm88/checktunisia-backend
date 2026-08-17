@@ -73,6 +73,29 @@ test('une erreur inconnue reste au niveau de la fiche — le doute ne redémarre
   assert.strictEqual(classifyFailure('erreur sans objet'), 'job');
 });
 
+test("l'injection perdue est une panne de page, pas une fiche fautive", () => {
+  // Constaté en production après un ré-appairage avec un AUTRE numéro : la page
+  // vivait, mais window.WWebJS avait disparu. Classée 'job', la panne ne
+  // recyclait jamais le worker et les fiches en attente échouaient en boucle
+  // jusqu'à l'abandon à 24 h.
+  const lostInjection = [
+    new Error("Evaluation failed: TypeError: Cannot read properties of undefined (reading 'getChat')"),
+    new Error("Cannot read properties of undefined (reading 'createWid')"),
+    new Error("Cannot read properties of undefined (reading 'getMessageModel')"),
+    new Error('Evaluation failed: ReferenceError: WWebJS is not defined'),
+    new Error("Cannot read properties of undefined (reading 'Store')"),
+  ];
+  for (const err of lostInjection) {
+    assert.strictEqual(classifyFailure(err), 'page', err.message);
+  }
+
+  // …sans élargir le filet : un déréférencement quelconque reste une fiche.
+  assert.strictEqual(
+    classifyFailure(new Error("Cannot read properties of undefined (reading 'caption')")),
+    'job',
+  );
+});
+
 // ── Escalade ─────────────────────────────────────────────────────────────────
 
 test('des fiches qui échouent une à une ne provoquent jamais de redémarrage', () => {

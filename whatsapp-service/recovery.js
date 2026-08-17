@@ -80,6 +80,25 @@ const PAGE_SIGNATURES = [
   /connection closed/i,
   /navigation timeout/i,
   /browser has disconnected/i,
+  /*
+   * Injection perdue. whatsapp-web.js pose ses helpers (`window.WWebJS`,
+   * `window.Store`) dans la page après chargement ; si la page se recharge
+   * ensuite sans que la lib les repose — typiquement après un ré-appairage, a
+   * fortiori avec un AUTRE numéro — `sendMessage()` déréférence un objet absent
+   * et lève « Cannot read properties of undefined (reading 'getChat') ».
+   *
+   * Le défaut 'job' était ici le pire choix possible : aucun réessai de la file
+   * ne réinjecte quoi que ce soit, donc TOUTES les fiches échouaient en boucle
+   * jusqu'à l'abandon à 24 h, sans que le worker ne se recycle jamais. C'est
+   * une panne de page au sens strict : seul un renderer neuf la répare.
+   *
+   * Signatures ancrées sur les helpers de la lib (getChat, WidFactory…) : un
+   * « cannot read properties of undefined » générique reste classé 'job', le
+   * doute continue de profiter à la file.
+   */
+  /cannot read propert(?:y|ies) of undefined \(reading '(?:getChat|getChatById|getMessageModel|getProfilePicThumb|createWid|sendMessage|sendSeen|markComposing)'\)/i,
+  /(?:window\.)?(?:WWebJS|Store) is not defined/i,
+  /cannot read propert(?:y|ies) of undefined \(reading '(?:WWebJS|Store)'\)/i,
 ];
 
 /**
