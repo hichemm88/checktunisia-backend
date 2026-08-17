@@ -1,5 +1,9 @@
 <?php
 
+use App\Services\Observability\SchedulerHeartbeat;
+use App\Services\Webauthn\ChallengeStore;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schedule;
 
 // Notify hotel admins about expiring subscriptions — runs daily at 8:00 AM
@@ -39,10 +43,19 @@ Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone(
 // au-delà de la rétention (24 h). Minimisation des données.
 Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
 
+// Transmission par le canal PUSH (Cloud API). Inerte tant que le canal actif
+// est en pull : le worker Node réclame alors les fiches lui-même. Planifiée dès
+// maintenant pour que la bascule ne tienne qu'à une variable d'environnement,
+// sans qu'il faille aussi penser à armer un ordonnancement ce jour-là.
+// Verrou borné à 15 min : une exécution cadencée peut durer plusieurs minutes
+// (10 fiches à 45 s), mais un processus tué en cours ne doit pas bloquer la
+// file jusqu'au lendemain — le défaut de Laravel est de 24 h.
+Schedule::command('whatsapp:push')->everyMinute()->withoutOverlapping(15);
+
 // Challenges WebAuthn périmés. Ils sont déjà inutilisables passé leur
 // expiration (et purgés au fil de l'eau à chaque émission) : ce passage
 // quotidien évite simplement que la table enfle sur une longue période creuse.
-Schedule::call(fn () => app(\App\Services\Webauthn\ChallengeStore::class)->pruneExpired())
+Schedule::call(fn () => app(ChallengeStore::class)->pruneExpired())
     ->name('webauthn-prune-challenges')
     ->dailyAt('04:30');
 
@@ -81,7 +94,7 @@ Schedule::command('qayed:db-backup')
     ->onFailure(function () {
         // Filet en plus de la remontée interne de la commande : couvre aussi
         // le cas où le processus meurt avant d'avoir pu se signaler lui-même.
-        \Illuminate\Support\Facades\Log::error('[backup] la tâche planifiée s\'est terminée en échec');
+        Log::error('[backup] la tâche planifiée s\'est terminée en échec');
 
         if (config('sentry.dsn')) {
             \Sentry\captureMessage('Qayed : échec de la tâche planifiée de sauvegarde');
@@ -92,8 +105,8 @@ Schedule::command('qayed:db-backup')
 // invisible : le serveur web répond normalement pendant que la file cesse
 // d'être drainée et que les fiches ne partent plus. Lu par
 // GET /admin/health, qui marque « stale » au-delà de 5 minutes.
-Schedule::call(fn () => \Illuminate\Support\Facades\Cache::put(
-    \App\Services\Observability\SchedulerHeartbeat::CACHE_KEY,
+Schedule::call(fn () => Cache::put(
+    SchedulerHeartbeat::CACHE_KEY,
     now()->toIso8601String(),
     now()->addHour(),
 ))
@@ -116,7 +129,7 @@ Schedule::call(fn () => \Illuminate\Support\Facades\Cache::put(
 // `name` AVANT `withoutOverlapping` : l'inverse lève une LogicException au
 // chargement de ce fichier — donc à CHAQUE commande artisan, y compris
 // `migrate` au démarrage du conteneur.
-Schedule::call(fn () => app(\App\Services\Observability\SchedulerHeartbeat::class)->ping())
+Schedule::call(fn () => app(SchedulerHeartbeat::class)->ping())
     ->name('scheduler-external-probe')
     ->everyFiveMinutes()
     ->withoutOverlapping();

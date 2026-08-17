@@ -253,7 +253,24 @@ class WhatsappOutboxService
     {
         $state = WhatsappSessionState::current();
 
-        if (!$this->enabled() || !$state->canDispatch()) {
+        /*
+         * La condition de départ n'est pas la même selon le transport.
+         *
+         * En PULL (WhatsApp Web), rien ne peut partir tant que le worker Node
+         * n'a pas annoncé une session appairée : `canDispatch()` exige donc
+         * « prête ET non en pause ».
+         *
+         * En PUSH (Cloud API), il n'y a PAS de session — ni QR, ni appairage,
+         * ni worker. `whatsapp_session_state` décrit un composant qui ne
+         * participe plus. Exiger « prête » aurait gelé la file pour toujours
+         * après la bascule, sans le moindre message d'erreur : le symptôme
+         * aurait été « tout est configuré et rien ne part ».
+         *
+         * La pause, elle, vaut pour les deux : c'est le coupe-circuit humain.
+         */
+        $dispatchable = $this->channel()->supportsPush() ? !$state->paused : $state->canDispatch();
+
+        if (!$this->enabled() || !$dispatchable) {
             return null;
         }
 

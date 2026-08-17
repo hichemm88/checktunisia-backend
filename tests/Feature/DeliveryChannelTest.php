@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\CheckIn;
 use App\Models\Hotel;
 use App\Models\WhatsappSendLog;
+use App\Models\WhatsappSessionState;
 use App\Services\Delivery\DeliveryChannelManager;
 use App\Services\Delivery\WhatsAppCloudChannel;
 use App\Services\Delivery\WhatsAppWebChannel;
@@ -364,5 +365,178 @@ class DeliveryChannelTest extends TestCase
 
         $this->assertTrue((new WhatsAppCloudChannel)->send($job)->success);
         Http::assertNotSent(fn ($request) => str_ends_with($request->url(), '/media'));
+    }
+
+    // ── Drainage de la file par le canal push ────────────────────────────────
+
+    /** @return CheckIn */
+    private function checkInWithGuest(string $hotelName = 'Dar Test')
+    {
+        return CheckIn::factory()
+            ->for(Hotel::factory()->withActiveSubscription()->create(['name' => $hotelName]))
+            ->active()->withGuest('Martin', 'Ostermeier')->create();
+    }
+
+    private function queueFiche(): WhatsappSendLog
+    {
+        $checkIn = $this->checkInWithGuest();
+
+        return WhatsappSendLog::create([
+            'hotel_id' => $checkIn->hotel_id,
+            'check_in_id' => $checkIn->id,
+            'guest_id' => $checkIn->guests()->first()->id,
+            'recipient' => '21620123456',
+            'caption' => 'Fiche',
+            'status' => 'pending',
+            'next_attempt_at' => now(),
+            'queued_at' => now(),
+        ]);
+    }
+
+    public function test_push_command_drains_the_queue_without_any_session(): void
+    {
+        /*
+         * En push il n'y a NI worker, NI session appairée. Exiger une session
+         * « prête » aurait gelé la file pour toujours après la bascule, en
+         * silence : tout configuré, et rien qui part.
+         */
+        $this->configureCloud();
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200)]);
+
+        $job = $this->queueFiche();
+        $this->assertSame('initializing', WhatsappSessionState::current()->status);
+
+        $this->artisan('whatsapp:push')->assertExitCode(0);
+
+        $job->refresh();
+        $this->assertSame('sent', $job->status);
+        $this->assertSame('wamid.OK', $job->message_id_whatsapp);
+    }
+
+    public function test_push_command_is_inert_on_a_pull_channel(): void
+    {
+        // Tant que le canal actif est WhatsApp Web, c'est le worker Node qui
+        // transmet : la commande doit pouvoir rester planifiée sans rien casser.
+        config(['whatsapp.enabled' => true, 'whatsapp.channel' => 'web', 'whatsapp.recipient' => '21612345678@c.us']);
+        Http::fake();
+
+        $job = $this->queueFiche();
+
+        $this->artisan('whatsapp:push')->assertExitCode(0);
+
+        $this->assertSame('pending', $job->fresh()->status);
+        Http::assertNothingSent();
+    }
+
+    public function test_push_command_respects_the_pause(): void
+    {
+        // Le coupe-circuit humain vaut pour les deux transports.
+        $this->configureCloud();
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200)]);
+        WhatsappSessionState::current()->update(['paused' => true]);
+
+        $job = $this->queueFiche();
+
+        $this->artisan('whatsapp:push')->assertExitCode(0);
+
+        $this->assertSame('pending', $job->fresh()->status);
+        Http::assertNothingSent();
+    }
+
+    public function test_push_command_stops_and_cuts_the_relay_after_repeated_refusals(): void
+    {
+        /*
+         * Même leçon que le 17/08 : une série de refus n'est pas une histoire
+         * de fiches, c'est le canal qui est refusé. S'obstiner sur la Cloud API
+         * coûterait le numéro professionnel vérifié — autrement plus cher
+         * qu'une SIM.
+         */
+        $this->configureCloud();
+        config(['whatsapp.circuit_breaker_failures' => 2, 'whatsapp.min_interval_seconds' => 1]);
+        Http::fake(['graph.facebook.com/*' => Http::response(['error' => ['message' => 'Refusé']], 400)]);
+
+        $this->queueFiche();
+        $this->queueFiche();
+        $survivor = $this->queueFiche();
+
+        $this->artisan('whatsapp:push')->assertExitCode(0);
+
+        $this->assertTrue(WhatsappSessionState::current()->fresh()->paused, 'le relais doit être coupé');
+        $this->assertSame('pending', $survivor->fresh()->status, 'la file restante est préservée');
+    }
+
+    public function test_push_command_pauses_the_run_on_a_temporary_failure(): void
+    {
+        // Un 5xx ne dit rien de notre légitimité : on rend la main sans couper
+        // le relais ni brûler les tentatives des fiches suivantes.
+        $this->configureCloud();
+        Http::fake(['graph.facebook.com/*' => Http::response(['error' => ['message' => 'oops']], 503)]);
+
+        $job = $this->queueFiche();
+
+        $this->artisan('whatsapp:push')->assertExitCode(0);
+
+        $this->assertSame('pending', $job->fresh()->status);
+        $this->assertFalse(WhatsappSessionState::current()->fresh()->paused);
+    }
+
+    public function test_push_command_honours_the_hourly_cap(): void
+    {
+        // Le plafond est la seule chose qui empêche un arriéré de partir d'un
+        // bloc — c'est exactement ce que Meta a sanctionné.
+        $this->configureCloud();
+        config(['whatsapp.max_per_hour' => 1]);
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200)]);
+
+        WhatsappSendLog::create([
+            'recipient' => '21620123456', 'caption' => 'déjà partie',
+            'status' => 'sent', 'sent_at' => now()->subMinutes(10), 'queued_at' => now()->subMinutes(20),
+        ]);
+        $job = $this->queueFiche();
+
+        $this->artisan('whatsapp:push')->assertExitCode(0);
+
+        $this->assertSame('pending', $job->fresh()->status);
+        Http::assertNothingSent();
+    }
+
+    public function test_push_command_does_not_idle_after_emptying_the_queue(): void
+    {
+        /*
+         * La cadence s'applique ENTRE deux envois, jamais après le dernier.
+         * Placée après, elle faisait dormir 45 s une exécution qui n'avait plus
+         * rien à envoyer — verrou de l'ordonnanceur compris, donc en retardant
+         * d'autant la fiche suivante. Ce test échoue par le temps qu'il met.
+         */
+        $this->configureCloud();
+        config(['whatsapp.min_interval_seconds' => 3, 'whatsapp.interval_jitter_ratio' => 0]);
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200)]);
+
+        $this->queueFiche();
+
+        $startedAt = microtime(true);
+        $this->artisan('whatsapp:push')->assertExitCode(0);
+        $elapsed = microtime(true) - $startedAt;
+
+        $this->assertLessThan(3, $elapsed, 'une file vidée ne doit pas retenir la commande');
+    }
+
+    public function test_push_command_paces_between_two_sends(): void
+    {
+        // Mais la cadence existe bel et bien : deux fiches ne partent pas
+        // collées. C'est la rafale que les heuristiques anti-spam repèrent.
+        $this->configureCloud();
+        config(['whatsapp.min_interval_seconds' => 2, 'whatsapp.interval_jitter_ratio' => 0]);
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200)]);
+
+        $this->queueFiche();
+        $this->queueFiche();
+
+        $startedAt = microtime(true);
+        $this->artisan('whatsapp:push')->assertExitCode(0);
+        $elapsed = microtime(true) - $startedAt;
+
+        $this->assertGreaterThanOrEqual(2, $elapsed, 'les envois doivent être espacés');
+        $this->assertSame(2, WhatsappSendLog::where('status', 'sent')->count());
     }
 }
