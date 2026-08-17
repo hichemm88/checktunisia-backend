@@ -297,6 +297,29 @@ class WhatsappWorkerController extends Controller
         $state->heartbeat_at = now();
 
         if ($data['status'] === WhatsappSessionState::STATUS_READY) {
+            /*
+             * Ré-appairage APRÈS une révocation. Deux conséquences, apprises le
+             * 17/08/2026 : WhatsApp a restreint le numéro 6 h, puis a révoqué
+             * l'appareil à la seconde où la restriction expirait, avec 45 fiches
+             * en file. Reprendre les envois automatiquement dans ces conditions
+             * revenait à demander le bannissement définitif.
+             *
+             *  • La montée en charge est réarmée même à numéro INCHANGÉ. Se
+             *    faire débrancher par WhatsApp est un événement de réputation :
+             *    ne réarmer que sur changement de numéro laissait précisément le
+             *    cas le plus dangereux à pleine cadence.
+             *  • Le relais reste EN PAUSE. Une révocation n'est jamais anodine —
+             *    ni WhatsApp ni un humain ne débranche un appareil par accident.
+             *    Vider un arriéré dans un canal qui vient de vous éjecter est le
+             *    geste à ne pas automatiser : il faut un humain, qui a d'abord
+             *    vérifié l'état du compte sur le téléphone.
+             */
+            if ($state->revoked_at) {
+                Log::warning('[whatsapp] ré-appairage après révocation — montée en charge réarmée et relais laissé en pause (reprise manuelle).');
+                $state->paired_at = now();
+                $state->paused = true;
+            }
+
             $state->last_ready_at = now();
             $state->revoked_at = null; // ré-appairage réussi : la révocation est levée
         }
