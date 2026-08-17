@@ -528,23 +528,8 @@ class WhatsappOutboxService
      */
     private function photoScanId(CheckIn $checkIn, Guest $guest): ?string
     {
-        $forGuest = DocumentScan::query()
-            ->where('check_in_id', $checkIn->id)
-            ->where('guest_id', $guest->id)
-            ->latest('created_at')
-            ->value('id');
-
-        if ($forGuest) {
-            return $forGuest;
-        }
-
-        if ($checkIn->guests->count() <= 1) {
-            return DocumentScan::query()
-                ->where('check_in_id', $checkIn->id)
-                ->latest('created_at')
-                ->value('id');
-        }
-
-        return null;
+        // Résolution partagée avec l'export PDF (DocumentScan::forFiche) : les
+        // deux canaux doivent joindre exactement la même pièce.
+        return DocumentScan::forFiche($checkIn, $guest)?->id;
     }
 }
