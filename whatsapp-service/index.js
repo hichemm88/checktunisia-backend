@@ -282,9 +282,26 @@ async function reportSession(status, reason = null) {
   state.session = status;
   state.reason = reason;
   try {
-    await api.post('/internal/whatsapp/session', { status, reason });
+    // Numéro réellement appairé : c'est le backend qui décide, à partir de lui,
+    // si la réputation repart de zéro (montée en charge). Un ré-appairage avec
+    // un AUTRE numéro est un compte neuf pour Meta, même si le service, lui, a
+    // des mois de service. Best-effort : `client.info` n'existe qu'une fois prêt.
+    await api.post('/internal/whatsapp/session', {
+      status,
+      reason,
+      phone_number: connectedNumber(),
+    });
   } catch (err) {
     console.warn('[whatsapp] report session failed:', err.message);
+  }
+}
+
+/** @returns {string|null} numéro connecté (chiffres), ou null si pas encore prêt. */
+function connectedNumber() {
+  try {
+    return client?.info?.wid?.user ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -746,7 +763,7 @@ function withTimeout(promise, ms, label) {
 }
 
 // ── Boucle de travail (FIFO, un envoi à la fois) ─────────────────────────────
-async function sendJob(job, minIntervalSeconds) {
+async function sendJob(job, minIntervalSeconds, jitterRatio) {
   let media = null;
 
   if (job.has_photo && job.photo_url) {
@@ -772,8 +789,19 @@ async function sendJob(job, minIntervalSeconds) {
     message_id: sent?.id?._serialized ?? sent?.id?.$1 ?? sent?.id?.id ?? null,
   });
 
-  // Délai minimum anti-ban entre deux messages.
-  await sleep(Math.max(minIntervalSeconds, 1) * 1000);
+  // Délai minimum anti-ban entre deux messages, volontairement IRRÉGULIER : un
+  // intervalle constant à la milliseconde près est en soi une signature
+  // d'automate. La gigue n'écourte jamais l'attente sous le plancher, elle
+  // ne fait qu'ajouter.
+  await sleep(jitteredIntervalMs(minIntervalSeconds, jitterRatio));
+}
+
+/** Plancher, plus un tirage aléatoire dans [0, ratio × plancher]. */
+function jitteredIntervalMs(minIntervalSeconds, jitterRatio = 0) {
+  const floorMs = Math.max(Number(minIntervalSeconds) || 0, 1) * 1000;
+  const ratio = Math.min(Math.max(Number(jitterRatio) || 0, 0), 1);
+
+  return Math.round(floorMs + Math.random() * ratio * floorMs);
 }
 
 async function tick() {
@@ -820,7 +848,11 @@ async function tick() {
     }
 
     try {
-      await withTimeout(sendJob(job, control.min_interval_seconds), SEND_TIMEOUT_MS, `envoi ${job.id}`);
+      await withTimeout(
+        sendJob(job, control.min_interval_seconds, control.interval_jitter_ratio),
+        SEND_TIMEOUT_MS,
+        `envoi ${job.id}`,
+      );
       recovery.success();
     } catch (err) {
       state.failedCount += 1;
@@ -832,7 +864,7 @@ async function tick() {
        * rien, et le déclencher revenait à transformer l'incident d'UNE fiche en
        * panne de tout le canal, jusqu'à épuisement du quota Railway.
        */
-      const outcome = recovery.failure(err);
+      const outcome = recovery.failure(err, { maxRefusals: control.circuit_breaker_failures });
       console.warn(`[whatsapp] envoi ${job.id} échoué [${outcome.kind}]:`, err.message);
       await api.post(`/internal/whatsapp/jobs/${job.id}/result`, {
         status: 'failed',
@@ -848,6 +880,24 @@ async function tick() {
         // que de consommer les tentatives des fiches suivantes pour rien.
         case 'backoff':
           return ERROR_BACKOFF_MS;
+
+        /*
+         * Disjoncteur. WhatsApp refuse en série alors que la page répond : le
+         * canal est bloqué, pas les fiches. Le worker s'arrête ET demande au
+         * backend de couper durablement — sa propre veille ne survivrait pas au
+         * prochain redémarrage de conteneur, un compte restreint si.
+         *
+         * C'est le seul cas où réessayer est PIRE que ne rien faire : chaque
+         * tentative sous restriction est une infraction de plus.
+         */
+        case 'halt':
+          console.error(`[whatsapp] disjoncteur : ${outcome.refusals} refus consécutifs [${outcome.kind}] — arrêt des envois.`);
+          await api.post('/internal/whatsapp/halt', {
+            reason: `${outcome.refusals} envois refusés d'affilée alors que la session répondait — dernière erreur : ${String(err.message || err)}`.slice(0, 500),
+          }).catch((e) => console.warn('[whatsapp] coupure non transmise au backend :', e.message));
+          await haltSending(`${outcome.refusals} envois refusés d'affilée — restriction de compte probable`);
+
+          return IDLE_POLL_MS;
 
         case 'reload':
           console.warn(`[whatsapp] ${outcome.pageFailures} échecs d'envoi consécutifs imputables à la page — rechargement (tentative ${outcome.reloads}/${MAX_PAGE_RELOADS}).`);
@@ -930,6 +980,9 @@ app.get('/health', (_req, res) => {
     sending_suspended: suspended,
     suspended_until: suspended ? new Date(sendingSuspendedUntil).toISOString() : null,
     suspension_reason: suspended ? suspensionReason : null,
+    // Refus consécutifs de WhatsApp : au seuil, le disjoncteur coupe le relais.
+    // Un compteur qui grimpe est le signe avant-coureur d'une restriction.
+    refusal_streak: recovery.refusalStreak(),
   });
 });
 

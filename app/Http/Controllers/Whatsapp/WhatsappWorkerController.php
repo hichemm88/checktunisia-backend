@@ -12,6 +12,7 @@ use App\Services\Whatsapp\WhatsappSessionVault;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Intervention\Image\ImageManager;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -263,10 +264,22 @@ class WhatsappWorkerController extends Controller
         $data = $request->validate([
             'status' => 'required|in:initializing,ready,disconnected,logged_out,auth_failure',
             'reason' => 'nullable|string',
+            // Numéro réellement appairé, rapporté sur « ready » uniquement.
+            'phone_number' => 'nullable|string|max:32',
         ]);
 
         $state = WhatsappSessionState::current();
         $previous = $state->status;
+
+        // Changement de NUMÉRO émetteur → la réputation repart de zéro chez
+        // Meta, la montée en charge aussi. Une reconnexion du même numéro, elle,
+        // ne rebride rien : c'est le changement qui compte, pas la reconnexion.
+        $number = preg_replace('/\D+/', '', (string) ($data['phone_number'] ?? '')) ?: null;
+        if ($number && $number !== $state->phone_number) {
+            Log::info('[whatsapp] numéro émetteur '.($state->phone_number ? 'changé ('.$state->phone_number.' → '.$number.')' : 'renseigné ('.$number.')').' — montée en charge réarmée.');
+            $state->phone_number = $number;
+            $state->paired_at = now();
+        }
 
         // Une révocation ne se laisse pas effacer par le simple redémarrage qui
         // la suit. Tant que la session n'est pas reprise (« ready »), le
@@ -318,10 +331,20 @@ class WhatsappWorkerController extends Controller
         // Simple heartbeat : le worker interroge control() régulièrement.
         $state->forceFill(['heartbeat_at' => now()])->save();
 
+        $throttle = $this->outbox->throttle($state);
+
         return response()->json(['data' => [
             'enabled' => $this->outbox->enabled(),
             'paused' => $state->paused,
-            'min_interval_seconds' => (int) config('whatsapp.min_interval_seconds', 3),
+            // Cadence EFFECTIVE : abaissée pendant la montée en charge d'un
+            // numéro fraîchement appairé. Le worker ne recalcule rien, il obéit.
+            'min_interval_seconds' => $throttle['min_interval_seconds'],
+            // Part d'aléa sur ce délai : une cadence au métronome est en
+            // elle-même une signature d'automate pour l'heuristique de Meta.
+            'interval_jitter_ratio' => (float) config('whatsapp.interval_jitter_ratio', 0.4),
+            // Seuil du disjoncteur, piloté depuis la config Laravel : le worker
+            // n'a pas à être redéployé pour qu'on le resserre.
+            'circuit_breaker_failures' => (int) config('whatsapp.circuit_breaker_failures', 5),
             // Exposé pour le self-test média du worker (/selftest-media) — évite
             // de faire transiter le numéro en clair dans une URL.
             'recipient' => (string) config('whatsapp.recipient'),
@@ -334,5 +357,22 @@ class WhatsappWorkerController extends Controller
             // technique interne (30 min) si elle est postérieure à son début.
             'resume_requested_at' => $state->resume_requested_at?->toIso8601String(),
         ]]);
+    }
+
+    /**
+     * POST internal/whatsapp/halt — le worker signale que WhatsApp refuse ses
+     * envois de façon répétée alors que sa page fonctionne.
+     *
+     * Le worker constate, le backend décide et persiste : sa propre veille est
+     * en mémoire, elle disparaît au premier redémarrage de conteneur. Un
+     * blocage de compte, lui, survit très bien à un redémarrage.
+     */
+    public function halt(Request $request): JsonResponse
+    {
+        $data = $request->validate(['reason' => 'nullable|string|max:500']);
+
+        $tripped = $this->outbox->tripCircuitBreaker($data['reason'] ?? null);
+
+        return response()->json(['data' => ['paused' => true, 'tripped' => $tripped]]);
     }
 }

@@ -41,8 +41,60 @@ return [
     // avec ce jeton sur les routes /api/v1/internal/whatsapp/*.
     'worker_secret' => env('WHATSAPP_WORKER_SECRET'),
 
-    // Délai minimum entre deux envois, appliqué côté worker (anti-ban Meta).
-    'min_interval_seconds' => (int) env('WHATSAPP_MIN_INTERVAL_SECONDS', 3),
+    /*
+    |--------------------------------------------------------------------------
+    | Garde-fous anti-restriction Meta
+    |--------------------------------------------------------------------------
+    |
+    | Le 17/08/2026, le numéro émetteur a été restreint 6 h par WhatsApp
+    | (« activité laissant penser à du spam, à un message automatisé ou à un
+    | envoi groupé »). Le profil cochait toutes les cases de l'heuristique : un
+    | numéro fraîchement appairé, 100 % sortant — le module ignore tout message
+    | entrant, par exigence de sécurité —, une pièce jointe à chaque message,
+    | des discussions ouvertes avec des destinataires qui n'ont jamais écrit, et
+    | une rafale à 3 s d'intervalle. Les réglages ci-dessous existent pour que
+    | ce profil ne se reproduise pas, et pour que le worker s'arrête au lieu de
+    | s'obstiner si Meta bloque quand même.
+    |
+    */
+
+    // Délai minimum entre deux envois, appliqué côté worker.
+    // 3 s à l'origine : trop rapide, et surtout METRONOMIQUE — une régularité
+    // à la milliseconde près est en soi une signature d'automate.
+    'min_interval_seconds' => (int) env('WHATSAPP_MIN_INTERVAL_SECONDS', 45),
+
+    // Part d'aléa appliquée à ce délai (0.4 = ±40 %). Casse la régularité.
+    'interval_jitter_ratio' => (float) env('WHATSAPP_INTERVAL_JITTER_RATIO', 0.4),
+
+    // Plafond d'envois par heure glissante, appliqué côté Laravel — le worker
+    // perd la mémoire à chaque redémarrage, le backend non. Une file de 200
+    // fiches (arriéré après panne) ne doit JAMAIS partir d'un bloc.
+    'max_per_hour' => (int) env('WHATSAPP_MAX_PER_HOUR', 30),
+
+    /*
+    | Montée en charge après appairage. Un numéro neuf qui se met aussitôt à
+    | émettre est le cas d'école du compte jetable ; c'est exactement ce qui
+    | s'est produit après le ré-appairage avec un autre numéro, arriéré compris.
+    | Pendant cette fenêtre, cadence et plafond sont volontairement bas.
+    |
+    | La fenêtre redémarre quand le NUMÉRO connecté change (voir
+    | WhatsappSessionState::phone_number) — pas à chaque reconnexion du même
+    | numéro, qui ne repart pas de zéro en réputation.
+    */
+    'warmup_hours' => (int) env('WHATSAPP_WARMUP_HOURS', 24),
+    'warmup_max_per_hour' => (int) env('WHATSAPP_WARMUP_MAX_PER_HOUR', 6),
+    'warmup_min_interval_seconds' => (int) env('WHATSAPP_WARMUP_MIN_INTERVAL_SECONDS', 120),
+
+    /*
+    | Disjoncteur. N échecs d'envoi consécutifs SANS panne de page (la page
+    | répond, c'est WhatsApp qui refuse) = blocage au niveau du compte. Réessayer
+    | ne répare rien et aggrave : chaque tentative est une infraction de plus, et
+    | c'est ainsi qu'une restriction de 6 h devient un bannissement définitif.
+    | Au déclenchement le relais est mis en pause EN BASE (donc durablement, y
+    | compris après redémarrage du worker) et les administrateurs sont alertés.
+    | La reprise est un geste humain : bouton « Reprendre ».
+    */
+    'circuit_breaker_failures' => (int) env('WHATSAPP_CIRCUIT_BREAKER_FAILURES', 5),
 
     // Backoff des retries, en minutes depuis le premier échec du job.
     // 1 min, 5 min, 15 min, 1 h, puis toutes les 4 h jusqu'à 24 h max.

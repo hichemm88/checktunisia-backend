@@ -42,7 +42,7 @@ class WhatsappSessionState extends Model
 
     protected $fillable = [
         'key', 'status', 'reason', 'paused', 'last_ready_at', 'heartbeat_at', 'revoked_at',
-        'resume_requested_at',
+        'resume_requested_at', 'phone_number', 'paired_at',
     ];
 
     protected function casts(): array
@@ -53,7 +53,25 @@ class WhatsappSessionState extends Model
             'heartbeat_at' => 'datetime',
             'revoked_at' => 'datetime',
             'resume_requested_at' => 'datetime',
+            'paired_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Le numéro émetteur est-il encore en montée en charge ?
+     *
+     * Un numéro fraîchement appairé n'a aucune réputation auprès de Meta :
+     * cadence et plafond restent bas tant que la fenêtre court. `paired_at` nul
+     * = numéro antérieur à cette mécanique, donc déjà rodé — on ne bride pas
+     * rétroactivement une installation qui tourne.
+     */
+    public function inWarmup(): bool
+    {
+        if (!$this->paired_at) {
+            return false;
+        }
+
+        return $this->paired_at->gt(now()->subHours((int) config('whatsapp.warmup_hours', 24)));
     }
 
     /** Un ré-appairage humain est-il réellement nécessaire ? */
