@@ -21,13 +21,22 @@ use Illuminate\Support\Facades\Http;
  */
 class ShowWhatsappTemplates extends Command
 {
-    protected $signature = 'whatsapp:cloud-templates';
+    /**
+     * Le compte est surchargeable en argument : on en exploite plusieurs à la
+     * fois pendant la bascule — celui du numéro de test et celui de production,
+     * encore en revue. Un modèle créé sur le mauvais compte est invisible du
+     * numéro qui émet, et l'erreur d'envoi est alors la même que s'il n'existait
+     * pas du tout. Pouvoir interroger l'autre compte tranche la question sans
+     * toucher aux variables d'environnement.
+     */
+    protected $signature = 'whatsapp:cloud-templates
+        {waba? : Compte WhatsApp Business à interroger. Défaut : WHATSAPP_CLOUD_WABA_ID}';
 
     protected $description = 'Liste les modèles WhatsApp Cloud et leur état d\'approbation';
 
     public function handle(): int
     {
-        $waba = (string) config('whatsapp.cloud.waba_id');
+        $waba = (string) ($this->argument('waba') ?: config('whatsapp.cloud.waba_id'));
         $token = (string) config('whatsapp.cloud.token');
 
         if ($waba === '' || $token === '') {
