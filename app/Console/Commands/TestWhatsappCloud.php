@@ -27,8 +27,17 @@ use Illuminate\Console\Command;
  */
 class TestWhatsappCloud extends Command
 {
+    /**
+     * Le destinataire est accepté en ARGUMENT autant qu'en option.
+     *
+     * La console web de Railway avale les doubles tirets : « --to=216… » y
+     * arrive en « to216… », que bash tente d'exécuter comme une commande. Or
+     * c'est précisément depuis cette console qu'on exerce le canal en
+     * production. Un argument positionnel n'a pas ce problème.
+     */
     protected $signature = 'whatsapp:cloud-test
-        {--to= : Destinataire (chiffres internationaux). Défaut : WHATSAPP_RECIPIENT}
+        {destinataire? : Destinataire (chiffres internationaux). Défaut : WHATSAPP_RECIPIENT}
+        {--to= : Idem, en option}
         {--fiche= : Identifiant d\'une ligne whatsapp_send_log à recopier (défaut : la plus récente avec photo)}
         {--text : Force le texte libre au lieu du modèle (ne marche que dans la fenêtre de 24 h)}';
 
@@ -36,11 +45,11 @@ class TestWhatsappCloud extends Command
 
     public function handle(): int
     {
-        $to = (string) ($this->option('to') ?: config('whatsapp.recipient'));
+        $to = (string) ($this->argument('destinataire') ?: $this->option('to') ?: config('whatsapp.recipient'));
         $to = preg_replace('/\D+/', '', $to);
 
         if (strlen((string) $to) < 8) {
-            $this->error('Destinataire absent ou trop court. Utilisez --to=216XXXXXXXX.');
+            $this->error('Destinataire absent ou trop court. Exemple : php artisan whatsapp:cloud-test 21620123456');
 
             return self::FAILURE;
         }
