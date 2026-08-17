@@ -125,6 +125,9 @@ const recovery = createRecovery({
  */
 let sendingSuspendedUntil = 0;
 let suspensionReason = null;
+// Début de la veille en cours : sert à ignorer un ordre de reprise ANTÉRIEUR
+// (un vieux clic « Reprendre » ne doit pas annuler une veille toute neuve).
+let suspensionStartedAt = 0;
 
 /** État réel à annoncer au backend — la veille prime sur le « ready » de la bibliothèque. */
 function currentStatus() {
@@ -331,6 +334,7 @@ async function haltSending(reason) {
   if (sendingSuspendedUntil > Date.now()) return;
 
   sendingSuspendedUntil = Date.now() + HALT_COOLDOWN_MS;
+  suspensionStartedAt = Date.now();
   suspensionReason = reason;
   const minutes = Math.round(HALT_COOLDOWN_MS / 60000);
   console.error(`[whatsapp] envois suspendus ${minutes} min — ${reason}. Le service reste joignable (/health, /qr, /debug).`);
@@ -370,6 +374,35 @@ function resumeSendingIfDue() {
   suspensionReason = null;
   recovery.success(); // compteurs remis à neuf : la veille valait la sanction
   console.log('[whatsapp] fin de la veille technique — reprise des envois.');
+
+  return true;
+}
+
+/*
+ * Reprise sur ordre d'un administrateur (bouton « Reprendre »).
+ *
+ * La veille technique est décidée par le worker et vit dans SA mémoire : la
+ * base n'en sait rien. Un exploitant qui venait de réparer la panne (session
+ * ré-appairée, worker recyclé) n'avait donc aucun moyen d'écourter les 30 min
+ * — il attendait sans savoir pourquoi rien ne repartait.
+ *
+ * On ne retient que les demandes POSTÉRIEURES au début de la veille : sinon un
+ * vieil horodatage, laissé en base par un clic d'hier, annulerait aussitôt
+ * chaque nouvelle mise en veille.
+ */
+let lastHandledResumeRequest = 0;
+function liftSuspensionIfRequested(resumeRequestedAt) {
+  if (!resumeRequestedAt || sendingSuspendedUntil <= Date.now()) return false;
+
+  const requestedMs = Date.parse(resumeRequestedAt);
+  if (!Number.isFinite(requestedMs)) return false;
+  if (requestedMs <= suspensionStartedAt || requestedMs <= lastHandledResumeRequest) return false;
+
+  lastHandledResumeRequest = requestedMs;
+  sendingSuspendedUntil = 0;
+  suspensionReason = null;
+  recovery.success();
+  console.log('[whatsapp] veille levée à la demande d\'un administrateur — reprise des envois.');
 
   return true;
 }
@@ -763,6 +796,14 @@ async function tick() {
     // ⚠️ Pendant une veille technique, l'état réel EST « disconnected » : sans
     // cette nuance, la resynchronisation aurait aussitôt réannoncé « ready » et
     // annulé la mise en veille qu'on venait de décider.
+    // Reprise demandée par un administrateur : elle lève la veille technique.
+    // Sans ça, « Reprendre » ne remettait que `paused` à false côté base — la
+    // veille du worker, elle, courait jusqu'à son terme (30 min) sans qu'aucun
+    // bouton n'y puisse rien, y compris après une panne déjà réparée.
+    if (liftSuspensionIfRequested(control.resume_requested_at) && ready) {
+      await reportSession('ready');
+    }
+
     const localStatus = currentStatus();
     if (control.session_status && control.session_status !== localStatus) {
       console.warn(`[whatsapp] resynchronisation d'état : backend=${control.session_status}, local=${localStatus}`);

@@ -2,12 +2,16 @@
 
 namespace App\Services\Whatsapp;
 
+use App\Contracts\DeliveryChannel;
 use App\Models\CheckIn;
 use App\Models\DocumentScan;
 use App\Models\Guest;
 use App\Models\Hotel;
 use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
+use App\Services\Delivery\DeliveryChannelManager;
+use App\Services\Subscription\PlanEntitlements;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -38,9 +42,9 @@ class WhatsappOutboxService
      * qu'injecté : la config peut changer entre deux requêtes, et les tests
      * basculent de canal à la volée.
      */
-    private function channel(): \App\Contracts\DeliveryChannel
+    private function channel(): DeliveryChannel
     {
-        return app(\App\Services\Delivery\DeliveryChannelManager::class)->active();
+        return app(DeliveryChannelManager::class)->active();
     }
 
     public function enabled(): bool
@@ -58,7 +62,7 @@ class WhatsappOutboxService
      */
     public function enqueueForCheckIn(CheckIn $checkIn): int
     {
-        if (! $this->enabled()) {
+        if (!$this->enabled()) {
             return 0;
         }
 
@@ -67,7 +71,7 @@ class WhatsappOutboxService
 
             // Le relais peut être coupé par pack ou par client (Admin > Abonnements).
             $org = $checkIn->hotel?->organization;
-            if ($org && ! \App\Services\Subscription\PlanEntitlements::allows($org, 'whatsapp_relay')) {
+            if ($org && !PlanEntitlements::allows($org, 'whatsapp_relay')) {
                 Log::info('[whatsapp] relais désactivé par le pack pour org '.$org->id.' — check-in '.$checkIn->id.' non enfilé.');
 
                 return 0;
@@ -121,7 +125,7 @@ class WhatsappOutboxService
      */
     public function enqueueForGuest(CheckIn $checkIn, Guest $guest): bool
     {
-        if (! $this->enabled()) {
+        if (!$this->enabled()) {
             return false;
         }
 
@@ -132,7 +136,7 @@ class WhatsappOutboxService
             $checkIn->load(['hotel.organization', 'hotel.address', 'room', 'guests.documents']);
 
             $org = $checkIn->hotel?->organization;
-            if ($org && ! \App\Services\Subscription\PlanEntitlements::allows($org, 'whatsapp_relay')) {
+            if ($org && !PlanEntitlements::allows($org, 'whatsapp_relay')) {
                 Log::info('[whatsapp] relais désactivé par le pack pour org '.$org->id.' — voyageur '.$guest->id.' non enfilé.');
 
                 return false;
@@ -210,7 +214,7 @@ class WhatsappOutboxService
         // Mode ombre : exerce le canal cible à blanc sur le même établissement
         // et journalise tout écart. Ne transmet rien, n'appelle pas le réseau,
         // et n'échoue jamais bruyamment.
-        app(\App\Services\Delivery\DeliveryChannelManager::class)
+        app(DeliveryChannelManager::class)
             ->compareRecipients($hotel, $recipients);
 
         return $recipients;
@@ -225,7 +229,7 @@ class WhatsappOutboxService
     /** Enfile une fiche factice [TEST] pour le bouton « message test » admin. */
     public function enqueueTest(?string $propertyName = null): ?WhatsappSendLog
     {
-        if (! $this->enabled()) {
+        if (!$this->enabled()) {
             return null;
         }
 
@@ -247,7 +251,7 @@ class WhatsappOutboxService
      */
     public function claimNextJob(): ?WhatsappSendLog
     {
-        if (! $this->enabled() || ! WhatsappSessionState::current()->canDispatch()) {
+        if (!$this->enabled() || !WhatsappSessionState::current()->canDispatch()) {
             return null;
         }
 
@@ -262,7 +266,7 @@ class WhatsappOutboxService
                 ->lock('FOR UPDATE SKIP LOCKED')
                 ->first();
 
-            if (! $job) {
+            if (!$job) {
                 return null;
             }
 
@@ -360,12 +364,50 @@ class WhatsappOutboxService
      */
     public function resendAllFailed(): int
     {
-        $jobs = WhatsappSendLog::where('status', WhatsappSendLog::STATUS_FAILED)->get();
+        return $this->requeueStuck();
+    }
+
+    /**
+     * Nombre de fiches que « Renvoyer tout » remettrait en tête de file.
+     *
+     * Deux familles, et la seconde manquait : les `failed` (retries épuisés),
+     * mais AUSSI les `pending` dont la prochaine tentative est repoussée par le
+     * backoff (jusqu'à 4 h). Après une panne réparée — session ré-appairée,
+     * worker recyclé — ces fiches-là sont prêtes à partir, mais plus rien dans
+     * l'admin ne pouvait les toucher : le bouton ne visait que `failed` et la
+     * ligne « en attente » n'offre pas de « Renvoyer ». L'exploitant n'avait
+     * plus qu'à attendre le backoff, sans le savoir.
+     */
+    public function stuckCount(): int
+    {
+        return $this->stuckQuery()->count();
+    }
+
+    /**
+     * Remet en tête de file tout ce qui est bloqué : `failed` relancées, et
+     * `pending` en attente de backoff dont l'échéance est ramenée à maintenant.
+     *
+     * @return int nombre de fiches débloquées
+     */
+    public function requeueStuck(): int
+    {
+        $jobs = $this->stuckQuery()->get();
         foreach ($jobs as $job) {
             $this->resend($job);
         }
 
         return $jobs->count();
+    }
+
+    private function stuckQuery(): Builder
+    {
+        return WhatsappSendLog::query()->where(function ($q) {
+            $q->where('status', WhatsappSendLog::STATUS_FAILED)
+                ->orWhere(fn ($p) => $p
+                    ->where('status', WhatsappSendLog::STATUS_PENDING)
+                    ->whereNotNull('next_attempt_at')
+                    ->where('next_attempt_at', '>', now()));
+        });
     }
 
     /** Backoff exponentiel : 1 min, 5 min, 15 min, 1 h, puis toutes les 4 h. */
