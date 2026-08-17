@@ -603,7 +603,18 @@ function startPageLivenessWatchdog() {
     }
 
     try {
-      await withTimeout(client.pupPage.evaluate('1'), 15000, 'sonde de vivacité');
+      // On sonde la PRÉSENCE DES HELPERS, pas seulement la vivacité de la page.
+      // `evaluate('1')` réussissait sur une page bien vivante mais dont
+      // l'injection whatsapp-web.js avait disparu (ré-appairage, a fortiori avec
+      // un autre numéro) : la sonde voyait tout vert pendant que chaque envoi
+      // mourait sur « Cannot read properties of undefined (reading 'getChat') ».
+      // Un helper manquant vaut une page muette : reload, puis recyclage.
+      const injected = await withTimeout(
+        client.pupPage.evaluate('typeof window.WWebJS !== "undefined" && typeof window.Store !== "undefined"'),
+        15000,
+        'sonde de vivacité',
+      );
+      if (!injected) throw new Error('injection whatsapp-web.js absente de la page (window.WWebJS/Store)');
       misses = 0;
       reloads = 0;
     } catch (err) {
