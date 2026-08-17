@@ -26,6 +26,13 @@
   table.f td.v { font-weight: bold; color: #111827; }
   .half { width: 50%; }
 
+  /* Pièce d'identité jointe. Hauteur bornée pour qu'une fiche + sa photo
+     tiennent sur une page (page-break-inside: avoid sur .fiche). */
+  .scan { margin-top: 8px; padding-top: 7px; border-top: 1px solid #f0eefb; }
+  .scan-label { font-size: 8px; text-transform: uppercase; letter-spacing: .5px;
+                color: #9ca3af; margin-bottom: 3px; }
+  .scan img { max-width: 260px; max-height: 170px; border: 1px solid #e5e7eb; border-radius: 4px; }
+
   .foot { margin-top: 7px; font-size: 8px; color: #b6b6b6; }
 </style>
 </head>
@@ -64,6 +71,16 @@
         <tr><td colspan="2"><table class="f"><tr><td class="k" style="width:15%">Accompagnants</td><td class="v">{{ $f['companions'] }}</td></tr></table></td></tr>
         @endif
       </table>
+      {{-- Pièce d'identité. Le PDF ne portait que le texte de la fiche : tant
+           que WhatsApp transmettait, l'écart passait inaperçu ; quand le canal
+           tombe, l'export devient la seule voie de transmission et une fiche
+           sans sa pièce n'est pas celle que l'autorité attend. --}}
+      @if(!empty($f['photo']))
+        <div class="scan">
+          <div class="scan-label">Pièce d'identité</div>
+          <img src="{{ $f['photo'] }}" alt="">
+        </div>
+      @endif
       <div class="foot">Établi via Qayed — {{ $generatedAt }}</div>
     </div>
   @endforeach
