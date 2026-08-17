@@ -39,6 +39,21 @@ Schedule::command('checkins:notify-pending')->everyTenMinutes()->withoutOverlapp
 // Remind staff about active stays due to depart today with no check-out — 14:00 Tunis (§8)
 Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone('Africa/Tunis');
 
+// Récapitulatif quotidien des fiches de police, tous établissements du
+// destinataire, envoyé par email pendant que le relais WhatsApp est hors
+// service (numéro émetteur restreint par Meta le 17/08/2026).
+//
+// Inerte sans POLICE_DIGEST_RECIPIENT, et la commande s'éteint d'elle-même
+// après POLICE_DIGEST_UNTIL — un envoi quotidien de pièces d'identité ne doit
+// pas survivre à la raison qui l'a motivé faute qu'on ait pensé à l'arrêter.
+//
+// L'heure est configurable : la retransmission manuelle aux autorités dépend de
+// la disponibilité d'une personne, pas d'une contrainte technique.
+Schedule::command('police:daily-digest')
+    ->dailyAt((string) config('police_digest.hour', '17:00'))
+    ->timezone('Africa/Tunis')
+    ->withoutOverlapping(30);
+
 // MODULE PROVISOIRE — relais WhatsApp : purge horaire des images de documents
 // au-delà de la rétention (24 h). Minimisation des données.
 Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
