@@ -6,6 +6,7 @@ use App\Models\CheckIn;
 use App\Models\DocumentScan;
 use App\Models\Hotel;
 use App\Models\User;
+use App\Services\Delivery\FicheScanCropper;
 use App\Services\Delivery\FicheScanImage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Intervention\Image\ImageManager;
@@ -173,5 +174,98 @@ class FicheScanImageTest extends TestCase
         ]);
 
         $this->assertNull(FicheScanImage::dataUri($this->checkIn, $this->checkIn->guests()->first()));
+    }
+
+    // ── Détourage par modèle de vision ───────────────────────────────────────
+
+    public function test_the_detected_frame_is_applied_and_cached(): void
+    {
+        // Le rectangle est mémorisé sur le scan : la même pièce est rendue par
+        // trois chemins (WhatsApp, export, récapitulatif) et ne doit être
+        // analysée qu'une fois.
+        config(['fiche.ai_crop.enabled' => true, 'fiche.ai_crop.api_key' => 'test']);
+        $this->attachScan(2000, 2000);
+        $scan = DocumentScan::first();
+
+        $calls = 0;
+        $this->app->instance(FicheScanCropper::class,
+            new class($calls) extends FicheScanCropper
+            {
+                public function __construct(public int &$calls) {}
+
+                public function detect(string $binary): ?array
+                {
+                    $this->calls++;
+
+                    return ['x' => 0.25, 'y' => 0.25, 'width' => 0.5, 'height' => 0.5];
+                }
+            });
+
+        $this->renderedSize();
+        $this->renderedSize();
+
+        $scan->refresh();
+        $this->assertSame(1, $calls, 'une seule analyse par pièce');
+        $this->assertEqualsWithDelta(0.5, $scan->crop_box['width'], 0.001);
+        $this->assertNotNull($scan->crop_detected_at);
+    }
+
+    public function test_a_failing_vision_api_never_blocks_a_fiche(): void
+    {
+        /*
+         * LE test de ce fichier. Le récapitulatif quotidien est la voie de
+         * transmission légale des fiches pendant l'absence de l'exploitant :
+         * une API muette, en panne ou hors quota ne doit jamais faire plus que
+         * priver d'un cadrage plus serré.
+         */
+        config(['fiche.ai_crop.enabled' => true, 'fiche.ai_crop.api_key' => 'test']);
+        $this->attachScan(1600, 1200);
+
+        $this->app->instance(FicheScanCropper::class,
+            new class extends FicheScanCropper
+            {
+                public function forScan(DocumentScan $scan, string $binary): ?array
+                {
+                    throw new \RuntimeException('API injoignable');
+                }
+            });
+
+        $this->assertSame([1200, 800], $this->renderedSize(), 'la pièce part quand même');
+    }
+
+    public function test_an_undetected_document_is_not_re_analysed_forever(): void
+    {
+        // Sans mémoriser l'échec, un document que le modèle ne sait pas situer
+        // serait resoumis à chaque rendu — un appel par fiche et par jour.
+        config(['fiche.ai_crop.enabled' => true, 'fiche.ai_crop.api_key' => 'test']);
+        $this->attachScan(1600, 1200);
+
+        $calls = 0;
+        $this->app->instance(FicheScanCropper::class,
+            new class($calls) extends FicheScanCropper
+            {
+                public function __construct(public int &$calls) {}
+
+                public function detect(string $binary): ?array
+                {
+                    $this->calls++;
+
+                    return null;
+                }
+            });
+
+        $this->renderedSize();
+        $this->renderedSize();
+
+        $this->assertSame(1, $calls);
+        $this->assertNotNull(DocumentScan::first()->crop_detected_at);
+        $this->assertNull(DocumentScan::first()->crop_box);
+    }
+
+    public function test_the_feature_is_off_until_someone_turns_it_on(): void
+    {
+        // Le chemin de transmission légale ne gagne pas une dépendance réseau
+        // par défaut : on l'active après avoir vu un rendu.
+        $this->assertFalse(config('fiche.ai_crop.enabled'));
     }
 }
