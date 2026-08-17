@@ -171,6 +171,11 @@ return [
         */
         'template_name' => env('WHATSAPP_CLOUD_TEMPLATE'),
         'template_language' => env('WHATSAPP_CLOUD_TEMPLATE_LANG', 'fr'),
+
+        // Compte WhatsApp Business propriétaire des modèles. Distinct du
+        // phone_number_id : un WABA porte plusieurs numéros, et les modèles
+        // vivent au niveau du compte. Sert à consulter l'état d'approbation.
+        'waba_id' => env('WHATSAPP_CLOUD_WABA_ID'),
     ],
 
     /*

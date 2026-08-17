@@ -649,4 +649,73 @@ class DeliveryChannelTest extends TestCase
         Http::assertSent(fn ($request) => !str_ends_with($request->url(), '/media')
             && $request['to'] === '21693116000');
     }
+
+    // ── État d'approbation des modèles ───────────────────────────────────────
+
+    private function configureWaba(): void
+    {
+        $this->configureCloud();
+        config(['whatsapp.cloud.waba_id' => '1344652027784374']);
+    }
+
+    public function test_templates_command_confirms_an_approved_template(): void
+    {
+        $this->configureWaba();
+        config(['whatsapp.cloud.template_name' => 'fiche_police', 'whatsapp.cloud.template_language' => 'fr']);
+
+        Http::fake(['graph.facebook.com/*' => Http::response(['data' => [
+            ['name' => 'fiche_police', 'language' => 'fr', 'status' => 'APPROVED', 'category' => 'UTILITY'],
+        ]], 200)]);
+
+        $this->artisan('whatsapp:cloud-templates')
+            ->expectsOutputToContain('est approuvé')
+            ->assertExitCode(0);
+    }
+
+    public function test_templates_command_names_the_language_mismatch(): void
+    {
+        /*
+         * Le cas qui coûte le plus de temps : Meta renvoie « #132001 Template
+         * name does not exist in the translation » aussi bien pour un modèle
+         * absent que pour un modèle présent dans une AUTRE langue. Sans ce
+         * diagnostic, on recrée un modèle qui existe déjà.
+         */
+        $this->configureWaba();
+        config(['whatsapp.cloud.template_name' => 'fiche_police', 'whatsapp.cloud.template_language' => 'fr']);
+
+        Http::fake(['graph.facebook.com/*' => Http::response(['data' => [
+            ['name' => 'fiche_police', 'language' => 'en_US', 'status' => 'APPROVED', 'category' => 'UTILITY'],
+        ]], 200)]);
+
+        $this->artisan('whatsapp:cloud-templates')
+            ->expectsOutputToContain('en [en_US] mais PAS en « fr »')
+            ->assertExitCode(0);
+    }
+
+    public function test_templates_command_flags_a_pending_template(): void
+    {
+        $this->configureWaba();
+        config(['whatsapp.cloud.template_name' => 'fiche_police', 'whatsapp.cloud.template_language' => 'fr']);
+
+        Http::fake(['graph.facebook.com/*' => Http::response(['data' => [
+            ['name' => 'fiche_police', 'language' => 'fr', 'status' => 'PENDING', 'category' => 'UTILITY'],
+        ]], 200)]);
+
+        $this->artisan('whatsapp:cloud-templates')
+            ->expectsOutputToContain('PENDING')
+            ->assertExitCode(0);
+    }
+
+    public function test_templates_command_relays_a_meta_error_verbatim(): void
+    {
+        $this->configureWaba();
+
+        Http::fake(['graph.facebook.com/*' => Http::response(
+            ['error' => ['message' => 'Invalid OAuth access token']], 401,
+        )]);
+
+        $this->artisan('whatsapp:cloud-templates')
+            ->expectsOutputToContain('Invalid OAuth access token')
+            ->assertExitCode(1);
+    }
 }
