@@ -4,9 +4,8 @@ namespace App\Jobs;
 
 use App\Mail\PoliceFichesExport;
 use App\Models\CheckIn;
-use App\Models\DocumentScan;
-use App\Models\Guest;
 use App\Models\Hotel;
+use App\Services\Delivery\FicheScanImage;
 use App\Services\Whatsapp\FicheFormatter;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Bus\Queueable;
@@ -17,8 +16,6 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\Storage;
-use Intervention\Image\ImageManager;
 
 /**
  * Génère le PDF des fiches de police d'un établissement sur une plage de dates
@@ -73,7 +70,7 @@ class ExportPoliceFichesJob implements ShouldQueue
             $guests = $ci->guests->sortByDesc(fn ($g) => (bool) ($g->pivot->is_primary ?? false));
             foreach ($guests as $guest) {
                 $fiche = FicheFormatter::fields($ci, $guest);
-                $fiche['photo'] = $this->photoDataUri($ci, $guest);
+                $fiche['photo'] = FicheScanImage::dataUri($ci, $guest);
                 $fiches[] = $fiche;
             }
         }
@@ -101,53 +98,6 @@ class ExportPoliceFichesJob implements ShouldQueue
         } catch (\Throwable $e) {
             Log::warning('[export-fiches] envoi email échoué ('.$this->email.') : '.$e->getMessage());
             throw $e; // laisse la file retenter
-        }
-    }
-
-    /**
-     * Photo de la pièce d'identité, en data URI prêt à poser dans le PDF.
-     *
-     * Le PDF ne portait que le texte de la fiche. Tant que WhatsApp
-     * fonctionnait, l'écart passait inaperçu ; le jour où le canal tombe —
-     * numéro restreint par Meta, 17/08/2026 — l'export devient la seule voie de
-     * transmission, et une fiche sans sa pièce jointe n'est pas la fiche que
-     * l'autorité attend.
-     *
-     * Compression plus agressive que pour WhatsApp (1100 px, JPEG 70) : DomPDF
-     * embarque l'image en base64, ce qui l'alourdit d'un tiers, et un export de
-     * 45 fiches doit rester envoyable en pièce jointe. 1100 px reste largement
-     * lisible pour une pièce d'identité, MRZ comprise.
-     *
-     * Best-effort de bout en bout : une photo illisible ou absente ne doit
-     * jamais faire échouer l'export de TOUTES les fiches.
-     */
-    private function photoDataUri(CheckIn $checkIn, Guest $guest): ?string
-    {
-        try {
-            $scan = DocumentScan::forFiche($checkIn, $guest);
-            if (!$scan) {
-                return null;
-            }
-
-            // Copie en base d'abord (le disque Railway est éphémère), disque
-            // ensuite — même ordre de préséance que le relais WhatsApp.
-            $binary = $scan->imageBytes();
-            if ($binary === null) {
-                $disk = config('filesystems.passport_scan_disk', 'local');
-                if (!$scan->file_path || !Storage::disk($disk)->exists($scan->file_path)) {
-                    return null;
-                }
-                $binary = Storage::disk($disk)->get($scan->file_path);
-            }
-
-            $image = ImageManager::gd()->read($binary);
-            $image->scaleDown(1100, 1100);
-
-            return 'data:image/jpeg;base64,'.base64_encode((string) $image->toJpeg(70));
-        } catch (\Throwable $e) {
-            Log::warning('[export-fiches] photo non embarquée pour le voyageur '.$guest->id.' : '.$e->getMessage());
-
-            return null;
         }
     }
 

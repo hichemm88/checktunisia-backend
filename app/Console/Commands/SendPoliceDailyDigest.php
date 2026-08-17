@@ -4,10 +4,9 @@ namespace App\Console\Commands;
 
 use App\Mail\PoliceDailyDigest;
 use App\Models\CheckIn;
-use App\Models\DocumentScan;
-use App\Models\Guest;
 use App\Models\Hotel;
 use App\Models\User;
+use App\Services\Delivery\FicheScanImage;
 use App\Services\Whatsapp\FicheFormatter;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Console\Command;
@@ -15,8 +14,6 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\Storage;
-use Intervention\Image\ImageManager;
 
 /**
  * Récapitulatif quotidien : un PDF des arrivées du jour, tous établissements
@@ -216,7 +213,7 @@ class SendPoliceDailyDigest extends Command
 
                 foreach ($guests as $guest) {
                     $fiche = FicheFormatter::fields($checkIn, $guest);
-                    $fiche['photo'] = $this->photoDataUri($checkIn, $guest);
+                    $fiche['photo'] = FicheScanImage::dataUri($checkIn, $guest);
                     $fiche['photo'] ? $withPhoto++ : $withoutPhoto++;
                     $fiches[] = $fiche;
                 }
@@ -240,40 +237,5 @@ class SendPoliceDailyDigest extends Command
         }
 
         return [$groups, $total, $withoutPhoto];
-    }
-
-    /**
-     * Pièce d'identité en data URI. Même résolution de scan que le relais
-     * WhatsApp et que l'export par établissement (DocumentScan::forFiche) :
-     * tous les chemins joignent nécessairement la même pièce.
-     *
-     * Best-effort : une photo illisible ne prive pas l'autorité des autres.
-     */
-    private function photoDataUri(CheckIn $checkIn, Guest $guest): ?string
-    {
-        try {
-            $scan = DocumentScan::forFiche($checkIn, $guest);
-            if (!$scan) {
-                return null;
-            }
-
-            $binary = $scan->imageBytes();
-            if ($binary === null) {
-                $disk = config('filesystems.passport_scan_disk', 'local');
-                if (!$scan->file_path || !Storage::disk($disk)->exists($scan->file_path)) {
-                    return null;
-                }
-                $binary = Storage::disk($disk)->get($scan->file_path);
-            }
-
-            $image = ImageManager::gd()->read($binary);
-            $image->scaleDown(1100, 1100);
-
-            return 'data:image/jpeg;base64,'.base64_encode((string) $image->toJpeg(70));
-        } catch (\Throwable $e) {
-            Log::warning('[police-digest] photo non embarquée pour le voyageur '.$guest->id.' : '.$e->getMessage());
-
-            return null;
-        }
     }
 }

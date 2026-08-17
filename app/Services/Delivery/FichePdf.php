@@ -2,16 +2,10 @@
 
 namespace App\Services\Delivery;
 
-use App\Models\CheckIn;
-use App\Models\DocumentScan;
-use App\Models\Guest;
 use App\Models\WhatsappSendLog;
 use App\Services\Whatsapp\FicheFormatter;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
-use Intervention\Image\ImageManager;
 
 /**
  * Rend UNE fiche de police en PDF, pièce d'identité comprise.
@@ -49,7 +43,7 @@ class FichePdf
         $checkIn->loadMissing(['hotel.address', 'room', 'guests.documents']);
 
         $fiche = FicheFormatter::fields($checkIn, $guest);
-        $fiche['photo'] = self::photoDataUri($checkIn, $guest);
+        $fiche['photo'] = FicheScanImage::dataUri($checkIn, $guest);
 
         $hotel = $checkIn->hotel;
 
@@ -78,40 +72,5 @@ class FichePdf
         $slug = preg_replace('/[^A-Za-z0-9]+/', '-', $who);
 
         return 'fiche-police-'.trim((string) $slug, '-').'.pdf';
-    }
-
-    /**
-     * Photo de la pièce, en data URI. Même résolution de scan que le relais
-     * WhatsApp et que l'export par email (DocumentScan::forFiche) : les trois
-     * chemins joignent nécessairement la même pièce.
-     *
-     * Best-effort : une photo illisible ne doit pas empêcher la fiche de partir.
-     */
-    private static function photoDataUri(CheckIn $checkIn, Guest $guest): ?string
-    {
-        try {
-            $scan = DocumentScan::forFiche($checkIn, $guest);
-            if (!$scan) {
-                return null;
-            }
-
-            $binary = $scan->imageBytes();
-            if ($binary === null) {
-                $disk = config('filesystems.passport_scan_disk', 'local');
-                if (!$scan->file_path || !Storage::disk($disk)->exists($scan->file_path)) {
-                    return null;
-                }
-                $binary = Storage::disk($disk)->get($scan->file_path);
-            }
-
-            $image = ImageManager::gd()->read($binary);
-            $image->scaleDown(1100, 1100);
-
-            return 'data:image/jpeg;base64,'.base64_encode((string) $image->toJpeg(70));
-        } catch (\Throwable $e) {
-            Log::warning('[delivery] photo non embarquée dans la fiche PDF du voyageur '.$guest->id.' : '.$e->getMessage());
-
-            return null;
-        }
     }
 }

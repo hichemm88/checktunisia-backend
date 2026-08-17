@@ -45,7 +45,11 @@
   .scan { margin-top: 8px; padding-top: 7px; border-top: 1px solid #f0eefb; }
   .scan-label { font-size: 8px; text-transform: uppercase; letter-spacing: .5px;
                 color: #9ca3af; margin-bottom: 3px; }
-  .scan img { max-width: 260px; max-height: 170px; border: 1px solid #e5e7eb; border-radius: 4px; }
+  /* Dimensions FIXES, pas des maxima. Les pièces sont déjà ramenées à un
+     cadre commun côté serveur (FicheScanImage) ; les borner ici par des
+     maxima laissait chaque photo à sa propre taille selon son format
+     d'origine, ce qui donnait un document en accordéon. */
+  .scan img { width: 300px; height: 200px; border: 1px solid #e5e7eb; border-radius: 4px; }
   /* Une pièce manquante doit se VOIR. Une fiche sans photo qui ne dit rien
      laisse croire que le voyageur n'en avait pas ; l'autorité doit pouvoir
      réclamer la pièce, donc savoir qu'elle manque. */
