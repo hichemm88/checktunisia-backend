@@ -539,4 +539,86 @@ class DeliveryChannelTest extends TestCase
         $this->assertGreaterThanOrEqual(2, $elapsed, 'les envois doivent être espacés');
         $this->assertSame(2, WhatsappSendLog::where('status', 'sent')->count());
     }
+
+    // ── Essai du canal Cloud sans basculer la production ─────────────────────
+
+    public function test_cloud_test_command_never_consumes_a_real_fiche(): void
+    {
+        /*
+         * Le point critique. Un essai qui marquerait « envoyée » une fiche
+         * encore due à l'autorité serait pire que pas d'essai du tout : elle
+         * disparaîtrait de la file sans être parvenue à personne.
+         */
+        $this->configureCloud();
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+
+        $job = $this->queueFiche();
+
+        $this->artisan('whatsapp:cloud-test', ['--to' => '21699999999'])->assertExitCode(0);
+
+        $job->refresh();
+        $this->assertSame('pending', $job->status, 'la fiche reste due');
+        $this->assertNull($job->sent_at);
+        $this->assertNull($job->message_id_whatsapp);
+        $this->assertSame(0, $job->attempts);
+        $this->assertSame(1, WhatsappSendLog::count(), 'aucune ligne parasite créée');
+    }
+
+    public function test_cloud_test_command_sends_to_the_requested_number(): void
+    {
+        // Le numéro de test Meta ne parle qu'aux destinataires déclarés :
+        // l'essai doit pouvoir viser un autre numéro que celui de production.
+        $this->configureCloud();
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+
+        $this->queueFiche();
+
+        $this->artisan('whatsapp:cloud-test', ['--to' => '+216 99 888 777'])->assertExitCode(0);
+
+        Http::assertSent(fn ($request) => !str_ends_with($request->url(), '/media')
+            && $request['to'] === '21699888777');
+    }
+
+    public function test_cloud_test_command_ignores_the_active_channel(): void
+    {
+        // Valider un canal ne doit pas exiger de lui confier la production.
+        config([
+            'whatsapp.enabled' => true,
+            'whatsapp.channel' => 'web',
+            'whatsapp.cloud.token' => 'test-token',
+            'whatsapp.cloud.phone_number_id' => '123456',
+        ]);
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+
+        $this->artisan('whatsapp:cloud-test', ['--to' => '21699888777'])->assertExitCode(0);
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'graph.facebook.com'));
+    }
+
+    public function test_cloud_test_command_reports_meta_error_verbatim(): void
+    {
+        // C'est le message de Meta qui dit quoi corriger : modèle absent,
+        // destinataire non déclaré, jeton périmé. Le masquer coûterait une nuit.
+        $this->configureCloud();
+        Http::fake([
+            'graph.facebook.com/*' => Http::response(
+                ['error' => ['message' => 'Template name does not exist in the translation']],
+                400,
+            ),
+        ]);
+
+        $this->artisan('whatsapp:cloud-test', ['--to' => '21699888777'])
+            ->expectsOutputToContain('Template name does not exist in the translation')
+            ->assertExitCode(1);
+    }
+
+    public function test_cloud_test_command_refuses_a_short_number(): void
+    {
+        $this->configureCloud();
+        Http::fake();
+
+        $this->artisan('whatsapp:cloud-test', ['--to' => '123'])->assertExitCode(1);
+
+        Http::assertNothingSent();
+    }
 }
