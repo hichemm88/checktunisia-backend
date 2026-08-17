@@ -48,6 +48,22 @@ RUN apt-get update \
 # genre de panne qu'on ne découvre que le jour où on en a besoin.
 RUN { echo "upload_max_filesize=64M"; echo "post_max_size=70M"; } > /usr/local/etc/php/conf.d/uploads.ini
 
+# Mémoire : le défaut PHP est de 128 Mo, et rien ne le relevait.
+#
+# Suffisant pour servir des requêtes, PAS pour composer un PDF de fiches de
+# police : le récapitulatif quotidien embarque une pièce d'identité par
+# voyageur, et DomPDF garde en mémoire à la fois le HTML avec toutes les images
+# en base64 et sa propre représentation interne. À une quarantaine de fiches,
+# 128 Mo sont dépassés — la commande meurt sur « Allowed memory size exhausted ».
+#
+# Le décodage d'une seule photo de téléphone y contribue déjà lourdement :
+# 4000x3000 en GD, c'est ~48 Mo.
+#
+# Ce n'est pas un réglage de confort. Pendant l'absence de l'exploitant, ce PDF
+# EST la transmission légale des fiches, et l'échec surviendrait la nuit, sur
+# une tâche planifiée que personne ne regarde.
+RUN echo "memory_limit=512M" > /usr/local/etc/php/conf.d/memory.ini
+
 # OPcache : sans lui, chaque requête recompile tout le framework.
 # validate_timestamps reste à 1 (revalidation toutes les 2 s) car cette même
 # image sert le développement via docker-compose, où le code est monté en
