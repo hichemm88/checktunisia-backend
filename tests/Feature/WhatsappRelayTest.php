@@ -500,6 +500,71 @@ class WhatsappRelayTest extends TestCase
         $this->assertTrue($fresh->inWarmup());
     }
 
+    public function test_repairing_after_a_revocation_rearms_warmup_even_on_the_same_number(): void
+    {
+        /*
+         * Le 17/08/2026 : Meta restreint le numéro 6 h, puis révoque l'appareil
+         * à la seconde où la restriction expire, 45 fiches en file. Se faire
+         * débrancher par WhatsApp est un événement de réputation — ne réarmer
+         * la montée en charge que sur CHANGEMENT de numéro laissait le cas le
+         * plus dangereux repartir à pleine cadence.
+         */
+        $state = WhatsappSessionState::current();
+        $state->update([
+            'status' => 'logged_out',
+            'phone_number' => '21693116000',
+            'paired_at' => now()->subDays(30),
+            'revoked_at' => now()->subHour(),
+        ]);
+
+        $this->withHeaders($this->workerHeaders())
+            ->postJson('/api/v1/internal/whatsapp/session', ['status' => 'ready', 'phone_number' => '21693116000'])
+            ->assertOk();
+
+        $fresh = $state->fresh();
+        $this->assertTrue($fresh->inWarmup(), 'même numéro, mais réputation à refaire');
+        $this->assertNull($fresh->revoked_at);
+    }
+
+    public function test_repairing_after_a_revocation_leaves_the_relay_paused(): void
+    {
+        // Vider un arriéré dans un canal qui vient de vous éjecter est le geste
+        // à ne pas automatiser. Il faut un humain, qui a d'abord vérifié l'état
+        // du compte sur le téléphone émetteur.
+        $state = WhatsappSessionState::current();
+        $state->update(['status' => 'logged_out', 'paused' => false, 'revoked_at' => now()->subHour()]);
+        $this->pendingJob();
+
+        $this->withHeaders($this->workerHeaders())
+            ->postJson('/api/v1/internal/whatsapp/session', ['status' => 'ready', 'phone_number' => '21693116000'])
+            ->assertOk();
+
+        $this->assertTrue($state->fresh()->paused);
+        $this->withHeaders($this->workerHeaders())
+            ->getJson('/api/v1/internal/whatsapp/next')
+            ->assertOk()
+            ->assertJsonPath('data.job', null);
+    }
+
+    public function test_an_ordinary_reconnection_does_not_pause_the_relay(): void
+    {
+        // Une coupure réseau n'est pas une révocation : la reprise reste
+        // automatique, sinon chaque hoquet réseau exigerait un clic.
+        $state = WhatsappSessionState::current();
+        $state->update(['status' => 'disconnected', 'paused' => false, 'revoked_at' => null]);
+        $job = $this->pendingJob();
+
+        $this->withHeaders($this->workerHeaders())
+            ->postJson('/api/v1/internal/whatsapp/session', ['status' => 'ready', 'phone_number' => '21693116000'])
+            ->assertOk();
+
+        $this->assertFalse($state->fresh()->paused);
+        $this->withHeaders($this->workerHeaders())
+            ->getJson('/api/v1/internal/whatsapp/next')
+            ->assertOk()
+            ->assertJsonPath('data.job.id', $job->id);
+    }
+
     public function test_circuit_breaker_pauses_the_relay_and_frees_claimed_jobs(): void
     {
         // Le worker constate les refus en série ; le backend coupe DURABLEMENT.
