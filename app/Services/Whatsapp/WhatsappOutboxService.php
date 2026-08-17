@@ -251,7 +251,18 @@ class WhatsappOutboxService
      */
     public function claimNextJob(): ?WhatsappSendLog
     {
-        if (!$this->enabled() || !WhatsappSessionState::current()->canDispatch()) {
+        $state = WhatsappSessionState::current();
+
+        if (!$this->enabled() || !$state->canDispatch()) {
+            return null;
+        }
+
+        // Plafond horaire : appliqué ICI et pas côté worker, parce qu'un worker
+        // qui redémarre repart avec un compteur vierge — le seul endroit qui
+        // sache vraiment combien de messages sont partis dans l'heure, c'est le
+        // journal. Une file de 200 fiches s'écoule donc par paliers au lieu de
+        // partir d'un bloc, ce qui est très exactement ce que Meta sanctionne.
+        if (!$this->throttle($state)['allowed']) {
             return null;
         }
 
@@ -277,6 +288,89 @@ class WhatsappOutboxService
 
             return $job->fresh();
         });
+    }
+
+    /**
+     * Cadence et plafond en vigueur, tenant compte de la montée en charge.
+     *
+     * Une seule source pour trois consommateurs : la distribution
+     * (claimNextJob), le worker (control) et l'écran d'admin (health) — sans
+     * quoi l'administrateur verrait « 14 en attente » sans jamais comprendre
+     * pourquoi rien ne part.
+     *
+     * @return array{allowed:bool, warmup:bool, sent_last_hour:int, max_per_hour:int, min_interval_seconds:int, next_slot_at:?Carbon}
+     */
+    public function throttle(?WhatsappSessionState $state = null): array
+    {
+        $state ??= WhatsappSessionState::current();
+        $warmup = $state->inWarmup();
+
+        $maxPerHour = (int) config($warmup ? 'whatsapp.warmup_max_per_hour' : 'whatsapp.max_per_hour', $warmup ? 6 : 30);
+        $minInterval = (int) config($warmup ? 'whatsapp.warmup_min_interval_seconds' : 'whatsapp.min_interval_seconds', $warmup ? 120 : 45);
+
+        $windowStart = now()->subHour();
+        $recent = WhatsappSendLog::query()
+            ->where('status', WhatsappSendLog::STATUS_SENT)
+            ->where('sent_at', '>=', $windowStart)
+            ->orderBy('sent_at');
+
+        $sentLastHour = (clone $recent)->count();
+        $allowed = $maxPerHour <= 0 || $sentLastHour < $maxPerHour;
+
+        // Fenêtre GLISSANTE : la prochaine place se libère quand le plus ancien
+        // envoi de la fenêtre en sort, pas au prochain top d'heure.
+        $nextSlotAt = null;
+        if (!$allowed) {
+            $oldest = (clone $recent)->value('sent_at');
+            $nextSlotAt = $oldest ? Carbon::parse($oldest)->addHour() : now()->addHour();
+        }
+
+        return [
+            'allowed' => $allowed,
+            'warmup' => $warmup,
+            'sent_last_hour' => $sentLastHour,
+            'max_per_hour' => $maxPerHour,
+            'min_interval_seconds' => $minInterval,
+            'next_slot_at' => $nextSlotAt,
+        ];
+    }
+
+    /**
+     * Disjoncteur : coupe le relais et alerte, après N refus d'affilée que le
+     * worker n'impute PAS à sa page.
+     *
+     * La pause est écrite en base — donc durable, contrairement à la veille
+     * interne du worker qui disparaît à son redémarrage. C'est délibéré : un
+     * blocage de compte ne se dissipe pas parce qu'un conteneur a redémarré, et
+     * reprendre les envois « au cas où » est exactement ce qui transforme une
+     * restriction temporaire en bannissement définitif. La reprise reste un
+     * geste humain (bouton « Reprendre »).
+     *
+     * @return bool false si le relais était déjà en pause (rien à faire, pas de
+     *              seconde alerte)
+     */
+    public function tripCircuitBreaker(?string $reason): bool
+    {
+        $state = WhatsappSessionState::current();
+
+        if ($state->paused) {
+            return false;
+        }
+
+        $state->forceFill(['paused' => true])->save();
+
+        // Les fiches réclamées mais jamais confirmées repartiraient au bout du
+        // verrou de 120 s ; on les rend tout de suite à la file, à leur place
+        // d'origine. Rien n'est perdu, rien ne double.
+        WhatsappSendLog::query()
+            ->where('status', WhatsappSendLog::STATUS_PENDING)
+            ->whereNotNull('claimed_at')
+            ->update(['claimed_at' => null]);
+
+        Log::warning('[whatsapp] disjoncteur déclenché — relais mis en pause : '.$reason);
+        $this->alerts->relayHalted($reason, $state);
+
+        return true;
     }
 
     /** Le worker confirme l'envoi. */

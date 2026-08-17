@@ -101,10 +101,32 @@ const PAGE_SIGNATURES = [
   /cannot read propert(?:y|ies) of undefined \(reading '(?:WWebJS|Store)'\)/i,
 ];
 
+/*
+ * Refus au niveau du COMPTE : WhatsApp restreint, limite ou bannit le numéro
+ * émetteur. La page fonctionne, la session est appairée — c'est Meta qui dit
+ * non.
+ *
+ * C'est la seule famille où réessayer NUIT. Un backoff sur une fiche est
+ * inoffensif ; un backoff sur un compte restreint est une infraction de plus à
+ * chaque tentative, et c'est le chemin qui mène d'une suspension de 6 h à un
+ * bannissement définitif. D'où une décision propre : 'halt'.
+ */
+const ACCOUNT_SIGNATURES = [
+  /\baccount\b.{0,40}\b(restricted|banned|blocked|suspended|locked)\b/i,
+  /\b(restricted|banned|blocked|suspended)\b.{0,40}\baccount\b/i,
+  /compte.{0,40}(restreint|banni|bloqué|suspendu)/i,
+  /\brate.?limit(?:ed|ing)?\b/i,
+  /too many (?:messages|requests|attempts)/i,
+  /\bspam\b/i,
+  /not.{0,20}authoriz(?:ed|é).{0,20}(?:to )?(?:send|message|envoyer)/i,
+  /\bforbidden\b.{0,30}\bsend\b/i,
+];
+
 /**
  * À quelle famille appartient cet échec d'envoi ?
  *
- * @returns {'page'|'backend'|'job'} 'page' = navigateur à recycler ;
+ * @returns {'account'|'page'|'backend'|'job'} 'account' = Meta refuse ce
+ *   numéro, il faut CESSER d'émettre ; 'page' = navigateur à recycler ;
  *   'backend' = Laravel/réseau, on temporise ; 'job' = cette fiche-là, la file
  *   Laravel s'en occupe (backoff, abandon à 24 h). Défaut délibéré : 'job'.
  */
@@ -116,6 +138,7 @@ function classifyFailure(error) {
   // Une réponse HTTP du backend est une preuve directe : l'appel réseau a
   // abouti, le navigateur n'est pas en cause. On teste cette famille d'abord.
   if (BACKEND_SIGNATURES.some((re) => re.test(haystack))) return 'backend';
+  if (ACCOUNT_SIGNATURES.some((re) => re.test(haystack))) return 'account';
   if (PAGE_SIGNATURES.some((re) => re.test(haystack))) return 'page';
 
   return 'job';
@@ -179,7 +202,9 @@ function recordRestart(dataPath, { windowMs, now = Date.now(), reason = null }) 
  *  • 'continue' — enchaîner sur la fiche suivante ;
  *  • 'backoff'  — attendre avant de reprendre (panne backend/réseau) ;
  *  • 'reload'   — recharger la page WhatsApp Web (renderer neuf) ;
- *  • 'restart'  — recycler le conteneur (Chromium neuf).
+ *  • 'restart'  — recycler le conteneur (Chromium neuf) ;
+ *  • 'halt'     — CESSER d'émettre et demander la coupure du relais au backend
+ *                 (compte restreint par Meta ; réessayer aggrave).
  *
  * Le franchissement du plafond de redémarrages ne se décide pas ici mais dans
  * `restartBudgetExhausted()` : la sonde de vivacité, le watchdog de démarrage
@@ -190,28 +215,66 @@ function createRecovery({
   maxPageFailures = 3,
   maxReloads = 2,
   maxRestarts = 4,
+  maxRefusals = 5,
   restartWindowMs = 3600000,
   clock = Date.now,
 } = {}) {
   let pageFailures = 0;
   let reloads = 0;
+  let refusals = 0;
 
   return {
-    /** Un envoi a abouti : la page répond, tout repart de zéro. */
+    /** Un envoi a abouti : la page répond, WhatsApp accepte, tout repart de zéro. */
     success() {
       pageFailures = 0;
       reloads = 0;
+      refusals = 0;
     },
 
-    /** @returns {{kind:string, decision:string, pageFailures:number}} */
-    failure(error) {
+    /** Refus consécutifs imputables à WhatsApp (diagnostic /health). */
+    refusalStreak() {
+      return refusals;
+    },
+
+    /**
+     * @param {Error} error
+     * @param {{maxRefusals?:number}} [options] seuil du disjoncteur, piloté
+     *   depuis la config Laravel (control) pour pouvoir être resserré sans
+     *   redéployer le worker.
+     * @returns {{kind:string, decision:string, pageFailures:number}}
+     */
+    failure(error, options = {}) {
       const kind = classifyFailure(error);
+      const refusalCeiling = Number(options.maxRefusals) > 0 ? Number(options.maxRefusals) : maxRefusals;
 
       if (kind === 'backend') return { kind, decision: 'backoff', pageFailures };
 
-      // Une fiche qui échoue proprement prouve au contraire que la page tourne :
-      // le backoff par fiche vit côté Laravel, le worker enchaîne.
-      if (kind === 'job') return { kind, decision: 'continue', pageFailures };
+      // Refus explicite de Meta : inutile d'attendre le seuil, on coupe.
+      if (kind === 'account') {
+        refusals += 1;
+
+        return { kind, decision: 'halt', pageFailures, refusals };
+      }
+
+      if (kind === 'job') {
+        /*
+         * Une fiche qui échoue proprement prouve que la page tourne : le
+         * backoff par fiche vit côté Laravel, le worker enchaîne.
+         *
+         * MAIS enchaîner indéfiniment était le trou béant. Quand un compte est
+         * restreint, les refus n'annoncent pas toujours leur cause — ils
+         * arrivent en 'job', fiche après fiche. Le worker les servait toutes,
+         * consciencieusement, à raison d'une infraction par tentative. Une
+         * SÉRIE de refus alors que la page répond n'est plus une histoire de
+         * fiches : c'est le canal qui est refusé. On coupe.
+         */
+        refusals += 1;
+        if (refusals >= refusalCeiling) {
+          return { kind, decision: 'halt', pageFailures, refusals };
+        }
+
+        return { kind, decision: 'continue', pageFailures, refusals };
+      }
 
       pageFailures += 1;
       if (pageFailures < maxPageFailures) {
@@ -254,6 +317,7 @@ function createRecovery({
 }
 
 module.exports = {
+  ACCOUNT_SIGNATURES,
   BACKEND_SIGNATURES,
   PAGE_SIGNATURES,
   RESTART_LEDGER_FILE,

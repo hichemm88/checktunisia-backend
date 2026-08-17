@@ -3,10 +3,10 @@
 use App\Http\Controllers\Admin\AiCostController;
 use App\Http\Controllers\Admin\AiPricingController;
 use App\Http\Controllers\Admin\AuditLogController;
-use App\Http\Controllers\Admin\HealthController;
 use App\Http\Controllers\Admin\AuthorityAdminController;
-use App\Http\Controllers\Admin\EmailTemplateAdminController;
 use App\Http\Controllers\Admin\CouponController;
+use App\Http\Controllers\Admin\EmailTemplateAdminController;
+use App\Http\Controllers\Admin\HealthController;
 use App\Http\Controllers\Admin\HotelAdminController;
 use App\Http\Controllers\Admin\KpiController;
 use App\Http\Controllers\Admin\MediaAdminController;
@@ -16,6 +16,7 @@ use App\Http\Controllers\Admin\PageAdminController;
 use App\Http\Controllers\Admin\PlanAdminController;
 use App\Http\Controllers\Admin\PlatformSettingController;
 use App\Http\Controllers\Admin\PlatformUserAdminController;
+use App\Http\Controllers\Admin\QuotaAdminController;
 use App\Http\Controllers\Admin\SubscriptionAdminController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\PasskeyAuthController;
@@ -31,8 +32,10 @@ use App\Http\Controllers\Hotel\ActivityLogController;
 use App\Http\Controllers\Hotel\CheckInController;
 use App\Http\Controllers\Hotel\DashboardController;
 use App\Http\Controllers\Hotel\GuestController;
+use App\Http\Controllers\Hotel\HotelExportController;
 use App\Http\Controllers\Hotel\HotelProfileController;
 use App\Http\Controllers\Hotel\HotelUserController;
+use App\Http\Controllers\Hotel\HotelWhatsappRecipientController;
 use App\Http\Controllers\Hotel\MyPropertiesController;
 use App\Http\Controllers\Hotel\OnboardingController;
 use App\Http\Controllers\Hotel\OrganizationController;
@@ -43,9 +46,9 @@ use App\Http\Controllers\Hotel\ScanEventController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Hotel\WatchlistHitController;
 use App\Http\Controllers\Internal\AiUsageIngestController;
-use App\Http\Controllers\Payment\KonnectWebhookController;
 use App\Http\Controllers\Notifications\DeviceController;
 use App\Http\Controllers\Notifications\NotificationController;
+use App\Http\Controllers\Payment\KonnectWebhookController;
 use App\Http\Controllers\Public\PublicCmsController;
 use App\Http\Controllers\Public\PublicPlatformController;
 use App\Http\Controllers\Public\PublicRegistrationController;
@@ -119,6 +122,10 @@ Route::prefix('internal/whatsapp')
         Route::get('scan/{scanId}', [WhatsappWorkerController::class, 'scan']);
         Route::post('jobs/{id}/result', [WhatsappWorkerController::class, 'result']);
         Route::post('session', [WhatsappWorkerController::class, 'session']);
+
+        // Disjoncteur : le worker demande la coupure du relais quand WhatsApp
+        // refuse ses envois en série alors que sa page fonctionne.
+        Route::post('halt', [WhatsappWorkerController::class, 'halt']);
 
         // Coffre de session : le worker dépose une copie chiffrée de son
         // appairage et la réclame au démarrage si son volume est vide. Sans
@@ -288,11 +295,11 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::middleware('role:hotel_admin')->group(function () {
 
                 // Envoi direct des fiches : voir/cocher les agents destinataires (Phase 2).
-                Route::get('whatsapp-recipients', [\App\Http\Controllers\Hotel\HotelWhatsappRecipientController::class, 'index']);
-                Route::put('whatsapp-recipients', [\App\Http\Controllers\Hotel\HotelWhatsappRecipientController::class, 'sync']);
+                Route::get('whatsapp-recipients', [HotelWhatsappRecipientController::class, 'index']);
+                Route::put('whatsapp-recipients', [HotelWhatsappRecipientController::class, 'sync']);
 
                 // Export des fiches de police (PDF par email) sur une plage de dates.
-                Route::post('exports/police-fiches', [\App\Http\Controllers\Hotel\HotelExportController::class, 'policeFiches']);
+                Route::post('exports/police-fiches', [HotelExportController::class, 'policeFiches']);
 
                 // ── Owner only (matrice role_org) : modification établissement
                 //    et gestion des utilisateurs ─────────────────────────────
@@ -563,9 +570,9 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             // Grille V2 — pilotage des quotas de check-ins (outil d'upsell) :
             // comptes à ≥80 % / en dépassement ce mois-ci, dépassements
             // clôturés + export CSV.
-            Route::get('quotas', [\App\Http\Controllers\Admin\QuotaAdminController::class, 'index']);
-            Route::get('quotas/overages', [\App\Http\Controllers\Admin\QuotaAdminController::class, 'overages']);
-            Route::get('quotas/export', [\App\Http\Controllers\Admin\QuotaAdminController::class, 'export']);
+            Route::get('quotas', [QuotaAdminController::class, 'index']);
+            Route::get('quotas/overages', [QuotaAdminController::class, 'overages']);
+            Route::get('quotas/export', [QuotaAdminController::class, 'export']);
 
             // Codes promo (remise sur facture)
             Route::get('coupons', [CouponController::class, 'index']);

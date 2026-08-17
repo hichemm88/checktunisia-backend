@@ -33,6 +33,8 @@ class WhatsappAdminController extends Controller
             ->groupBy('status')
             ->pluck('c', 'status');
 
+        $throttle = $this->outbox->throttle($state);
+
         return response()->json(['data' => [
             'enabled' => $this->outbox->enabled(),
             'session' => $state->status,
@@ -40,6 +42,18 @@ class WhatsappAdminController extends Controller
             'paused' => $state->paused,
             'last_ready_at' => $state->last_ready_at,
             'heartbeat_at' => $state->heartbeat_at,
+            // Cadence en vigueur. Sans ça, une file bridée par le plafond
+            // horaire est indiscernable d'une file en panne : « 14 en attente »
+            // et rien qui part, sans la moindre explication à l'écran.
+            'throttle' => [
+                'sending' => $throttle['allowed'],
+                'warmup' => $throttle['warmup'],
+                'sent_last_hour' => $throttle['sent_last_hour'],
+                'max_per_hour' => $throttle['max_per_hour'],
+                'min_interval_seconds' => $throttle['min_interval_seconds'],
+                'next_slot_at' => $throttle['next_slot_at'],
+                'paired_at' => $state->paired_at,
+            ],
             'queue' => [
                 'pending' => (int) ($counts[WhatsappSendLog::STATUS_PENDING] ?? 0),
                 'sent' => (int) ($counts[WhatsappSendLog::STATUS_SENT] ?? 0),

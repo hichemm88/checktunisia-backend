@@ -404,4 +404,166 @@ class WhatsappRelayTest extends TestCase
         $this->assertSame('sent', $sent->fresh()->status);
         $this->assertSame('pending', $readyToGo->fresh()->status);
     }
+
+    // ── Garde-fous anti-restriction Meta ─────────────────────────────────────
+
+    public function test_hourly_cap_holds_the_queue_instead_of_flooding(): void
+    {
+        // Le 17/08/2026, Meta a restreint le numéro émetteur 6 h pour « envoi
+        // groupé ». Un arriéré ne doit plus jamais partir d'un bloc.
+        config(['whatsapp.max_per_hour' => 3]);
+        WhatsappSessionState::current()->update(['status' => 'ready']);
+
+        for ($i = 0; $i < 3; $i++) {
+            $this->pendingJob(['status' => 'sent', 'sent_at' => now()->subMinutes(10 + $i)]);
+        }
+        $this->pendingJob();
+
+        $this->withHeaders($this->workerHeaders())
+            ->getJson('/api/v1/internal/whatsapp/next')
+            ->assertOk()
+            ->assertJsonPath('data.job', null);
+    }
+
+    public function test_hourly_cap_is_a_sliding_window_not_a_clock_hour(): void
+    {
+        // Un envoi sorti de la fenêtre libère une place aussitôt : sinon la file
+        // repartirait par à-coups au top de chaque heure.
+        config(['whatsapp.max_per_hour' => 2]);
+        WhatsappSessionState::current()->update(['status' => 'ready']);
+
+        $this->pendingJob(['status' => 'sent', 'sent_at' => now()->subMinutes(90)]);
+        $this->pendingJob(['status' => 'sent', 'sent_at' => now()->subMinutes(5)]);
+        $job = $this->pendingJob();
+
+        $this->withHeaders($this->workerHeaders())
+            ->getJson('/api/v1/internal/whatsapp/next')
+            ->assertOk()
+            ->assertJsonPath('data.job.id', $job->id);
+    }
+
+    public function test_freshly_paired_number_sends_slower(): void
+    {
+        // Un numéro neuf qui se met aussitôt à émettre est le cas d'école du
+        // compte jetable — exactement le profil qui s'est fait restreindre.
+        config([
+            'whatsapp.warmup_hours' => 24,
+            'whatsapp.warmup_min_interval_seconds' => 120,
+            'whatsapp.min_interval_seconds' => 45,
+        ]);
+        WhatsappSessionState::current()->update(['status' => 'ready', 'paired_at' => now()->subHour()]);
+
+        $this->withHeaders($this->workerHeaders())
+            ->getJson('/api/v1/internal/whatsapp/control')
+            ->assertOk()
+            ->assertJsonPath('data.min_interval_seconds', 120);
+
+        // Fenêtre écoulée : le numéro est rodé, la cadence normale revient.
+        WhatsappSessionState::current()->update(['paired_at' => now()->subHours(48)]);
+
+        $this->withHeaders($this->workerHeaders())
+            ->getJson('/api/v1/internal/whatsapp/control')
+            ->assertOk()
+            ->assertJsonPath('data.min_interval_seconds', 45);
+    }
+
+    public function test_existing_installation_is_not_throttled_retroactively(): void
+    {
+        // `paired_at` nul = numéro antérieur à cette mécanique, donc déjà rodé.
+        config(['whatsapp.min_interval_seconds' => 45, 'whatsapp.warmup_min_interval_seconds' => 120]);
+        WhatsappSessionState::current()->update(['status' => 'ready', 'paired_at' => null]);
+
+        $this->withHeaders($this->workerHeaders())
+            ->getJson('/api/v1/internal/whatsapp/control')
+            ->assertOk()
+            ->assertJsonPath('data.min_interval_seconds', 45);
+    }
+
+    public function test_changing_the_sender_number_rearms_the_warmup(): void
+    {
+        $state = WhatsappSessionState::current();
+        $state->update(['status' => 'ready', 'phone_number' => '21611111111', 'paired_at' => now()->subDays(30)]);
+
+        // Reconnexion du MÊME numéro : rien ne repart de zéro.
+        $this->withHeaders($this->workerHeaders())
+            ->postJson('/api/v1/internal/whatsapp/session', ['status' => 'ready', 'phone_number' => '21611111111'])
+            ->assertOk();
+        $this->assertTrue($state->fresh()->paired_at->lt(now()->subDays(29)), 'une reconnexion ne rebride pas');
+
+        // Autre numéro : compte neuf pour Meta, montée en charge réarmée.
+        $this->withHeaders($this->workerHeaders())
+            ->postJson('/api/v1/internal/whatsapp/session', ['status' => 'ready', 'phone_number' => '+216 93 116 000'])
+            ->assertOk();
+
+        $fresh = $state->fresh();
+        $this->assertSame('21693116000', $fresh->phone_number, 'le numéro est normalisé en chiffres');
+        $this->assertTrue($fresh->inWarmup());
+    }
+
+    public function test_circuit_breaker_pauses_the_relay_and_frees_claimed_jobs(): void
+    {
+        // Le worker constate les refus en série ; le backend coupe DURABLEMENT.
+        // Sa veille à lui vit en mémoire et ne survit pas au redémarrage d'un
+        // conteneur — une restriction de compte, si.
+        $state = WhatsappSessionState::current();
+        $state->update(['status' => 'ready', 'paused' => false]);
+        $claimed = $this->pendingJob(['claimed_at' => now()]);
+
+        $this->withHeaders($this->workerHeaders())
+            ->postJson('/api/v1/internal/whatsapp/halt', ['reason' => '5 envois refusés d\'affilée'])
+            ->assertOk()
+            ->assertJsonPath('data.tripped', true);
+
+        $this->assertTrue($state->fresh()->paused);
+        $this->assertNull($claimed->fresh()->claimed_at, 'la fiche réclamée retourne en file, à sa place');
+
+        // Relais coupé : plus rien ne sort, même session prête.
+        $this->withHeaders($this->workerHeaders())
+            ->getJson('/api/v1/internal/whatsapp/next')
+            ->assertOk()
+            ->assertJsonPath('data.job', null);
+    }
+
+    public function test_circuit_breaker_does_not_realert_when_already_paused(): void
+    {
+        WhatsappSessionState::current()->update(['status' => 'ready', 'paused' => true]);
+
+        $this->withHeaders($this->workerHeaders())
+            ->postJson('/api/v1/internal/whatsapp/halt', ['reason' => 'refus en série'])
+            ->assertOk()
+            ->assertJsonPath('data.tripped', false);
+    }
+
+    public function test_admin_resume_lifts_the_circuit_breaker(): void
+    {
+        // La reprise reste un geste humain : rien ne rouvre le canal tout seul.
+        WhatsappSessionState::current()->update(['status' => 'ready', 'paused' => true]);
+        $job = $this->pendingJob();
+
+        $this->actingAs($this->platformAdmin)
+            ->postJson('/api/v1/admin/whatsapp/resume')
+            ->assertOk();
+
+        $this->withHeaders($this->workerHeaders())
+            ->getJson('/api/v1/internal/whatsapp/next')
+            ->assertOk()
+            ->assertJsonPath('data.job.id', $job->id);
+    }
+
+    public function test_health_explains_why_a_throttled_queue_is_not_moving(): void
+    {
+        // Sans ça, « en attente » sous plafond est indiscernable d'une panne.
+        config(['whatsapp.max_per_hour' => 2]);
+        WhatsappSessionState::current()->update(['status' => 'ready']);
+        $this->pendingJob(['status' => 'sent', 'sent_at' => now()->subMinutes(30)]);
+        $this->pendingJob(['status' => 'sent', 'sent_at' => now()->subMinutes(20)]);
+
+        $this->actingAs($this->platformAdmin)
+            ->getJson('/api/v1/admin/whatsapp/health')
+            ->assertOk()
+            ->assertJsonPath('data.throttle.sending', false)
+            ->assertJsonPath('data.throttle.sent_last_hour', 2)
+            ->assertJsonPath('data.throttle.max_per_hour', 2)
+            ->assertJsonPath('data.throttle.warmup', false);
+    }
 }
