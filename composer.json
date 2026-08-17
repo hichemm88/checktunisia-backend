@@ -5,6 +5,7 @@
     "license": "proprietary",
     "require": {
         "php": "^8.3",
+        "anthropic-ai/sdk": "^0.42.0",
         "barryvdh/laravel-dompdf": "^3.1",
         "intervention/image": "^3.9",
         "laravel/framework": "^12.0",

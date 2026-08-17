@@ -24,6 +24,9 @@ class DocumentScan extends Model
         // Copie compressée en base (base64) — le disque Railway est éphémère,
         // les fichiers de scans disparaissent à chaque redéploiement.
         'image_data',
+        // Cadre du document dans la photo (fractions 0–1), détecté une fois
+        // puis mémorisé — la même pièce est rendue par trois chemins.
+        'crop_box', 'crop_detected_at',
     ];
 
     protected $hidden = ['file_path', 'file_hash', 'image_data'];
@@ -79,6 +82,8 @@ class DocumentScan extends Model
     {
         return [
             'ocr_raw_result' => 'array',
+            'crop_box' => 'array',
+            'crop_detected_at' => 'datetime',
             'ocr_confidence' => 'float',
             'ocr_processed_at' => 'datetime',
         ];

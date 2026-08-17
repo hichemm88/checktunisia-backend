@@ -62,6 +62,11 @@ class FicheScanImage
             // parfaitement lisible à l'écran arrive couchée dans le PDF.
             $image->orient();
 
+            // Détourage du décor, quand un modèle de vision a su situer la
+            // pièce. Appliqué APRÈS le redressement : le rectangle décrit
+            // l'image telle qu'on la voit, pas telle qu'elle est stockée.
+            self::cropToDocument($image, $scan);
+
             $width = (int) config('fiche.photo_width', 1200);
             $height = (int) config('fiche.photo_height', 800);
 
@@ -75,6 +80,38 @@ class FicheScanImage
             Log::warning('[fiche] pièce non embarquée pour le voyageur '.$guest->id.' : '.$e->getMessage());
 
             return null;
+        }
+    }
+
+    /**
+     * Réduit l'image au document, si un cadre a pu être établi.
+     *
+     * Tout échec est absorbé : sans cadre, l'image continue vers le cadrage
+     * géométrique, qui ne perd rien. Le détourage est un confort de lecture, pas
+     * une condition de transmission — et il ne doit jamais devenir un motif de
+     * fiche manquante.
+     */
+    private static function cropToDocument($image, DocumentScan $scan): void
+    {
+        try {
+            $box = app(FicheScanCropper::class)->forScan($scan, (string) $image->toJpeg(90));
+
+            if (!$box) {
+                return;
+            }
+
+            $w = max(1, (int) round($image->width() * $box['width']));
+            $h = max(1, (int) round($image->height() * $box['height']));
+
+            $image->crop(
+                $w,
+                $h,
+                (int) round($image->width() * $box['x']),
+                (int) round($image->height() * $box['y']),
+                position: 'top-left',
+            );
+        } catch (\Throwable $e) {
+            Log::warning('[fiche] détourage ignoré pour le scan '.$scan->id.' : '.$e->getMessage());
         }
     }
 
