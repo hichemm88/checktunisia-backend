@@ -42,6 +42,7 @@ class WhatsappSessionState extends Model
 
     protected $fillable = [
         'key', 'status', 'reason', 'paused', 'last_ready_at', 'heartbeat_at', 'revoked_at',
+        'resume_requested_at',
     ];
 
     protected function casts(): array
@@ -51,6 +52,7 @@ class WhatsappSessionState extends Model
             'last_ready_at' => 'datetime',
             'heartbeat_at' => 'datetime',
             'revoked_at' => 'datetime',
+            'resume_requested_at' => 'datetime',
         ];
     }
 
@@ -77,6 +79,6 @@ class WhatsappSessionState extends Model
     /** La file peut-elle avancer ? Session prête et non mise en pause. */
     public function canDispatch(): bool
     {
-        return $this->isReady() && ! $this->paused;
+        return $this->isReady() && !$this->paused;
     }
 }

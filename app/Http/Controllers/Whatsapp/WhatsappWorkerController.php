@@ -74,7 +74,7 @@ class WhatsappWorkerController extends Controller
      */
     public function sessionArchive(): StreamedResponse|JsonResponse
     {
-        if (! $this->vault->isConfigured()) {
+        if (!$this->vault->isConfigured()) {
             return response()->json([
                 'data' => null,
                 'errors' => [['code' => 'VAULT_NOT_CONFIGURED', 'message' => 'Session vault not configured.', 'field' => null]],
@@ -104,7 +104,7 @@ class WhatsappWorkerController extends Controller
             $handle = fopen($path, 'rb');
 
             try {
-                while (! feof($handle)) {
+                while (!feof($handle)) {
                     echo fread($handle, 1048576);
                 }
             } finally {
@@ -156,7 +156,7 @@ class WhatsappWorkerController extends Controller
     {
         $job = $this->outbox->claimNextJob();
 
-        if (! $job) {
+        if (!$job) {
             return response()->json(['data' => ['job' => null]]);
         }
 
@@ -199,7 +199,7 @@ class WhatsappWorkerController extends Controller
         $mime = 'image/jpeg';
 
         if ($binary === null) {
-            if (! $scan || ! Storage::disk($disk)->exists($scan->file_path)) {
+            if (!$scan || !Storage::disk($disk)->exists($scan->file_path)) {
                 return response()->json([
                     'data' => null,
                     'errors' => [['code' => 'RESOURCE_NOT_FOUND', 'message' => 'Scan not found.', 'field' => null]],
@@ -238,7 +238,7 @@ class WhatsappWorkerController extends Controller
         ]);
 
         $job = WhatsappSendLog::find($id);
-        if (! $job) {
+        if (!$job) {
             return response()->json([
                 'data' => null,
                 'errors' => [['code' => 'RESOURCE_NOT_FOUND', 'message' => 'Job not found.', 'field' => null]],
@@ -276,7 +276,7 @@ class WhatsappWorkerController extends Controller
         $stickyLogout = $previous === WhatsappSessionState::STATUS_LOGGED_OUT
             && $data['status'] === WhatsappSessionState::STATUS_INITIALIZING;
 
-        if (! $stickyLogout) {
+        if (!$stickyLogout) {
             $state->status = $data['status'];
             $state->reason = $data['reason'] ?? null;
         }
@@ -288,7 +288,7 @@ class WhatsappWorkerController extends Controller
             $state->revoked_at = null; // ré-appairage réussi : la révocation est levée
         }
 
-        if ($data['status'] === WhatsappSessionState::STATUS_LOGGED_OUT && ! $state->revoked_at) {
+        if ($data['status'] === WhatsappSessionState::STATUS_LOGGED_OUT && !$state->revoked_at) {
             $state->revoked_at = now();
         }
 
@@ -330,6 +330,9 @@ class WhatsappWorkerController extends Controller
             // redéploiement) laissait sinon le backend en « initializing » pour
             // toujours → canDispatch() false → file gelée en silence.
             'session_status' => $state->status,
+            // Dernière reprise demandée par un admin : le worker lève sa veille
+            // technique interne (30 min) si elle est postérieure à son début.
+            'resume_requested_at' => $state->resume_requested_at?->toIso8601String(),
         ]]);
     }
 }

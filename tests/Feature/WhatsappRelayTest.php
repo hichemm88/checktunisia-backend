@@ -372,4 +372,36 @@ class WhatsappRelayTest extends TestCase
         $this->assertSame('pending', $failed2->fresh()->status);
         $this->assertSame('sent', $sent->fresh()->status);
     }
+
+    public function test_admin_resend_all_unblocks_jobs_stuck_behind_backoff(): void
+    {
+        // Cas réel : après une panne réparée (session ré-appairée), les fiches
+        // restaient « en attente » avec une prochaine tentative à +4 h. Le bouton
+        // ne visait que les `failed` et la ligne « en attente » n'offre pas de
+        // « Renvoyer » : plus rien dans l'admin ne pouvait les débloquer.
+        $backoff = $this->pendingJob(['attempts' => 5, 'next_attempt_at' => now()->addHours(4)]);
+        $failed = $this->pendingJob(['status' => 'failed', 'attempts' => 10]);
+        $readyToGo = $this->pendingJob(['next_attempt_at' => now()->subMinute()]);
+        $sent = $this->pendingJob(['status' => 'sent']);
+
+        $this->actingAs($this->platformAdmin)
+            ->getJson('/api/v1/admin/whatsapp/health')
+            ->assertOk()
+            ->assertJsonPath('data.queue.stuck', 2); // la repoussée + l'échouée
+
+        $this->actingAs($this->platformAdmin)
+            ->postJson('/api/v1/admin/whatsapp/logs/resend-all')
+            ->assertOk()
+            ->assertJsonPath('data.requeued', 2);
+
+        $unblocked = $backoff->fresh();
+        $this->assertSame('pending', $unblocked->status);
+        $this->assertTrue($unblocked->next_attempt_at->lessThanOrEqualTo(now()), 'la fiche doit être immédiatement dispatchable');
+        $this->assertSame(0, $unblocked->attempts);
+        $this->assertSame('pending', $failed->fresh()->status);
+
+        // Ce qui n'était pas bloqué reste tel quel.
+        $this->assertSame('sent', $sent->fresh()->status);
+        $this->assertSame('pending', $readyToGo->fresh()->status);
+    }
 }

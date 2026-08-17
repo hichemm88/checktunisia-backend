@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Whatsapp;
 
 use App\Http\Controllers\Controller;
+use App\Models\AuthorityUserProfile;
 use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
 use App\Services\Whatsapp\WhatsappOutboxService;
@@ -44,6 +45,10 @@ class WhatsappAdminController extends Controller
                 'sent' => (int) ($counts[WhatsappSendLog::STATUS_SENT] ?? 0),
                 'failed' => (int) ($counts[WhatsappSendLog::STATUS_FAILED] ?? 0),
                 'cancelled' => (int) ($counts[WhatsappSendLog::STATUS_CANCELLED] ?? 0),
+                // Fiches que « Renvoyer tout » débloquerait : échouées + en
+                // attente d'un backoff (jusqu'à 4 h). Sans ce compteur, le bouton
+                // restait caché alors que la file était figée.
+                'stuck' => $this->outbox->stuckCount(),
             ],
         ]]);
     }
@@ -70,7 +75,7 @@ class WhatsappAdminController extends Controller
 
         // Résolution destinataire (JID → nom d'agent) : la plupart des envois
         // vont désormais à un agent précis, l'admin doit voir lequel.
-        $profilesByNumber = \App\Models\AuthorityUserProfile::whereNotNull('whatsapp_number')
+        $profilesByNumber = AuthorityUserProfile::whereNotNull('whatsapp_number')
             ->with(['user:id,first_name,last_name', 'organization:id,name'])
             ->get()
             ->keyBy(fn ($p) => preg_replace('/\D+/', '', (string) $p->whatsapp_number));
@@ -136,7 +141,7 @@ class WhatsappAdminController extends Controller
     {
         $data = $request->validate(['property_name' => 'nullable|string|max:120']);
 
-        if (! $this->outbox->enabled()) {
+        if (!$this->outbox->enabled()) {
             return response()->json([
                 'data' => null,
                 'errors' => [['code' => 'WHATSAPP_DISABLED', 'message' => 'Le relais WhatsApp est désactivé (WHATSAPP_POLICE_ENABLED=false ou destinataire absent).', 'field' => null]],
@@ -161,7 +166,12 @@ class WhatsappAdminController extends Controller
     public function resume(): JsonResponse
     {
         $state = WhatsappSessionState::current();
-        $state->forceFill(['paused' => false])->save();
+        // `paused` ne couvrait que la pause ADMIN. Le worker a sa propre veille
+        // (30 min après échecs répétés), interne à son processus : « Reprendre »
+        // ne la levait pas, et rien d'autre ne le pouvait — il fallait attendre.
+        // L'horodatage est relayé par control() ; le worker en déduit qu'une
+        // reprise a été demandée après le début de sa veille, et la lève.
+        $state->forceFill(['paused' => false, 'resume_requested_at' => now()])->save();
 
         return response()->json(['data' => ['paused' => false]]);
     }
