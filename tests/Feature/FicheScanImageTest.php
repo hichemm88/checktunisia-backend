@@ -268,4 +268,101 @@ class FicheScanImageTest extends TestCase
         // par défaut : on l'active après avoir vu un rendu.
         $this->assertFalse(config('fiche.ai_crop.enabled'));
     }
+
+    public function test_a_detoured_document_fills_the_frame(): void
+    {
+        /*
+         * Le rectangle détecté est élargi d'une marge PRÉCISÉMENT pour pouvoir
+         * être rogné sans toucher au document. Compléter de blanc par-dessus
+         * laisserait la pièce flotter entre deux bandes vides — exactement le
+         * rendu que le détourage devait corriger.
+         *
+         * Vérifié par le contenu : après détourage d'une source dont le bord
+         * est rouge, le cadre final ne doit plus montrer que du document.
+         */
+        config([
+            'fiche.ai_crop.enabled' => true,
+            'fiche.ai_crop.api_key' => 'test',
+            'fiche.ai_crop.margin' => 0.06,
+        ]);
+
+        DocumentScan::query()->delete();
+        // Fond rouge, « document » gris centré au rapport d'une pièce (1,42:1).
+        $source = ImageManager::gd()->create(2000, 2000)->fill('ff0000');
+        $source->drawRectangle(300, 700, function ($r) {
+            $r->size(1420, 1000);
+            $r->background('cccccc');
+        });
+        $jpeg = (string) $source->toJpeg(95);
+
+        DocumentScan::create([
+            'check_in_id' => $this->checkIn->id,
+            'guest_id' => $this->checkIn->guests()->first()->id,
+            'file_path' => 'scans/absent.jpg',
+            'file_hash' => hash('sha256', $jpeg),
+            'mime_type' => 'image/jpeg',
+            'file_size_bytes' => strlen($jpeg),
+            'image_data' => base64_encode($jpeg),
+            'ocr_status' => 'done',
+            'uploaded_by' => $this->author->id,
+        ]);
+
+        $this->app->instance(FicheScanCropper::class,
+            new class extends FicheScanCropper
+            {
+                public function detect(string $binary): ?array
+                {
+                    // Le document occupe x 0,15–0,86 et y 0,35–0,85.
+                    return self::validate([
+                        'found' => true, 'x' => 0.15, 'y' => 0.35, 'width' => 0.71, 'height' => 0.50,
+                    ]);
+                }
+            });
+
+        $this->assertSame([1200, 800], $this->renderedSize(), 'le cadre reste uniforme');
+
+        // Aucune bande blanche : le document remplit bien le cadre.
+        $uri = FicheScanImage::dataUri($this->checkIn, $this->checkIn->guests()->first());
+        $image = ImageManager::gd()->read(base64_decode(substr($uri, strlen('data:image/jpeg;base64,'))));
+
+        $white = 0;
+        for ($x = 0; $x < $image->width(); $x += 10) {
+            $c = $image->pickColor($x, 8)->toArray();
+            if ($c[0] > 245 && $c[1] > 245 && $c[2] > 245) {
+                $white++;
+            }
+        }
+
+        $this->assertLessThan(10, $white, 'le cadre ne doit pas être complété de blanc après détourage');
+    }
+
+    public function test_an_oddly_shaped_detection_is_padded_rather_than_cut(): void
+    {
+        // Un rectangle dont la forme s'écarte trop du cadre ne peut pas être
+        // rempli sans mordre au-delà de la marge : mieux vaut du blanc qu'une
+        // pièce coupée.
+        config([
+            'fiche.ai_crop.enabled' => true,
+            'fiche.ai_crop.api_key' => 'test',
+            'fiche.ai_crop.margin' => 0.06,
+        ]);
+        $this->attachScan(2000, 2000);
+
+        $this->app->instance(FicheScanCropper::class,
+            new class extends FicheScanCropper
+            {
+                public function detect(string $binary): ?array
+                {
+                    // Presque carré : « cover » vers 3:2 sacrifierait un tiers.
+                    return ['x' => 0.1, 'y' => 0.1, 'width' => 0.8, 'height' => 0.8];
+                }
+            });
+
+        $uri = FicheScanImage::dataUri($this->checkIn, $this->checkIn->guests()->first());
+        $image = ImageManager::gd()->read(base64_decode(substr($uri, strlen('data:image/jpeg;base64,'))));
+
+        $c = $image->pickColor(4, 400)->toArray();
+        $this->assertGreaterThan(245, $c[0], 'bande blanche attendue sur le côté');
+        $this->assertSame([1200, 800], [$image->width(), $image->height()]);
+    }
 }
