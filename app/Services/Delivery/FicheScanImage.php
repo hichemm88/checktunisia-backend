@@ -65,12 +65,12 @@ class FicheScanImage
             // Détourage du décor, quand un modèle de vision a su situer la
             // pièce. Appliqué APRÈS le redressement : le rectangle décrit
             // l'image telle qu'on la voit, pas telle qu'elle est stockée.
-            self::cropToDocument($image, $scan);
+            $detoured = self::cropToDocument($image, $scan);
 
             $width = (int) config('fiche.photo_width', 1200);
             $height = (int) config('fiche.photo_height', 800);
 
-            config('fiche.photo_fit', 'pad') === 'cover'
+            self::fitToFrame($image, $width, $height, $detoured)
                 ? $image->cover($width, $height)
                 : $image->pad($width, $height, 'ffffff');
 
@@ -84,20 +84,60 @@ class FicheScanImage
     }
 
     /**
+     * Remplir le cadre, ou le compléter de blanc ?
+     *
+     * Sans détourage, jamais remplir : rogner une pièce d'identité peut emporter
+     * un bord ou une bande MRZ, et rien dans le PDF ne signalerait le manque.
+     *
+     * Après détourage, c'est l'inverse qui serait absurde. Le rectangle détecté
+     * a été élargi d'une marge PRÉCISÉMENT pour pouvoir être rogné sans toucher
+     * au document ; le compléter de blanc par-dessus laisserait la pièce
+     * flotter au milieu de bandes vides — le rendu que ce détourage était censé
+     * corriger.
+     *
+     * On ne remplit donc que si le rognage nécessaire tient DANS cette marge.
+     * Un rectangle de forme inattendue — le modèle s'est trompé de sujet, ou la
+     * pièce est photographiée de biais — retombe sur le blanc plutôt que de se
+     * faire couper.
+     */
+    private static function fitToFrame($image, int $width, int $height, bool $detoured): bool
+    {
+        if (!$detoured) {
+            return config('fiche.photo_fit', 'pad') === 'cover';
+        }
+
+        $source = $image->width() / max(1, $image->height());
+        $frame = $width / max(1, $height);
+
+        // Part de l'image que « cover » sacrifierait, sur l'axe le plus long.
+        $sacrifice = $source > $frame
+            ? 1 - ($frame / $source)
+            : 1 - ($source / $frame);
+
+        // Part que la marge a ajoutée sur un axe (moitié de chaque côté).
+        $margin = (float) config('fiche.ai_crop.margin', 0.06);
+        $available = (2 * $margin) / (1 + 2 * $margin);
+
+        return $sacrifice <= $available;
+    }
+
+    /**
      * Réduit l'image au document, si un cadre a pu être établi.
      *
      * Tout échec est absorbé : sans cadre, l'image continue vers le cadrage
      * géométrique, qui ne perd rien. Le détourage est un confort de lecture, pas
      * une condition de transmission — et il ne doit jamais devenir un motif de
      * fiche manquante.
+     *
+     * @return bool vrai si l'image a réellement été réduite au document
      */
-    private static function cropToDocument($image, DocumentScan $scan): void
+    private static function cropToDocument($image, DocumentScan $scan): bool
     {
         try {
             $box = app(FicheScanCropper::class)->forScan($scan, (string) $image->toJpeg(90));
 
             if (!$box) {
-                return;
+                return false;
             }
 
             $w = max(1, (int) round($image->width() * $box['width']));
@@ -110,8 +150,12 @@ class FicheScanImage
                 (int) round($image->height() * $box['y']),
                 position: 'top-left',
             );
+
+            return true;
         } catch (\Throwable $e) {
             Log::warning('[fiche] détourage ignoré pour le scan '.$scan->id.' : '.$e->getMessage());
+
+            return false;
         }
     }
 
