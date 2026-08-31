@@ -36,9 +36,10 @@ class FicheTemplate
     /**
      * Variables de la fiche d'un voyageur.
      *
+     * @param  string  $ficheToken  jeton public de la ligne d'envoi (suffixe du bouton)
      * @return array{header: array<int,string>, body: array<int,string>, button: array<int,string>}
      */
-    public static function params(CheckIn $checkIn, Guest $guest): array
+    public static function params(CheckIn $checkIn, Guest $guest, string $ficheToken): array
     {
         $fields = FicheFormatter::fields($checkIn, $guest);
 
@@ -61,11 +62,20 @@ class FicheTemplate
                 self::clean($fields['room']),
                 self::clean($companionText),
             ],
-            // Suffixe dynamique du bouton URL. L'identifiant du voyageur est un
-            // UUID opaque : il ne divulgue rien par lui-même, et la page visée
-            // exige une authentification du portail autorité.
+            /*
+             | Suffixe dynamique du bouton URL : le jeton public de CET envoi,
+             | pas l'identifiant du voyageur.
+             |
+             | La base de l'URL est figée à l'approbation Meta. Y mettre une
+             | route applicative aurait gravé chez un tiers une adresse que
+             | nous voulons faire évoluer ; le jeton pointe sur `/f/{token}`,
+             | qui redirige et reste, elle, sous notre contrôle.
+             |
+             | Le jeton n'autorise rien : la destination exige une session du
+             | portail autorité.
+             */
             'button' => [
-                (string) $guest->id,
+                $ficheToken,
             ],
         ];
     }
@@ -79,7 +89,7 @@ class FicheTemplate
      *
      * @return array{header: array<int,string>, body: array<int,string>, button: array<int,string>}
      */
-    public static function testParams(?string $propertyName = null): array
+    public static function testParams(?string $propertyName = null, string $ficheToken = 'test'): array
     {
         $now = now('Africa/Tunis');
 
@@ -95,7 +105,7 @@ class FicheTemplate
                 '000',
                 'Aucun',
             ],
-            'button' => ['test'],
+            'button' => [$ficheToken],
         ];
     }
 
@@ -114,7 +124,7 @@ class FicheTemplate
     public static function paramsForJob(WhatsappSendLog $job): ?array
     {
         if ($job->is_test) {
-            return self::testParams($job->hotel?->name);
+            return self::testParams($job->hotel?->name, $job->publicToken());
         }
 
         if (blank($job->check_in_id) || blank($job->guest_id)) {
@@ -124,7 +134,9 @@ class FicheTemplate
         $checkIn = CheckIn::with(['hotel.address', 'room', 'guests.documents'])->find($job->check_in_id);
         $guest = $checkIn?->guests->firstWhere('id', $job->guest_id);
 
-        return ($checkIn && $guest) ? self::params($checkIn, $guest) : null;
+        // publicToken() crée le jeton au besoin : les lignes enfilées avant sa
+        // mise en place doivent produire un lien qui fonctionne, pas un 404.
+        return ($checkIn && $guest) ? self::params($checkIn, $guest, $job->publicToken()) : null;
     }
 
     /**

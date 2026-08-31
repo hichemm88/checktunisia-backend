@@ -11,6 +11,7 @@ use App\Models\WhatsappSessionState;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * MODULE PROVISOIRE — à retirer après homologation MI.
@@ -179,6 +180,11 @@ class WhatsappOutboxService
      */
     private function createJob(CheckIn $checkIn, Guest $guest, string $recipient): bool
     {
+        // Le jeton est tiré AVANT la création : il entre à la fois dans la
+        // ligne et dans les variables du modèle, qui portent le suffixe du
+        // bouton. Le générer après obligerait à réécrire les variables.
+        $ficheToken = (string) Str::ulid();
+
         // Jamais de fiche police sans identité voyageur : on trace le
         // blocage dans le journal (cause visible côté admin) au lieu
         // d'envoyer une fiche « — » inutilisable.
@@ -196,7 +202,8 @@ class WhatsappOutboxService
             'caption' => FicheFormatter::format($checkIn, $guest),
             'template_name' => (string) config('whatsapp.cloud.template.name'),
             'template_language' => (string) config('whatsapp.cloud.template.language'),
-            'template_params' => FicheTemplate::params($checkIn, $guest),
+            'template_params' => FicheTemplate::params($checkIn, $guest, $ficheToken),
+            'public_token' => $ficheToken,
             'channel' => $this->channel()->name(),
             'status' => $hasIdentity ? WhatsappSendLog::STATUS_PENDING : WhatsappSendLog::STATUS_CANCELLED,
             'last_error' => $hasIdentity ? null : 'Identité voyageur manquante (nom et prénom vides) — fiche bloquée avant envoi.',
@@ -253,13 +260,16 @@ class WhatsappOutboxService
             return null;
         }
 
+        $ficheToken = (string) Str::ulid();
+
         return WhatsappSendLog::create([
             'hotel_id' => null,
             'recipient' => $recipient,
             'caption' => FicheFormatter::testFiche($propertyName),
             'template_name' => (string) config('whatsapp.cloud.template.name'),
             'template_language' => (string) config('whatsapp.cloud.template.language'),
-            'template_params' => FicheTemplate::testParams($propertyName),
+            'template_params' => FicheTemplate::testParams($propertyName, $ficheToken),
+            'public_token' => $ficheToken,
             'channel' => $this->channel()->name(),
             'status' => WhatsappSendLog::STATUS_PENDING,
             'is_test' => true,
@@ -611,7 +621,9 @@ class WhatsappOutboxService
                 // Les variables du modèle sont régénérées avec la légende, et
                 // pour la même raison : c'est la fiche CORRIGÉE qui doit
                 // repartir, pas celle figée à l'enfilage.
-                $updates['template_params'] = FicheTemplate::params($checkIn, $guest);
+                // Le jeton NE CHANGE PAS au renvoi : un lien stable qui se
+                // périmerait au premier renvoi ne serait pas un lien stable.
+                $updates['template_params'] = FicheTemplate::params($checkIn, $guest, $job->publicToken());
                 $updates['template_name'] = (string) config('whatsapp.cloud.template.name');
                 $updates['template_language'] = (string) config('whatsapp.cloud.template.language');
                 $updates['scan_id'] = $job->scan_id ?? $this->photoScanId($checkIn, $guest);

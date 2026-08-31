@@ -141,20 +141,21 @@ return [
             'language' => env('WHATSAPP_TEMPLATE_LANGUAGE', 'fr'),
 
             /*
-            | Base de l'URL du bouton « Consulter la fiche ». Le suffixe
-            | dynamique {{1}} est l'identifiant du voyageur : la page
-            | /authority/guests/{id} du portail autorité existe déjà et exige
-            | une authentification — l'identifiant est opaque, il ne divulgue
-            | rien à lui seul.
+            | Base de l'URL du bouton « Consulter la fiche ».
             |
-            | TODO : quand une page « fiche » dédiée (jeton signé, sans
-            | compte) existera, c'est ici qu'il faudra la pointer — et
-            | soumettre le modèle à nouveau, l'URL de base étant figée dans
-            | l'approbation Meta.
+            | Cette URL est FIGÉE à l'approbation du modèle chez Meta : la
+            | changer impose de soumettre un nouveau modèle et d'attendre une
+            | nouvelle validation. Elle pointe donc sur `/f/{token}`, une
+            | route de redirection qui n'existe QUE pour absorber les
+            | changements de destination — aujourd'hui la page du portail
+            | autorité, demain une page « fiche » par jeton signé.
+            |
+            | Le suffixe {{1}} est le jeton public de la ligne d'envoi (ULID),
+            | pas un identifiant métier.
             */
             'fiche_url_base' => env(
                 'WHATSAPP_FICHE_URL_BASE',
-                rtrim(env('FRONTEND_URL', 'https://qayed.tn'), '/').'/authority/guests/',
+                rtrim(env('APP_URL', 'https://api.qayed.tn'), '/').'/f/',
             ),
         ],
     ],

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Str;
 
 /**
  * MODULE PROVISOIRE — à retirer après homologation MI.
@@ -58,6 +59,7 @@ class WhatsappSendLog extends Model
         'delivered_at',
         'read_at',
         'error_code',
+        'public_token',
     ];
 
     /*
@@ -89,6 +91,37 @@ class WhatsappSendLog extends Model
             'read_at' => 'datetime',
             'template_params' => 'array',
         ];
+    }
+
+    /**
+     * Toute ligne porte un jeton public, quelle qu'en soit l'origine.
+     *
+     * L'invariant est posé ici plutôt que dans le service qui enfile : le
+     * bouton du modèle WhatsApp ne fonctionne QUE si le jeton existe, et une
+     * ligne créée par un autre chemin (reprise de données, test, futur
+     * appelant) produirait sinon un lien mort chez un policier.
+     */
+    protected static function booted(): void
+    {
+        static::creating(function (self $job) {
+            if (blank($job->public_token)) {
+                $job->public_token = (string) Str::ulid();
+            }
+        });
+    }
+
+    /**
+     * Jeton public, créé à la volée pour les lignes antérieures à sa mise en
+     * place. Persisté immédiatement : un lien qui change d'un envoi à l'autre
+     * ne serait plus un lien stable.
+     */
+    public function publicToken(): string
+    {
+        if (blank($this->public_token)) {
+            $this->forceFill(['public_token' => (string) Str::ulid()])->save();
+        }
+
+        return (string) $this->public_token;
     }
 
     public function hotel(): BelongsTo

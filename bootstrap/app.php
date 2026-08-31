@@ -17,6 +17,7 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Middleware\ThrottleRequests;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Validation\ValidationException;
 use Sentry\Laravel\Integration as SentryIntegration;
 use Spatie\Permission\Exceptions\UnauthorizedException;
@@ -31,6 +32,12 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
         apiPrefix: 'api/v1',
+        // Routes publiées hors de notre contrôle, donc hors du versionnage de
+        // l'API : aujourd'hui le lien « Consulter la fiche » des messages
+        // WhatsApp, dont l'URL est figée chez Meta. Voir routes/public.php.
+        then: function () {
+            Route::middleware('api')->group(base_path('routes/public.php'));
+        },
     )
     ->withMiddleware(function (Middleware $middleware) {
         // Conservative security headers on every API response (defence in depth).

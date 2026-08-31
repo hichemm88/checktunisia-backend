@@ -96,6 +96,12 @@ class AppServiceProvider extends ServiceProvider
         // une coupure sans ouvrir la porte au martèlement d'une URL publique.
         RateLimiter::for('konnect-webhook', fn (Request $request) => Limit::perMinute(60)->by($request->ip()));
 
+        // Lien « Consulter la fiche » des messages WhatsApp. Un policier
+        // l'ouvre une fois, éventuellement deux. La limite n'est pas là pour
+        // le débit mais contre l'énumération de jetons : 80 bits d'aléa la
+        // rendent déjà vaine, 30 appels par minute la rendent absurde.
+        RateLimiter::for('fiche-link', fn (Request $request) => Limit::perMinute(30)->by($request->ip()));
+
         // Webhook Meta (WhatsApp Cloud API). Chaque fiche produit jusqu'à trois
         // accusés de réception (sent, delivered, read), groupés par lots. Une
         // réception chargée plus les rejeux qui suivent une coupure justifient
