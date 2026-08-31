@@ -45,7 +45,18 @@ class AppServiceProvider extends ServiceProvider
         // l'usage normal mais pour arrêter une boucle folle ou un aspirateur.
         // Repère : le tableau de bord se rafraîchit toutes les 60 s par onglet
         // ouvert, et un check-in complet représente ~10 requêtes.
-        RateLimiter::for('api', fn (Request $request) => Limit::perMinute(120)->by($this->signature($request)));
+        RateLimiter::for('api', function (Request $request) {
+            // Le webhook Meta porte sa propre limite (throttle:whatsapp-webhook),
+            // bien plus haute : un lot d'accusés de réception peut dépasser 120
+            // requêtes par minute. Le repli global l'étranglerait en 429, Meta
+            // rejouerait, puis finirait par désactiver l'abonnement — et on
+            // perdrait la seule preuve de livraison des fiches.
+            if ($request->is('api/v1/webhooks/whatsapp')) {
+                return Limit::none();
+            }
+
+            return Limit::perMinute(120)->by($this->signature($request));
+        });
 
         // Upload de scan : 10 Mo par requête et un appel au modèle de vision
         // derrière. Une réception très chargée traite quelques voyageurs par
@@ -84,6 +95,14 @@ class AppServiceProvider extends ServiceProvider
         // ou deux appels ; 60/min laisse la place à une rafale de rejeux après
         // une coupure sans ouvrir la porte au martèlement d'une URL publique.
         RateLimiter::for('konnect-webhook', fn (Request $request) => Limit::perMinute(60)->by($request->ip()));
+
+        // Webhook Meta (WhatsApp Cloud API). Chaque fiche produit jusqu'à trois
+        // accusés de réception (sent, delivered, read), groupés par lots. Une
+        // réception chargée plus les rejeux qui suivent une coupure justifient
+        // une limite large — son rôle est d'empêcher le martèlement d'une URL
+        // publique, pas de rationner Meta. La signature, elle, est vérifiée
+        // dans le contrôleur : une requête non signée ne coûte qu'un HMAC.
+        RateLimiter::for('whatsapp-webhook', fn (Request $request) => Limit::perMinute(300)->by($request->ip()));
     }
 
     /**

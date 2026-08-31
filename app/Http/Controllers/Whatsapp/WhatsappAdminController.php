@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Whatsapp;
 use App\Http\Controllers\Controller;
 use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
+use App\Services\Delivery\DeliveryChannelManager;
 use App\Services\Whatsapp\WhatsappOutboxService;
+use App\Services\Whatsapp\WhatsappSendingGuard;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -24,7 +26,7 @@ class WhatsappAdminController extends Controller
      * État de santé du relais — sans aucun secret (ni le destinataire).
      * Sert aussi la route publique GET /health/whatsapp.
      */
-    public function health(): JsonResponse
+    public function health(DeliveryChannelManager $channels, WhatsappSendingGuard $guard): JsonResponse
     {
         $state = WhatsappSessionState::current();
         $counts = WhatsappSendLog::query()
@@ -45,6 +47,17 @@ class WhatsappAdminController extends Controller
                 'failed' => (int) ($counts[WhatsappSendLog::STATUS_FAILED] ?? 0),
                 'cancelled' => (int) ($counts[WhatsappSendLog::STATUS_CANCELLED] ?? 0),
             ],
+            /*
+             | Pourquoi rien ne part.
+             |
+             | Sans cette information, un canal bloqué par un garde-fou est
+             | indiscernable d'un canal qui n'a rien à envoyer : la file gonfle
+             | en silence, exactement comme pendant le bannissement du relais
+             | Web. Aucun secret ici — un nom de canal, un booléen, une phrase.
+             */
+            'channel' => $channels->active()->name(),
+            'sending_blocked' => $guard->blockingReason() !== null,
+            'blocked_reason' => $guard->blockingReason(),
         ]]);
     }
 

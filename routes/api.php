@@ -48,6 +48,7 @@ use App\Http\Controllers\Public\PublicPlatformController;
 use App\Http\Controllers\Public\PublicRegistrationController;
 use App\Http\Controllers\Referential\ReferentialController;
 use App\Http\Controllers\Whatsapp\WhatsappAdminController;
+use App\Http\Controllers\Whatsapp\WhatsappWebhookController;
 use App\Http\Controllers\Whatsapp\WhatsappWorkerController;
 use Illuminate\Support\Facades\Route;
 
@@ -115,6 +116,21 @@ Route::prefix('internal/whatsapp')
         Route::get('session-archive/meta', [WhatsappWorkerController::class, 'sessionArchiveMeta']);
         Route::post('session-archive', [WhatsappWorkerController::class, 'storeSessionArchive']);
     });
+
+/*
+| Webhook de la WhatsApp Cloud API (Meta).
+|
+| Sans session utilisateur : c'est Meta qui appelle. Le GET répond au défi de
+| vérification (jeton partagé), le POST est authentifié par la signature
+| X-Hub-Signature-256 vérifiée dans le contrôleur — jamais par un middleware
+| de session.
+|
+| URL à déclarer dans la console Meta : https://api.qayed.tn/api/v1/webhooks/whatsapp
+*/
+Route::get('webhooks/whatsapp', [WhatsappWebhookController::class, 'verify'])
+    ->middleware('throttle:whatsapp-webhook');
+Route::post('webhooks/whatsapp', [WhatsappWebhookController::class, 'handle'])
+    ->middleware('throttle:whatsapp-webhook');
 
 // Ingestion du tracking des coûts IA — consommée uniquement par la fonction
 // serverless Vercel (scan CIN / repli passeport), authentifiée par secret partagé.
