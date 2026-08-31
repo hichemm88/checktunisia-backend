@@ -1,5 +1,14 @@
 # Canal de transmission des fiches
 
+> **Ce document est historique.** Il décrit l'extraction du relais derrière une
+> interface, réalisée avant la migration. La mise en service de la Cloud API —
+> modèles, webhook, garde-fous, ordre des opérations — est décrite dans
+> [whatsapp-cloud-api.md](whatsapp-cloud-api.md).
+>
+> L'échéance décrite ci-dessous est arrivée plus tôt et autrement que prévu :
+> le numéro émetteur a été **banni** le 17/08/2026, sans attendre l'expiration
+> du pin de version. La bascule n'est plus une option de calendrier.
+
 ## L'échéance
 
 Le canal de transmission légal actuel repose sur **WhatsApp Web non officiel** (`whatsapp-web.js`), maintenu fonctionnel par un pin de version dont le contournement **expire le 10 septembre 2026**. Après cette date, les envois média casseront probablement.

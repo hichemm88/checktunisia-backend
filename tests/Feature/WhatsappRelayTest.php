@@ -44,6 +44,10 @@ class WhatsappRelayTest extends TestCase
             'whatsapp.enabled' => true,
             'whatsapp.recipient' => '21612345678@c.us',
             'whatsapp.worker_secret' => 'test-secret',
+            // Ces tests portent sur le relais WhatsApp Web (endpoints du worker,
+            // format JID, session appairée). Le canal par défaut est désormais
+            // « cloud » : sans ce pin, ils vérifieraient un tout autre chemin.
+            'whatsapp.channel' => 'web',
         ]);
     }
 

@@ -33,6 +33,10 @@ class WhatsappDirectRoutingTest extends TestCase
             'whatsapp.enabled' => true,
             'whatsapp.recipient' => '21600000000@c.us',
             'whatsapp.direct_routing' => true,
+            // Ces tests portent sur le relais WhatsApp Web (endpoints du worker,
+            // format JID, session appairée). Le canal par défaut est désormais
+            // « cloud » : sans ce pin, ils vérifieraient un tout autre chemin.
+            'whatsapp.channel' => 'web',
         ]);
     }
 

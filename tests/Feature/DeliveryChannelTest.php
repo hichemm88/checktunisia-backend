@@ -25,9 +25,21 @@ class DeliveryChannelTest extends TestCase
 
     // ── Sélection du canal ───────────────────────────────────────────────────
 
-    public function test_web_channel_is_the_default(): void
+    public function test_cloud_channel_is_the_default(): void
     {
-        // Rien ne doit changer en production tant que la variable n'est pas posée.
+        // Le relais WhatsApp Web a été banni : c'est la Cloud API qui transmet
+        // par défaut, sans qu'aucune variable n'ait à être posée. Un défaut
+        // resté sur « web » aurait signifié, en production, un canal légal
+        // muet sans que rien ne le signale.
+        $this->assertInstanceOf(WhatsAppCloudChannel::class, app(DeliveryChannelManager::class)->active());
+    }
+
+    public function test_provider_legacy_falls_back_to_the_web_channel(): void
+    {
+        // Retour arrière d'urgence : une seule variable, sans connaître le nom
+        // interne des canaux.
+        config(['whatsapp.channel' => 'web']);
+
         $this->assertInstanceOf(WhatsAppWebChannel::class, app(DeliveryChannelManager::class)->active());
     }
 
@@ -46,7 +58,7 @@ class DeliveryChannelTest extends TestCase
     public function test_the_two_channels_format_recipients_differently(): void
     {
         $web = new WhatsAppWebChannel();
-        $cloud = new WhatsAppCloudChannel();
+        $cloud = app(WhatsAppCloudChannel::class);
 
         // C'est précisément ce détail qui aurait fuité partout sans interface.
         $this->assertSame('21620123456@c.us', $web->formatRecipient('+216 20 123 456'));
@@ -55,7 +67,7 @@ class DeliveryChannelTest extends TestCase
 
     public function test_cloud_channel_rejects_truncated_numbers(): void
     {
-        $cloud = new WhatsAppCloudChannel();
+        $cloud = app(WhatsAppCloudChannel::class);
 
         $this->assertNull($cloud->formatRecipient('123'), 'Un numéro tronqué doit être refusé, pas transmis.');
         $this->assertNull($cloud->formatRecipient(null));
@@ -78,7 +90,30 @@ class DeliveryChannelTest extends TestCase
             'whatsapp.channel' => 'cloud',
             'whatsapp.cloud.token' => 'test-token',
             'whatsapp.cloud.phone_number_id' => '123456',
+            // Bascule armée dans le passé : sans elle, les garde-fous
+            // refusent tout envoi — c'est leur rôle, testé plus loin.
+            'whatsapp.guard.cutover_at' => '2000-01-01T00:00:00+00:00',
+            'whatsapp.guard.sending_enabled' => true,
         ]);
+    }
+
+    /** Job minimal, postérieur à la bascule, avec ses variables de modèle. */
+    private function cloudJob(array $attributes = []): WhatsappSendLog
+    {
+        $job = new WhatsappSendLog(array_merge([
+            'recipient' => '21620123456',
+            'caption' => 'Fiche voyageur',
+            'template_params' => [
+                'header' => ['RESIDENCE TEST'],
+                'body' => ['Adresse', 'DUPONT Jean', 'France', 'Passeport n° X1', '01/01/2026', '02/01/2026', '12', 'Aucun'],
+                'button' => ['guest-uuid'],
+            ],
+        ], $attributes));
+
+        // created_at n'est pas fillable : la bascule se juge dessus.
+        $job->created_at = now();
+
+        return $job;
     }
 
     public function test_cloud_channel_sends_and_returns_the_message_id(): void
@@ -89,16 +124,18 @@ class DeliveryChannelTest extends TestCase
             'graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.TEST']]], 200),
         ]);
 
-        $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'Fiche voyageur']);
-
-        $result = (new WhatsAppCloudChannel())->send($job);
+        $result = app(WhatsAppCloudChannel::class)->send($this->cloudJob());
 
         $this->assertTrue($result->success);
         $this->assertSame('wamid.TEST', $result->messageId);
 
+        // Modèle, et non texte libre : hors fenêtre de 24 h — le cas de
+        // toutes les fiches — Meta ne laisse passer que ça.
         Http::assertSent(fn ($request) => $request['messaging_product'] === 'whatsapp'
             && $request['to'] === '21620123456'
-            && $request['text']['body'] === 'Fiche voyageur');
+            && $request['type'] === 'template'
+            && $request['template']['name'] === 'fiche_police_nouvelle'
+            && $request['template']['language']['code'] === 'fr');
     }
 
     public function test_cloud_channel_marks_4xx_as_permanent(): void
@@ -109,15 +146,13 @@ class DeliveryChannelTest extends TestCase
             'graph.facebook.com/*' => Http::response(['error' => ['message' => 'Invalid recipient']], 400),
         ]);
 
-        $result = (new WhatsAppCloudChannel())->send(
-            new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x'])
-        );
+        $result = app(WhatsAppCloudChannel::class)->send($this->cloudJob());
 
         $this->assertFalse($result->success);
         // Retenter à l'identique ne changerait rien : ce serait gaspiller des
         // tentatives et retarder l'alerte.
         $this->assertFalse($result->retryable);
-        $this->assertSame('Invalid recipient', $result->error);
+        $this->assertStringContainsString('Invalid recipient', (string) $result->error);
     }
 
     public function test_cloud_channel_marks_5xx_and_429_as_retryable(): void
@@ -127,9 +162,7 @@ class DeliveryChannelTest extends TestCase
         foreach ([500, 503, 429] as $status) {
             Http::fake(['graph.facebook.com/*' => Http::response(['error' => ['message' => 'oops']], $status)]);
 
-            $result = (new WhatsAppCloudChannel())->send(
-                new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x'])
-            );
+            $result = app(WhatsAppCloudChannel::class)->send($this->cloudJob());
 
             $this->assertFalse($result->success, "HTTP {$status}");
             $this->assertTrue($result->retryable, "HTTP {$status} doit être réessayable.");
@@ -142,9 +175,7 @@ class DeliveryChannelTest extends TestCase
 
         Http::fake();
 
-        $result = (new WhatsAppCloudChannel())->send(
-            new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x'])
-        );
+        $result = app(WhatsAppCloudChannel::class)->send($this->cloudJob());
 
         $this->assertFalse($result->success);
         Http::assertNothingSent();
