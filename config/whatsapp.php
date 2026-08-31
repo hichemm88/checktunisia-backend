@@ -66,14 +66,18 @@ return [
     /*
     | Canal de transmission actif (STRAT-07).
     |
-    | 'web'   = relais WhatsApp Web non officiel (worker Node). Défaut, et
-    |           comportement historique : rien ne change tant qu'on n'y touche pas.
-    | 'cloud' = API Cloud officielle (Meta Graph). Cible avant le 10/09/2026,
-    |           date d'expiration du contournement par pin de version.
+    | 'web'   = relais WhatsApp Web non officiel (worker Node). HISTORIQUE —
+    |           le numéro émetteur a été banni par WhatsApp : ce canal ne
+    |           transmet plus rien. Conservé comme retour arrière d'urgence.
+    | 'cloud' = API Cloud officielle (Meta Graph). DÉFAUT depuis la migration.
+    |
+    | `WHATSAPP_PROVIDER=legacy` est accepté comme alias de repli (= 'web') :
+    | une seule variable à poser pour rebasculer, sans connaître le nom interne
+    | des canaux. WHATSAPP_CHANNEL, s'il est posé, l'emporte.
     |
     | Voir docs/canal-transmission.md pour la procédure de bascule.
     */
-    'channel' => env('WHATSAPP_CHANNEL', 'web'),
+    'channel' => env('WHATSAPP_CHANNEL', env('WHATSAPP_PROVIDER') === 'legacy' ? 'web' : 'cloud'),
 
     /*
     | Mode ombre : le canal cible est exercé À BLANC sur chaque job (résolution
@@ -83,12 +87,141 @@ return [
     */
     'shadow_channel' => env('WHATSAPP_SHADOW_CHANNEL'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | WhatsApp Cloud API (Meta Graph) — canal officiel
+    |--------------------------------------------------------------------------
+    |
+    | Les noms de variables posés en production sont ceux de la console Meta
+    | (WHATSAPP_API_TOKEN, WHATSAPP_PHONE_NUMBER_ID…). Les noms historiques
+    | WHATSAPP_CLOUD_* restent acceptés en repli pour ne casser aucun
+    | environnement déjà configuré. AUCUN de ces secrets n'a de valeur par
+    | défaut : un canal non configuré doit refuser d'envoyer, pas improviser.
+    */
     'cloud' => [
-        'token' => env('WHATSAPP_CLOUD_TOKEN'),
-        'phone_number_id' => env('WHATSAPP_CLOUD_PHONE_NUMBER_ID'),
+        'token' => env('WHATSAPP_API_TOKEN', env('WHATSAPP_CLOUD_TOKEN')),
+        'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID', env('WHATSAPP_CLOUD_PHONE_NUMBER_ID')),
+        'waba_id' => env('WHATSAPP_WABA_ID'),
         'base_url' => env('WHATSAPP_CLOUD_BASE_URL', 'https://graph.facebook.com'),
-        'api_version' => env('WHATSAPP_CLOUD_API_VERSION', 'v21.0'),
+        'api_version' => env('WHATSAPP_API_VERSION', env('WHATSAPP_CLOUD_API_VERSION', 'v21.0')),
         'timeout' => (int) env('WHATSAPP_CLOUD_TIMEOUT', 30),
+
+        /*
+        | Webhook Meta. `verify_token` répond au défi de vérification (GET),
+        | `app_secret` signe chaque livraison (X-Hub-Signature-256). Sans
+        | app_secret, le POST est REFUSÉ : mieux vaut ne rien traiter que
+        | traiter des accusés de réception non authentifiés.
+        */
+        'webhook_verify_token' => env('WHATSAPP_WEBHOOK_VERIFY_TOKEN'),
+        'app_secret' => env('WHATSAPP_APP_SECRET'),
+
+        // Identifiant de l'app Meta. Sert à composer le jeton d'application
+        // « {app_id}|{app_secret} » qu'exige l'enregistrement du webhook.
+        'app_id' => env('WHATSAPP_APP_ID'),
+
+        // URL de rappel déclarée à Meta. Le préfixe d'API du projet est
+        // /api/v1 : c'est cette forme-là qui doit être enregistrée.
+        'webhook_callback_url' => env(
+            'WHATSAPP_WEBHOOK_CALLBACK_URL',
+            rtrim(env('APP_URL', 'https://api.qayed.tn'), '/').'/api/v1/webhooks/whatsapp',
+        ),
+
+        /*
+        | Modèle de message.
+        |
+        | Hors fenêtre de 24 h — le cas NORMAL ici, personne ne répond aux
+        | fiches — la Cloud API n'accepte que des modèles approuvés. Un modèle
+        | ne porte qu'un seul média : les photos de documents ne transitent
+        | donc plus par WhatsApp. Le destinataire consulte la fiche complète,
+        | pièces comprises, derrière le bouton — ce qui est aussi une meilleure
+        | hygiène de données personnelles.
+        */
+        'template' => [
+            'name' => env('WHATSAPP_TEMPLATE_NAME', 'fiche_police_nouvelle'),
+            'language' => env('WHATSAPP_TEMPLATE_LANGUAGE', 'fr'),
+
+            /*
+            | Base de l'URL du bouton « Consulter la fiche ». Le suffixe
+            | dynamique {{1}} est l'identifiant du voyageur : la page
+            | /authority/guests/{id} du portail autorité existe déjà et exige
+            | une authentification — l'identifiant est opaque, il ne divulgue
+            | rien à lui seul.
+            |
+            | TODO : quand une page « fiche » dédiée (jeton signé, sans
+            | compte) existera, c'est ici qu'il faudra la pointer — et
+            | soumettre le modèle à nouveau, l'URL de base étant figée dans
+            | l'approbation Meta.
+            */
+            'fiche_url_base' => env(
+                'WHATSAPP_FICHE_URL_BASE',
+                rtrim(env('FRONTEND_URL', 'https://qayed.tn'), '/').'/authority/guests/',
+            ),
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Garde-fous d'envoi (Cloud API)
+    |--------------------------------------------------------------------------
+    |
+    | Le numéro émetteur est NEUF et la vérification d'entreprise est encore en
+    | cours : la réputation se joue sur les premiers jours d'envoi. Un pic
+    | involontaire — reprise d'un arriéré, boucle de retry, incident — vaudrait
+    | un bannissement, comme le précédent numéro.
+    |
+    | Ces garde-fous ne remplacent pas la file : ils la RALENTISSENT. Rien
+    | n'est jeté, tout reste en attente et repart au créneau suivant.
+    */
+    'guard' => [
+
+        /*
+        | Coupe-circuit. À false, plus AUCUN envoi ne part — les fiches restent
+        | en attente, rien n'est perdu. Relu à chaque envoi (et non au
+        | démarrage) : c'est ce qui en fait un vrai coupe-circuit, actionnable
+        | en quelques secondes depuis Railway.
+        */
+        'sending_enabled' => (bool) env('WHATSAPP_SENDING_ENABLED', true),
+
+        /*
+        | Instant de bascule vers la Cloud API (ISO 8601).
+        |
+        | AUCUNE entrée créée AVANT cet instant ne partira, quelle que soit la
+        | façon dont on la relance — renvoi manuel compris. C'est la protection
+        | contre l'arriéré accumulé depuis le bannissement du relais Web :
+        | plusieurs centaines de fiches de séjours terminés, dont l'envoi en
+        | rafale depuis un numéro neuf ferait bannir celui-ci à son tour.
+        |
+        | Non définie = la Cloud API n'envoie RIEN. Défaut volontairement
+        | paralysant : une bascule qui s'active toute seule au déploiement est
+        | exactement l'accident qu'on cherche à éviter.
+        */
+        'cutover_at' => env('WHATSAPP_CLOUD_API_CUTOVER_AT'),
+
+        // Débit maximum, global à l'émetteur. Au-delà, la file attend le
+        // créneau suivant — elle n'est jamais vidée ni tronquée.
+        'max_sends_per_minute' => (int) env('WHATSAPP_MAX_SENDS_PER_MINUTE', 20),
+
+        // Plafond quotidien (jour civil, Africa/Tunis). Atteint : mise en
+        // attente jusqu'au lendemain et alerte admin.
+        'max_sends_per_day' => (int) env('WHATSAPP_MAX_SENDS_PER_DAY', 500),
+
+        /*
+        | Au-delà de ce nombre de fiches en attente, l'envoi automatique
+        | S'ARRÊTE et réclame une action humaine.
+        |
+        | C'est la leçon directe de l'incident : un arriéré n'est pas un volume
+        | de travail, c'est le symptôme d'une panne. Le vider automatiquement
+        | transforme une panne silencieuse en rafale vers des officiels.
+        */
+        'backlog_alert_threshold' => (int) env('WHATSAPP_BACKLOG_ALERT_THRESHOLD', 50),
+
+        // Durée de la pause globale déclenchée par une erreur de débit ou de
+        // qualité côté Meta (131049, 80007).
+        'quality_pause_minutes' => (int) env('WHATSAPP_QUALITY_PAUSE_MINUTES', 15),
+
+        // Destination du rapport CSV des fiches annulées par la commande
+        // whatsapp:cancel-backlog. Hors du dépôt : storage/ est ignoré par git.
+        'backlog_report_path' => env('WHATSAPP_BACKLOG_REPORT_PATH'),
     ],
 
     /*
