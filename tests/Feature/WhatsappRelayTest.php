@@ -279,11 +279,27 @@ class WhatsappRelayTest extends TestCase
 
     // ── Admin : santé, pause/reprise, renvoi ─────────────────────────────────
 
-    public function test_health_is_public_and_reports_queue_counts(): void
+    public function test_public_health_says_only_whether_the_channel_is_up(): void
     {
         $this->pendingJob();
 
-        $this->getJson('/api/v1/health/whatsapp')
+        // Route publique : un verdict, rien d'autre. La profondeur de file
+        // dirait combien de voyageurs ont été enregistrés — ce n'est pas une
+        // information à laisser lire par n'importe qui.
+        $response = $this->getJson('/api/v1/health/whatsapp')
+            ->assertOk()
+            ->assertJsonPath('data.enabled', true)
+            ->assertJsonPath('data.status', 'ok');
+
+        $this->assertSame(['enabled', 'status'], array_keys($response->json('data')));
+    }
+
+    public function test_admin_health_reports_queue_counts(): void
+    {
+        $this->pendingJob();
+
+        $this->actingAs($this->platformAdmin)
+            ->getJson('/api/v1/admin/whatsapp/health')
             ->assertOk()
             ->assertJsonPath('data.enabled', true)
             ->assertJsonPath('data.queue.pending', 1);

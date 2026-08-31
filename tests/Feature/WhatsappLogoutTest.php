@@ -138,11 +138,14 @@ class WhatsappLogoutTest extends TestCase
         $this->assertArrayNotHasKey('contents', $meta);
     }
 
-    public function test_the_public_health_endpoint_reports_the_revoked_session(): void
+    public function test_the_admin_health_endpoint_reports_the_revoked_session(): void
     {
         $this->report('logged_out', 'LOGOUT')->assertOk();
 
-        $this->getJson('/api/v1/health/whatsapp')
+        // L'état de session a quitté la route publique : il décrit notre
+        // infrastructure, pas un service rendu à l'appelant.
+        $this->actingAs($this->admin())
+            ->getJson('/api/v1/admin/whatsapp/health')
             ->assertOk()
             ->assertJsonPath('data.session', WhatsappSessionState::STATUS_LOGGED_OUT);
     }

@@ -36,6 +36,7 @@ téléphones et les sauvegardes iCloud/Google de chaque destinataire.
 | `WhatsAppCloudChannel` | Adaptateur `DeliveryChannel` en push. Dernière barrière avant Meta. |
 | `WhatsappSendingGuard` | Les quatre freins : coupe-circuit, bascule, débit, arriéré. |
 | `WhatsappWebhookController` | Accusés de réception signés (`GET`/`POST /api/v1/webhooks/whatsapp`). |
+| `FicheLinkController` | `GET /f/{token}` — cible stable du bouton, redirige (302). |
 | `whatsapp:dispatch` | Vide la file — la Cloud API est en **push**, plus rien ne vient chercher les fiches. |
 
 ## Destinataires
@@ -53,6 +54,33 @@ donc son propre `wamid`, son propre statut, ses propres retries. Un
 destinataire injoignable n'empêche pas les autres de recevoir la fiche.
 
 Cette liste n'a jamais été en dur dans le code : rien à migrer.
+
+## Le bouton « Consulter la fiche »
+
+**L'URL de base d'un bouton de modèle est figée à l'approbation Meta.** La
+changer impose de soumettre un nouveau modèle et d'attendre une nouvelle
+validation — des jours, sur le canal légal du produit.
+
+Le modèle pointe donc sur une route de redirection qui n'existe que pour
+absorber les changements de destination :
+
+```
+https://api.qayed.tn/f/{{1}}          {{1}} = jeton public de l'envoi (ULID)
+        └─ 302 ─> https://qayed.tn/authority/guests/{guest_id}
+```
+
+Le jour où une page « fiche » consultable par jeton signé existera, **seule
+cette route change** : aucun nouveau modèle, aucune nouvelle validation, et
+les messages déjà reçus par les policiers continuent de fonctionner.
+
+Le jeton est un ULID (80 bits d'aléa, non énumérable) porté par la ligne
+d'envoi — un jeton par destinataire, donc. Il **n'autorise rien** : la
+destination exige une session du portail autorité. Un jeton qui donnerait
+accès au contenu serait un lien vers des données personnelles envoyé en clair
+par WhatsApp, sans expiration ni révocation.
+
+Le jeton ne change pas au renvoi manuel : un lien stable qui se périmerait au
+premier renvoi ne serait pas un lien stable.
 
 ## Les garde-fous, et pourquoi ils existent
 
@@ -80,6 +108,71 @@ est donc manuel, explicite et temporaire :
 ```bash
 php artisan whatsapp:allow-backlog --minutes=60
 ```
+
+## Variables d'environnement — référence complète
+
+Toutes vivent dans `config/whatsapp.php`. Aucune n'est en dur dans le code,
+aucune n'apparaît dans les journaux.
+
+### Obligatoires — sans elles, rien ne part
+
+| Variable | Rôle |
+|---|---|
+| `WHATSAPP_POLICE_ENABLED` | Interrupteur général du module. `true`. |
+| `WHATSAPP_CHANNEL` | **`cloud`. À poser EXPLICITEMENT** — voir l'encadré ci-dessous. |
+| `WHATSAPP_API_TOKEN` | Jeton permanent d'utilisateur système. Secret. |
+| `WHATSAPP_PHONE_NUMBER_ID` | Identifiant du numéro émetteur. |
+| `WHATSAPP_WABA_ID` | Compte WhatsApp Business — gestion des modèles. |
+| `WHATSAPP_APP_ID` | App Meta ; compose le jeton d'application du webhook. |
+| `WHATSAPP_APP_SECRET` | Secret de l'app. **Signe le webhook** : sans lui, toute livraison est refusée. |
+| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Répond au défi de vérification de Meta. Secret partagé. |
+| `WHATSAPP_CLOUD_API_CUTOVER_AT` | Instant de bascule, ISO 8601. **Non définie = aucun envoi.** |
+| `WHATSAPP_SENDING_ENABLED` | Coupe-circuit. `true` pour émettre, `false` pour tout arrêter. |
+| `WHATSAPP_RECIPIENT` | Numéro de repli, quand un établissement n'a aucun agent assigné. |
+
+> ### `WHATSAPP_CHANNEL=cloud` — à poser à la main en production
+>
+> `cloud` est le défaut du code, mais **un `WHATSAPP_CHANNEL=web` résiduel
+> dans Railway l'emporterait** : c'est la valeur que l'environnement portait
+> jusqu'ici. Le canal retomberait sur le relais banni, qui accepte les fiches
+> sans jamais les transmettre — un canal légal muet, sans alerte, exactement
+> la situation qu'on sort de vivre.
+>
+> Vérifier la valeur effective, ne pas se fier au défaut :
+> `GET /api/v1/admin/whatsapp/health` renvoie `data.channel`, qui doit valoir
+> `whatsapp_cloud`.
+
+### Garde-fous — valeurs par défaut sûres
+
+| Variable | Défaut | Effet |
+|---|---|---|
+| `WHATSAPP_MAX_SENDS_PER_MINUTE` | `20` | Au-delà, la file attend le créneau suivant. |
+| `WHATSAPP_MAX_SENDS_PER_DAY` | `500` | Atteint : reprise le lendemain + alerte admin. |
+| `WHATSAPP_BACKLOG_ALERT_THRESHOLD` | `50` | Au-delà, **l'envoi automatique s'arrête** et réclame une décision humaine. |
+| `WHATSAPP_QUALITY_PAUSE_MINUTES` | `15` | Pause globale après un code Meta de débit ou de qualité. |
+| `WHATSAPP_BACKLOG_REPORT_PATH` | `storage/app/whatsapp/` | Destination du CSV des fiches annulées. |
+
+### Modèle et lien
+
+| Variable | Défaut | Effet |
+|---|---|---|
+| `WHATSAPP_TEMPLATE_NAME` | `fiche_police_nouvelle` | Nom du modèle approuvé. |
+| `WHATSAPP_TEMPLATE_LANGUAGE` | `fr` | Code langue du modèle. |
+| `WHATSAPP_FICHE_URL_BASE` | `APP_URL` + `/f/` | Base du bouton. **Figée à l'approbation** : la changer impose un nouveau modèle. |
+| `WHATSAPP_WEBHOOK_CALLBACK_URL` | `APP_URL` + `/api/v1/webhooks/whatsapp` | URL déclarée à Meta. |
+| `WHATSAPP_API_VERSION` | `v21.0` | Version de l'API Graph. |
+
+`FRONTEND_URL` et `APP_URL` doivent être justes : la première est la cible de
+la redirection du bouton, la seconde compose la base du lien et l'URL du
+webhook.
+
+### Repli d'urgence, et héritage
+
+| Variable | Effet |
+|---|---|
+| `WHATSAPP_PROVIDER=legacy` | Alias de `WHATSAPP_CHANNEL=web`. Le relais est banni : il ne transmettra rien. |
+| `WHATSAPP_CLOUD_TOKEN`, `WHATSAPP_CLOUD_PHONE_NUMBER_ID`, `WHATSAPP_CLOUD_API_VERSION` | Anciens noms, toujours acceptés en repli des nouveaux. |
+| `WHATSAPP_WORKER_SECRET`, `WHATSAPP_QR_URL`, `WHATSAPP_SESSION_VAULT_*` | Relais Web uniquement. Sans effet sur la Cloud API. |
 
 ## Ordre de mise en service
 
@@ -192,13 +285,15 @@ supprimer du code encore utile au diagnostic.
 
 Honnêtement :
 
-- **Le bouton pointe vers `/authority/guests/{id}`**, la page du portail
-  autorité, qui exige un compte. Il n'existe pas encore de page « fiche »
-  accessible par jeton signé. Le jour où elle existera, il faudra changer
-  `WHATSAPP_FICHE_URL_BASE` **et soumettre un nouveau modèle** : l'URL de base
-  est figée à l'approbation.
-- **Les destinataires sans compte autorité** (repli sur le numéro global)
-  reçoivent donc un bouton qu'ils ne peuvent pas ouvrir sans compte.
+- **Il n'existe pas encore de page « fiche » consultable sans compte.**
+  `/f/{token}` redirige aujourd'hui vers le portail autorité, qui exige une
+  session. Les destinataires du repli global (numéro `WHATSAPP_RECIPIENT`)
+  reçoivent donc un bouton qu'ils ne peuvent pas ouvrir. Le jour où la page
+  existera, seule la destination de `FicheLinkController` change — **pas le
+  modèle**, c'est précisément ce que cette indirection achète.
+- **Le jeton n'expire pas et ne se révoque pas.** Il ne donne accès à rien par
+  lui-même, donc ce n'est pas urgent ; ce le deviendra si la page par jeton
+  signé voit le jour.
 - **Le code du relais Web n'est pas supprimé** (worker Node, coffre de session,
   routes internes). Nettoyage dans une PR ultérieure, une fois la Cloud API
   stabilisée en production.

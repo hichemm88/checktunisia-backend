@@ -114,7 +114,7 @@ class WhatsappCloudApiTest extends TestCase
         ]);
         $checkIn->load(['hotel.address', 'room', 'guests.documents']);
 
-        $params = FicheTemplate::params($checkIn, $checkIn->guests->first());
+        $params = FicheTemplate::params($checkIn, $checkIn->guests->first(), '01JTESTTOKEN');
 
         // Meta rejette (132012) toute variable contenant un saut de ligne, une
         // tabulation ou plus de quatre espaces consécutifs. Une fiche perdue
@@ -354,6 +354,109 @@ class WhatsappCloudApiTest extends TestCase
         $this->assertSame(1, $result['sent']);
         // La seconde attend le créneau suivant — elle n'est ni perdue ni en échec.
         $this->assertSame(1, WhatsappSendLog::where('status', WhatsappSendLog::STATUS_PENDING)->count());
+    }
+
+    // ── Lien « Consulter la fiche » ──────────────────────────────────────────
+
+    public function test_the_button_points_at_the_redirect_route_not_at_a_screen(): void
+    {
+        $this->fakeAccepted();
+        $this->completeCheckIn();
+
+        app(WhatsappOutboxService::class)->dispatchPending();
+
+        $token = WhatsappSendLog::first()->public_token;
+        $this->assertNotNull($token);
+
+        Http::assertSent(function ($request) use ($token) {
+            $button = collect($request['template']['components'])->firstWhere('type', 'button');
+
+            // Le bouton porte le JETON de l'envoi, pas l'identifiant du
+            // voyageur : l'URL de base est figée chez Meta, elle ne doit
+            // désigner aucune route applicative susceptible de changer.
+            $this->assertSame($token, $button['parameters'][0]['text']);
+
+            return true;
+        });
+    }
+
+    public function test_the_link_redirects_to_the_authority_page(): void
+    {
+        $this->fakeAccepted();
+        $checkIn = $this->completeCheckIn();
+
+        $job = WhatsappSendLog::first();
+
+        $this->get('/f/'.$job->public_token)
+            ->assertRedirectContains('/authority/guests/'.$job->guest_id);
+
+        // 302 et non 301 : la destination changera le jour où une page fiche
+        // par jeton signé existera, et un 301 serait resté en cache.
+        $this->assertSame(302, $this->get('/f/'.$job->public_token)->getStatusCode());
+        $this->assertNotNull($checkIn);
+    }
+
+    public function test_an_unknown_link_says_nothing(): void
+    {
+        // Ni indice sur l'existence de la fiche, ni donnée : un 404 nu.
+        $this->get('/f/01JUNKNOWNTOKEN0000000000')->assertNotFound();
+    }
+
+    public function test_the_link_survives_a_manual_resend(): void
+    {
+        $this->fakeAccepted();
+        $this->completeCheckIn();
+
+        $job = WhatsappSendLog::first();
+        $token = $job->public_token;
+
+        $job->update(['status' => WhatsappSendLog::STATUS_FAILED]);
+        app(WhatsappOutboxService::class)->resend($job->fresh());
+
+        // Un lien stable qui se périmerait au premier renvoi ne serait pas un
+        // lien stable : le policier garde le message d'origine.
+        $this->assertSame($token, $job->fresh()->public_token);
+    }
+
+    // ── Ce que la route publique de santé laisse voir ────────────────────────
+
+    public function test_public_health_exposes_no_recipient_no_credential_no_token(): void
+    {
+        $this->hotel->whatsappRecipientProfiles()->sync([
+            $this->authorityRecipient('21611111111')->id,
+        ]);
+        $this->fakeAccepted();
+        $this->completeCheckIn();
+
+        $body = $this->getJson('/api/v1/health/whatsapp')->assertOk()->getContent();
+
+        // L'URL est publique : rien de ce qui identifie un destinataire, un
+        // compte Meta ou une fiche ne doit pouvoir en sortir.
+        foreach ([
+            '21611111111',                                    // numéro de destinataire
+            '21600000000',                                    // numéro global
+            'test-token', '123456', 'waba-1', 'app-secret',   // identifiants Meta
+            (string) WhatsappSendLog::first()->public_token,  // jeton de fiche
+        ] as $secret) {
+            $this->assertStringNotContainsString($secret, $body);
+        }
+
+        // Et rien de plus que le verdict.
+        $this->assertSame(
+            ['enabled', 'status'],
+            array_keys($this->getJson('/api/v1/health/whatsapp')->json('data')),
+        );
+    }
+
+    public function test_public_health_reports_degraded_without_saying_why(): void
+    {
+        config(['whatsapp.guard.sending_enabled' => false]);
+
+        $response = $this->getJson('/api/v1/health/whatsapp')->assertOk();
+
+        $this->assertSame('degraded', $response->json('data.status'));
+        // Le motif décrit notre configuration interne : il reste côté admin.
+        $this->assertStringNotContainsString('WHATSAPP_', $response->getContent());
     }
 
     // ── Webhook ──────────────────────────────────────────────────────────────
