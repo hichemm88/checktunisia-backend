@@ -94,8 +94,10 @@ Route::match(['get', 'post'], 'payments/konnect/webhook/{token}', KonnectWebhook
 |--------------------------------------------------------------------------
 */
 
-// État de santé (sans secret) — supervision + affichage admin.
-Route::get('health/whatsapp', [WhatsappAdminController::class, 'health']);
+// Verdict de santé PUBLIC : activé ou non, ok / degraded / disabled. Rien de
+// plus — ni profondeur de file, ni état de session, ni motif de blocage. Le
+// détail est derrière admin/whatsapp/health, authentifié.
+Route::get('health/whatsapp', [WhatsappAdminController::class, 'publicHealth']);
 
 // API interne consommée uniquement par le service Node (whatsapp-service/),
 // authentifiée par secret partagé — pas de session utilisateur.

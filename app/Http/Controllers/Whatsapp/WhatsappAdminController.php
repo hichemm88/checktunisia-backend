@@ -23,8 +23,42 @@ class WhatsappAdminController extends Controller
     public function __construct(private WhatsappOutboxService $outbox) {}
 
     /**
-     * État de santé du relais — sans aucun secret (ni le destinataire).
-     * Sert aussi la route publique GET /health/whatsapp.
+     * GET health/whatsapp — route PUBLIQUE, sans session.
+     *
+     * Strict minimum. Elle servait jusqu'ici la même charge utile que l'écran
+     * d'administration : profondeur de file, état de session, motif de la
+     * dernière déconnexion. Rien de tout cela n'est secret au sens d'un
+     * jeton, mais rien de tout cela n'a à être lisible par n'importe qui :
+     * la profondeur de file dit combien de voyageurs ont été enregistrés, et
+     * le motif de blocage décrit notre configuration interne.
+     *
+     * Ce qui reste est ce dont les deux seuls appelants ont besoin : le
+     * front (« puis-je annoncer que la fiche partira ? ») et une sonde
+     * externe (« est-ce que ça va ? »). Le détail vit derrière
+     * GET admin/whatsapp/health, authentifié.
+     */
+    public function publicHealth(DeliveryChannelManager $channels, WhatsappSendingGuard $guard): JsonResponse
+    {
+        $enabled = $this->outbox->enabled();
+
+        return response()->json(['data' => [
+            'enabled' => $enabled,
+            // Verdict grossier, sans dire pourquoi : « degraded » suffit à
+            // déclencher un regard humain, qui lira le détail côté admin.
+            'status' => match (true) {
+                ! $enabled => 'disabled',
+                $this->blockingReason($channels, $guard) !== null => 'degraded',
+                default => 'ok',
+            },
+        ]]);
+    }
+
+    /**
+     * GET admin/whatsapp/health — état complet, réservé aux administrateurs.
+     *
+     * Aucun secret ici non plus : ni jeton, ni identifiant Meta, ni numéro de
+     * destinataire, ni jeton public de fiche. Des compteurs, un état de
+     * session, et la raison pour laquelle rien ne part.
      */
     public function health(DeliveryChannelManager $channels, WhatsappSendingGuard $guard): JsonResponse
     {
@@ -56,9 +90,22 @@ class WhatsappAdminController extends Controller
              | Web. Aucun secret ici — un nom de canal, un booléen, une phrase.
              */
             'channel' => $channels->active()->name(),
-            'sending_blocked' => $guard->blockingReason() !== null,
-            'blocked_reason' => $guard->blockingReason(),
+            'sending_blocked' => $this->blockingReason($channels, $guard) !== null,
+            'blocked_reason' => $this->blockingReason($channels, $guard),
         ]]);
+    }
+
+    /**
+     * Motif de blocage — uniquement quand le canal actif transmet lui-même.
+     *
+     * Les garde-fous (bascule, débit, arriéré) protègent la réputation du
+     * numéro émetteur de la Cloud API. Les appliquer à un canal en pull
+     * afficherait « dégradé » sur un relais qui n'en dépend pas — un signal
+     * faux, donc un signal qu'on apprend à ignorer.
+     */
+    private function blockingReason(DeliveryChannelManager $channels, WhatsappSendingGuard $guard): ?string
+    {
+        return $channels->active()->supportsPush() ? $guard->blockingReason() : null;
     }
 
     /** GET admin/whatsapp/logs — journal filtrable par propriété / statut / date. */
