@@ -6,24 +6,37 @@ use App\Contracts\DeliveryChannel;
 use App\Contracts\DeliveryResult;
 use App\Models\Hotel;
 use App\Models\WhatsappSendLog;
-use Illuminate\Support\Facades\Http;
+use App\Services\Whatsapp\FicheTemplate;
+use App\Services\Whatsapp\WhatsappCloudApi;
+use App\Services\Whatsapp\WhatsappCloudErrors;
+use App\Services\Whatsapp\WhatsappSendingGuard;
 
 /**
- * Canal WhatsApp Cloud API (officiel, Meta Graph API).
+ * Canal WhatsApp Cloud API (officiel, Meta Graph). CANAL ACTIF PAR DÉFAUT.
  *
- * Destiné à remplacer WhatsAppWebChannel avant le 10 septembre 2026, date à
- * laquelle expire le contournement par pin de version du relais non officiel.
+ * Le relais WhatsApp Web non officiel a été banni par WhatsApp : il ne
+ * transmet plus rien. Ce canal le remplace.
  *
- * Canal en PUSH : PHP appelle directement l'API, il n'y a plus de worker Node,
- * plus de session à appairer, plus de QR code à renouveler — donc plus le
- * point unique de défaillance actuel.
+ * Canal en PUSH : PHP appelle directement l'API. Plus de worker Node, plus de
+ * session à appairer, plus de QR à renouveler — donc plus le point unique de
+ * défaillance historique. En contrepartie, deux règles de Meta s'imposent :
  *
- * ⚠️ NON ACTIF tant que `whatsapp.channel` n'est pas basculé sur « cloud ».
- * Il se construit à côté de l'existant, qui reste en production jusqu'à
- * validation. Voir docs/canal-transmission.md.
+ *  1. Hors fenêtre de 24 h — le cas de TOUTES les fiches, personne ne répond à
+ *     une fiche de police — seul un MODÈLE approuvé passe. D'où l'envoi par
+ *     `sendTemplate()` et non par texte libre.
+ *  2. Un modèle ne porte qu'un seul média. La photo du document ne part donc
+ *     plus dans WhatsApp : le destinataire ouvre la fiche complète, pièces
+ *     comprises, derrière le bouton « Consulter la fiche ».
+ *
+ * Voir docs/canal-transmission.md.
  */
 class WhatsAppCloudChannel implements DeliveryChannel
 {
+    public function __construct(
+        private WhatsappCloudApi $api,
+        private WhatsappSendingGuard $guard,
+    ) {}
+
     public function name(): string
     {
         return 'whatsapp_cloud';
@@ -31,9 +44,7 @@ class WhatsAppCloudChannel implements DeliveryChannel
 
     public function isConfigured(): bool
     {
-        return (bool) config('whatsapp.enabled')
-            && filled(config('whatsapp.cloud.token'))
-            && filled(config('whatsapp.cloud.phone_number_id'));
+        return (bool) config('whatsapp.enabled') && $this->api->isConfigured();
     }
 
     public function supportsPush(): bool
@@ -45,6 +56,11 @@ class WhatsAppCloudChannel implements DeliveryChannel
      * La Cloud API attend un numéro international NU, sans « + » ni suffixe —
      * là où WhatsApp Web exige un JID « …@c.us ». C'est précisément le genre
      * de détail qui aurait fuité partout sans cette interface.
+     *
+     * Conséquence utile : un JID hérité (« 21620123456@c.us ») posé en
+     * configuration ou stocké sur une ligne enfilée avant la bascule se
+     * ramène tout seul au bon format — les fiches en attente repartent sans
+     * reprise de données.
      */
     public function formatRecipient(?string $number): ?string
     {
@@ -56,9 +72,12 @@ class WhatsAppCloudChannel implements DeliveryChannel
     }
 
     /**
-     * Même règle de résolution que le canal historique — routage direct par
-     * établissement, repli sur le destinataire global — mais formatée pour ce
-     * canal. La règle métier ne dépend pas du transport.
+     * Même règle de résolution que le canal historique — un envoi par agent
+     * destinataire de l'établissement, repli sur le numéro global — mais
+     * formatée pour ce canal. La règle métier ne dépend pas du transport.
+     *
+     * La liste vient de `hotel_whatsapp_recipients` (agents cochés dans
+     * Établissement > Destinataires WhatsApp) ; elle n'a jamais été en dur.
      *
      * @return array<int,string>
      */
@@ -91,6 +110,27 @@ class WhatsAppCloudChannel implements DeliveryChannel
             return DeliveryResult::failedPermanently('Canal Cloud API non configuré.');
         }
 
+        /*
+         * Dernière barrière avant Meta.
+         *
+         * La boucle d'envoi consulte déjà les garde-fous, mais elle n'est pas
+         * le seul chemin possible : un renvoi manuel depuis l'administration,
+         * une commande lancée à la main, un futur appelant. Le contrôle est
+         * donc ici aussi, au point de passage obligé — une fiche de l'arriéré
+         * ne doit JAMAIS partir, quelle que soit la façon dont on la relance.
+         */
+        if ($this->guard->isPreCutover($job)) {
+            return DeliveryResult::failedPermanently(
+                'pre_cutover_backlog : fiche antérieure à la bascule Cloud API — envoi refusé.',
+                'pre_cutover_backlog',
+            );
+        }
+
+        if ($reason = $this->guard->blockingReason()) {
+            // Temporaire : la fiche repartira au créneau suivant, rien n'est perdu.
+            return DeliveryResult::failedTemporarily('Envoi suspendu — '.$reason);
+        }
+
         $recipient = $this->formatRecipient($job->recipient);
 
         if ($recipient === null) {
@@ -98,44 +138,41 @@ class WhatsAppCloudChannel implements DeliveryChannel
             return DeliveryResult::failedPermanently('Destinataire invalide : '.$job->recipient);
         }
 
-        $endpoint = sprintf(
-            '%s/%s/%s/messages',
-            rtrim((string) config('whatsapp.cloud.base_url'), '/'),
-            config('whatsapp.cloud.api_version'),
-            config('whatsapp.cloud.phone_number_id'),
+        $params = $job->template_params ?: FicheTemplate::paramsForJob($job);
+
+        if (empty($params)) {
+            // Fiche non reconstituable (check-in ou voyageur supprimé depuis
+            // l'enfilage). Envoyer un texte libre échouerait en 131047 hors
+            // fenêtre de 24 h : autant le dire franchement plutôt que de
+            // maquiller l'échec en erreur réseau.
+            return DeliveryResult::failedPermanently(
+                'Variables du modèle indisponibles : la fiche ne peut plus être reconstituée.'
+            );
+        }
+
+        $result = $this->api->sendTemplate(
+            $recipient,
+            $job->template_name ?: (string) config('whatsapp.cloud.template.name'),
+            $job->template_language ?: (string) config('whatsapp.cloud.template.language'),
+            FicheTemplate::components($params),
         );
 
-        try {
-            $response = Http::withToken((string) config('whatsapp.cloud.token'))
-                ->timeout((int) config('whatsapp.cloud.timeout', 30))
-                ->post($endpoint, [
-                    'messaging_product' => 'whatsapp',
-                    'recipient_type' => 'individual',
-                    'to' => $recipient,
-                    'type' => 'text',
-                    'text' => [
-                        'preview_url' => false,
-                        'body' => (string) $job->caption,
-                    ],
-                ]);
-        } catch (\Throwable $e) {
-            // Réseau injoignable : temporaire par nature.
-            return DeliveryResult::failedTemporarily('Appel Cloud API impossible : '.$e->getMessage());
+        if ($result->success) {
+            // Comptabilisé APRÈS acceptation : un refus ne doit pas consommer
+            // le budget de réputation d'un émetteur encore neuf.
+            $this->guard->recordSend();
+
+            return $result;
         }
 
-        if ($response->successful()) {
-            return DeliveryResult::sent($response->json('messages.0.id'));
+        if (WhatsappCloudErrors::triggersGlobalPause(
+            is_numeric($result->errorCode) ? (int) $result->errorCode : null
+        )) {
+            // Meta vient de dire « trop ». Insister est ce qui transforme une
+            // limitation passagère en bannissement — on se tait un moment.
+            $this->guard->pauseGlobally(null, 'code Meta '.$result->errorCode);
         }
 
-        $error = (string) ($response->json('error.message') ?? 'HTTP '.$response->status());
-
-        // 4xx = la requête est fautive (numéro invalide, jeton expiré, message
-        // refusé) : retenter à l'identique ne changera rien. 429 et 5xx sont
-        // les seuls cas où réessayer a du sens.
-        if ($response->status() === 429 || $response->serverError()) {
-            return DeliveryResult::failedTemporarily($error);
-        }
-
-        return DeliveryResult::failedPermanently($error);
+        return $result;
     }
 }

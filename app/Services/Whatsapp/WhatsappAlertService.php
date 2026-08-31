@@ -180,6 +180,73 @@ class WhatsappAlertService
         );
     }
 
+    /**
+     * Le CANAL est tombé, pas une fiche.
+     *
+     * Jeton révoqué, compte Meta verrouillé, modèle suspendu : plus rien ne
+     * partira tant qu'un humain n'aura pas agi dans la console Meta. Ces
+     * pannes-là se noyaient jusqu'ici dans les échecs d'envoi ordinaires,
+     * alors qu'elles arrêtent l'obligation légale du produit.
+     *
+     * Déduplication à l'heure : une file de 200 fiches sur un jeton expiré ne
+     * doit pas produire 200 emails.
+     */
+    public function channelDown(string $channel, ?string $reason): void
+    {
+        $key = 'whatsapp_channel_down:'.$channel;
+
+        if (! Cache::add($key, true, now()->addHour())) {
+            return;
+        }
+
+        $this->dispatch(
+            'WhatsApp Qayed — canal de transmission bloqué',
+            "Le canal « {$channel} » refuse tous les envois.\n\n"
+            .'Cause : '.($reason ?? '—')."\n\n"
+            .'Aucune fiche ne peut plus partir tant que le problème n\'est pas corrigé '
+            .'dans la console Meta (jeton d\'accès, état du compte WhatsApp Business, '
+            .'statut du modèle de message). Les fiches restent en file et repartiront '
+            .'une fois le canal rétabli.',
+            SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
+        );
+    }
+
+    /**
+     * Un arriéré s'est constitué et n'a PAS été envoyé.
+     *
+     * L'alerte porte sur la retenue, pas sur l'accumulation : c'est le fait
+     * que des fiches attendent SANS partir qui exige une décision humaine.
+     * L'envoi automatique d'un arriéré est exactement ce qui a coûté le
+     * numéro émetteur précédent.
+     */
+    public function backlogHeldBack(int $pending, int $threshold): void
+    {
+        $this->dispatch(
+            'WhatsApp Qayed — arriéré retenu, action requise',
+            "{$pending} fiches sont en attente d'envoi (seuil d'alerte : {$threshold}).\n\n"
+            ."L'envoi automatique est SUSPENDU : un arriéré de cette taille signale une panne, "
+            ."et le vider d'un coup depuis un numéro neuf conduirait à un bannissement.\n\n"
+            ."À faire : identifier la cause de l'accumulation, décider quelles fiches doivent "
+            ."réellement partir, puis débloquer explicitement avec « php artisan whatsapp:allow-backlog ». "
+            .'Aucune fiche n\'est perdue en attendant.',
+            SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
+        );
+    }
+
+    /** Plafond quotidien d'envois atteint : le reste part demain. */
+    public function dailyCapReached(int $cap, int $pending): void
+    {
+        $this->dispatch(
+            'WhatsApp Qayed — plafond quotidien atteint',
+            "Le plafond de {$cap} envois par jour est atteint. {$pending} fiches restent en attente "
+            ."et repartiront demain.\n\n"
+            .'Ce plafond protège la réputation d\'un numéro émetteur encore neuf. S\'il est atteint '
+            .'régulièrement, c\'est le plafond qu\'il faut relever (WHATSAPP_MAX_SENDS_PER_DAY), '
+            .'pas les fiches qu\'il faut forcer.',
+            SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
+        );
+    }
+
     /** Job abandonné après épuisement des retries (24 h). */
     public function jobPermanentlyFailed(WhatsappSendLog $job, ?string $error): void
     {

@@ -49,7 +49,32 @@ class WhatsappSendLog extends Model
         'message_id_whatsapp',
         'queued_at',
         'sent_at',
+        // Cloud API : modèle soumis, canal effectif, cycle de vie côté Meta.
+        'template_name',
+        'template_language',
+        'template_params',
+        'channel',
+        'delivery_status',
+        'delivered_at',
+        'read_at',
+        'error_code',
     ];
+
+    /*
+    | Cycle de vie côté Meta, alimenté par le webhook. Distinct de `status`,
+    | qui décrit NOTRE tentative d'envoi : un job `sent` dont la livraison est
+    | `failed` a bien été accepté par Meta et n'a jamais atteint le
+    | destinataire — sur un canal légal, la nuance n'est pas cosmétique.
+    */
+    public const DELIVERY_ACCEPTED = 'accepted';
+
+    public const DELIVERY_SENT = 'sent';
+
+    public const DELIVERY_DELIVERED = 'delivered';
+
+    public const DELIVERY_READ = 'read';
+
+    public const DELIVERY_FAILED = 'failed';
 
     protected function casts(): array
     {
@@ -60,6 +85,9 @@ class WhatsappSendLog extends Model
             'claimed_at' => 'datetime',
             'queued_at' => 'datetime',
             'sent_at' => 'datetime',
+            'delivered_at' => 'datetime',
+            'read_at' => 'datetime',
+            'template_params' => 'array',
         ];
     }
 
