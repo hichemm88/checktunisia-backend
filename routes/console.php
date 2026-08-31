@@ -39,6 +39,17 @@ Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone(
 // au-delà de la rétention (24 h). Minimisation des données.
 Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
 
+// Transmission des fiches par la WhatsApp Cloud API.
+//
+// Le relais WhatsApp Web fonctionnait en PULL : un worker Node venait chercher
+// les fiches. La Cloud API fonctionne en PUSH — sans cette tâche, plus rien ne
+// consomme la file et les fiches s'accumulent en silence.
+//
+// Chaque minute : le débit réel est plafonné par les garde-fous
+// (WHATSAPP_MAX_SENDS_PER_MINUTE), pas par la fréquence de la tâche. La
+// commande est inerte quand le canal actif est en pull.
+Schedule::command('whatsapp:dispatch')->everyMinute()->withoutOverlapping();
+
 // Rapport « prochain check-in » à la demande : inerte tant que non armé
 // (Cache 'checkin_report.watch'), s'auto-désarme après envoi.
 Schedule::command('checkins:report-next')->everyMinute()->withoutOverlapping();
