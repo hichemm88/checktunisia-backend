@@ -9,6 +9,9 @@
 
   .brandbar { background: #10222E; color: #fff; padding: 16px 20px; border-radius: 8px; }
   .brandbar h1 { margin: 0; font-size: 18px; letter-spacing: .5px; }
+  /* 35 mm de large, hauteur libre : le rapport du fichier est conservé. DomPDF
+     raisonne en points, 35 mm valent 99,2 pt. */
+  .brandbar .logo { width: 99.2pt; height: auto; display: block; }
   .brandbar .tag { margin: 2px 0 0; font-size: 10px; color: #8B7FE0; }
   .meta { padding: 10px 2px 4px; color: #6b7280; font-size: 10px; }
   .meta strong { color: #111827; }
@@ -42,7 +45,15 @@
 </head>
 <body>
   <div class="brandbar">
-    <h1>QAYED</h1>
+    {{-- Le logo est embarqué en base64 : DomPDF ne va chercher aucune
+         ressource distante, une URL laisserait un cadre vide. Absent, on
+         retombe sur le mot-symbole — une fiche sans identification de
+         l'émetteur serait moins utile qu'une fiche au logo textuel. --}}
+    @if ($brandLogo)
+      <img class="logo" src="{{ $brandLogo }}" alt="Qayed">
+    @else
+      <h1>QAYED</h1>
+    @endif
     <p class="tag">Fiches de police — {{ $hotelName }}</p>
   </div>
   <div class="meta">

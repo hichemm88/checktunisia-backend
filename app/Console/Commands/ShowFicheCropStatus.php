@@ -32,7 +32,11 @@ class ShowFicheCropStatus extends Command
         $this->line('Clé Anthropic  : '.($hasKey ? 'présente' : 'ABSENTE (ANTHROPIC_API_KEY)'));
         $this->line('Modèle         : '.config('fiche.ai_crop.model'));
         $this->line('Marge          : '.(100 * (float) config('fiche.ai_crop.margin')).' %');
-        $this->line('Cadre de sortie: '.config('fiche.photo_width').'x'.config('fiche.photo_height')
+        $long = config('fiche.photo_long_edge');
+        $short = config('fiche.photo_short_edge');
+        // Deux cadres, parce que le rendu suit l'orientation de la photo : un
+        // seul chiffre laisserait croire à un cadre fixe, ce qu'il n'est plus.
+        $this->line("Cadre de sortie: {$long}x{$short} en paysage, {$short}x{$long} en portrait"
             .' ('.config('fiche.photo_fit').')');
         $this->newLine();
 

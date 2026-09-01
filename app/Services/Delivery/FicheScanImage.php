@@ -67,8 +67,7 @@ class FicheScanImage
             // l'image telle qu'on la voit, pas telle qu'elle est stockée.
             $detoured = self::cropToDocument($image, $scan);
 
-            $width = (int) config('fiche.photo_width', 1200);
-            $height = (int) config('fiche.photo_height', 800);
+            [$width, $height] = self::frameFor($image);
 
             self::fitToFrame($image, $width, $height, $detoured)
                 ? $image->cover($width, $height)
@@ -81,6 +80,41 @@ class FicheScanImage
 
             return null;
         }
+    }
+
+    /**
+     * Cadre de sortie, orienté comme la photo source.
+     *
+     * ── Le défaut que ceci corrige ───────────────────────────────────────────
+     *
+     * Le cadre était fixe et PAYSAGE (1200x800). Avec « pad », une photo
+     * portrait y était encadrée de bandes vides : la pièce n'occupait plus que
+     * 35 % de la largeur, contre 75 % pour la même pièce photographiée à
+     * l'horizontale. Mesuré sur une carte identique, cela faisait 133 dpi
+     * utiles contre 289 — un facteur 2,2 perdu par la seule orientation du
+     * téléphone.
+     *
+     * Or photographier une carte tenue en main donne très souvent un cliché
+     * vertical. Autrement dit, le cas le plus fréquent était le moins lisible,
+     * et rien dans le PDF ne le signalait : la pièce est bien là, simplement
+     * trop petite pour qu'on lise le numéro.
+     *
+     * Le cadre bascule donc avec la source. Aucun pixel n'est rogné pour
+     * autant — « pad » reste la règle, et une pièce carrée ou de proportion
+     * inattendue continue d'être complétée de blanc plutôt que coupée.
+     *
+     * @return array{0:int,1:int} largeur, hauteur
+     */
+    private static function frameFor($image): array
+    {
+        $long = (int) config('fiche.photo_long_edge', 1600);
+        $short = (int) config('fiche.photo_short_edge', 1067);
+
+        // À égalité (photo carrée), on garde le paysage : c'est l'orientation
+        // du bloc qui accueille la pièce dans la vue.
+        return $image->height() > $image->width()
+            ? [$short, $long]
+            : [$long, $short];
     }
 
     /**

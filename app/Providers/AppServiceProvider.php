@@ -3,10 +3,12 @@
 namespace App\Providers;
 
 use App\Services\Whatsapp\WhatsappCloudConfig;
+use App\Support\BrandLogo;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -31,6 +33,23 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->configureRateLimiters();
         $this->warnOnIncompleteWhatsappConfig();
+
+        /*
+         * Le logo, partout où Qayed se présente à l'autorité.
+         *
+         * Deux vues : l'en-tête des PDF de fiches, et la page d'attente
+         * servie par /f/{token} quand le portail n'est pas encore ouvert.
+         *
+         * Par un compositeur plutôt qu'en argument des appelants (relais
+         * WhatsApp, export par email, récapitulatif quotidien, contrôleur du
+         * lien) : le logo est une constante de marque, pas une donnée de la
+         * fiche. Le passer à la main quatre fois, c'est quatre occasions de
+         * l'oublier — et une page sans identification ne se remarque qu'une
+         * fois chez le destinataire.
+         */
+        View::composer(['pdf.police-fiches', 'fiche-link-info'], function ($view) {
+            $view->with('brandLogo', BrandLogo::dataUri());
+        });
     }
 
     /**

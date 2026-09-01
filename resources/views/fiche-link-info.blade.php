@@ -44,6 +44,17 @@
             max-width: 420px;
             text-align: center;
         }
+        /* Le logo est un carré arrondi : l'enfermer dans le cercle du sceau
+           le ferait paraître de travers. La variante retire donc le cadre et
+           laisse l'image parler. */
+        .sceau--logo {
+            width: 72px;
+            height: auto;
+            display: block;
+            margin: 0 auto 20px;
+            border: 0;
+            border-radius: 0;
+        }
         .sceau {
             width: 64px;
             height: 64px;
@@ -78,7 +89,20 @@
 </head>
 <body>
     <main class="carte">
-        <div class="sceau" aria-hidden="true">Q</div>
+        {{-- Même source que l'en-tête des PDF (App\Support\BrandLogo), et non
+             une copie du fichier dans public/ : deux exemplaires d'un logo
+             finissent toujours par diverger. Embarqué en base64 plutôt que
+             servi par une seconde requête — la page est vue une fois, souvent
+             sur un téléphone en mobilité.
+
+             Absent, la lettre cerclée reprend sa place : cette page est ce que
+             voit un policier qui clique depuis WhatsApp, elle ne doit jamais
+             s'afficher amputée de son identification. --}}
+        @if ($brandLogo)
+            <img class="sceau sceau--logo" src="{{ $brandLogo }}" alt="Qayed">
+        @else
+            <div class="sceau" aria-hidden="true">Q</div>
+        @endif
         <h1>Qayed</h1>
         <p>
             Cette fiche de police vous a été transmise par Qayed, plateforme
