@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Mail\PoliceFichesExport;
 use App\Models\CheckIn;
 use App\Models\Hotel;
+use App\Services\Delivery\FicheScanImage;
 use App\Services\Whatsapp\FicheFormatter;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Bus\Queueable;
@@ -52,7 +53,7 @@ class ExportPoliceFichesJob implements ShouldQueue
     public function handle(): void
     {
         $hotel = Hotel::with('address')->find($this->hotelId);
-        if (! $hotel) {
+        if (!$hotel) {
             return;
         }
 
@@ -68,7 +69,9 @@ class ExportPoliceFichesJob implements ShouldQueue
         foreach ($checkIns as $ci) {
             $guests = $ci->guests->sortByDesc(fn ($g) => (bool) ($g->pivot->is_primary ?? false));
             foreach ($guests as $guest) {
-                $fiches[] = FicheFormatter::fields($ci, $guest);
+                $fiche = FicheFormatter::fields($ci, $guest);
+                $fiche['photo'] = FicheScanImage::dataUri($ci, $guest);
+                $fiches[] = $fiche;
             }
         }
 

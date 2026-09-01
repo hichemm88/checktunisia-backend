@@ -24,9 +24,10 @@ use App\Services\Whatsapp\WhatsappSendingGuard;
  *  1. Hors fenêtre de 24 h — le cas de TOUTES les fiches, personne ne répond à
  *     une fiche de police — seul un MODÈLE approuvé passe. D'où l'envoi par
  *     `sendTemplate()` et non par texte libre.
- *  2. Un modèle ne porte qu'un seul média. La photo du document ne part donc
- *     plus dans WhatsApp : le destinataire ouvre la fiche complète, pièces
- *     comprises, derrière le bouton « Consulter la fiche ».
+ *  2. Un modèle ne porte qu'un seul média. Ce média est le PDF de la fiche,
+ *     pièce d'identité comprise : c'est ce qui rétablit la parité avec le
+ *     relais WhatsApp Web, qui envoyait la photo du document. Le bouton
+ *     « Consulter la fiche » ajoute le contexte que le PDF ne porte pas.
  *
  * Voir docs/canal-transmission.md.
  */
@@ -96,7 +97,7 @@ class WhatsAppCloudChannel implements DeliveryChannel
                 ->values()
                 ->all();
 
-            if (! empty($numbers)) {
+            if (!empty($numbers)) {
                 return $numbers;
             }
         }
@@ -106,7 +107,7 @@ class WhatsAppCloudChannel implements DeliveryChannel
 
     public function send(WhatsappSendLog $job): DeliveryResult
     {
-        if (! $this->isConfigured()) {
+        if (!$this->isConfigured()) {
             return DeliveryResult::failedPermanently('Canal Cloud API non configuré.');
         }
 
@@ -150,11 +151,40 @@ class WhatsAppCloudChannel implements DeliveryChannel
             );
         }
 
+        /*
+         * En-tête DOCUMENT : le PDF de la fiche, pièce d'identité comprise.
+         *
+         * OBLIGATOIRE. Le modèle est approuvé avec un en-tête média ; un envoi
+         * sans média est refusé (132000). Il n'y a donc pas de branche « sans
+         * pièce jointe » : une fiche sans PDF n'est pas une fiche dégradée,
+         * c'est un envoi impossible, et le dire tout de suite vaut mieux que
+         * de le découvrir dans un code d'erreur Meta.
+         */
+        $pdf = FichePdf::forJob($job);
+
+        if ($pdf === null) {
+            return DeliveryResult::failedPermanently(
+                'Fiche PDF impossible à produire : le modèle exige une pièce jointe.'
+            );
+        }
+
+        try {
+            $document = [
+                'id' => $this->api->uploadMedia($pdf, FichePdf::filenameFor($job)),
+                'filename' => FichePdf::filenameFor($job),
+            ];
+        } catch (TransientDeliveryFailure $e) {
+            // Le téléversement a échoué passagèrement : la fiche est intacte,
+            // seule cette tentative est perdue. Surtout PAS un échec définitif
+            // — /media momentanément indisponible ne dit rien de la fiche.
+            return DeliveryResult::failedTemporarily($e->getMessage());
+        }
+
         $result = $this->api->sendTemplate(
             $recipient,
             $job->template_name ?: (string) config('whatsapp.cloud.template.name'),
             $job->template_language ?: (string) config('whatsapp.cloud.template.language'),
-            FicheTemplate::components($params),
+            FicheTemplate::components($params, $document),
         );
 
         if ($result->success) {

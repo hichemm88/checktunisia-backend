@@ -34,7 +34,12 @@ class DispatchWhatsappQueue extends Command
             return self::SUCCESS;
         }
 
-        if ($missing = WhatsappCloudConfig::missing()) {
+        // `missingToSend()` et non `missing()` : le webhook sert à RECEVOIR
+        // les accusés de réception. Refuser de transmettre des documents à
+        // valeur légale parce que la preuve de livraison n'est pas encore
+        // câblée serait choisir le mauvais risque. Le manque est signalé par
+        // whatsapp:check-config et par l'écran d'administration.
+        if ($missing = WhatsappCloudConfig::missingToSend()) {
             // Échec bruyant, avec la liste exacte : un canal mal configuré qui
             // se tait ressemble exactement à un canal qui n'a rien à envoyer.
             // C'est ainsi qu'un arriéré se constitue sans que personne ne voie.

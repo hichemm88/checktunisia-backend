@@ -5,6 +5,7 @@
     "license": "proprietary",
     "require": {
         "php": "^8.3",
+        "anthropic-ai/sdk": "^0.42.0",
         "barryvdh/laravel-dompdf": "^3.1",
         "intervention/image": "^3.9",
         "laravel/framework": "^12.0",
@@ -14,7 +15,12 @@
         "pragmarx/google2fa": "^9.0",
         "resend/resend-php": "^1.4",
         "sentry/sentry-laravel": "^4.27",
-        "spatie/laravel-permission": "^6.10"
+        "spatie/laravel-permission": "^6.10",
+        "symfony/property-access": "^7.4",
+        "symfony/property-info": "^7.4",
+        "symfony/serializer": "^7.4",
+        "symfony/type-info": "^7.4",
+        "web-auth/webauthn-lib": "^5.3"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
@@ -63,6 +69,9 @@
         "optimize-autoloader": true,
         "preferred-install": "dist",
         "sort-packages": true,
+        "platform": {
+            "php": "8.3.0"
+        },
         "allow-plugins": {
             "pestphp/pest-plugin": true,
             "php-http/discovery": true

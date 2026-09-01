@@ -18,13 +18,24 @@ de Meta qui changent la conception :
 1. **Hors fenêtre de 24 h, seul un modèle approuvé passe.** Une fiche de police
    n'ouvre jamais de conversation : personne n'y répond. La fenêtre est donc
    toujours fermée, et tout part par modèle.
-2. **Un modèle ne porte qu'un seul média.** Les photos de documents ne
-   transitent plus par WhatsApp. Le destinataire ouvre la fiche complète,
-   pièces comprises, derrière le bouton « Consulter la fiche ».
+2. **Un modèle ne porte qu'un seul média.** Ce média est le PDF de la fiche,
+   pièce d'identité comprise, téléversé via `/media` avant chaque envoi.
 
-Ce second point est un changement de conception assumé — et une meilleure
-hygiène de données personnelles : des scans d'identité ne dorment plus dans les
-téléphones et les sauvegardes iCloud/Google de chaque destinataire.
+Le message final combine donc trois choses, chacune pour une raison distincte :
+
+| Partie | Contenu | Pourquoi |
+|---|---|---|
+| En-tête | **PDF de la fiche**, pièce d'identité incluse | Rétablit la parité avec l'ancien relais ; une variable de modèle ne peut pas contenir de retour à la ligne, donc la fiche ne rentre dans aucune variable |
+| Corps | Résumé en 9 variables | Le destinataire trie dans un fil unique : il doit savoir de quoi il s'agit sans ouvrir la pièce jointe |
+| Bouton | « Consulter la fiche » | L'historique et le contexte que le PDF ne porte pas |
+
+L'en-tête est **obligatoire** : un modèle approuvé avec en-tête média est
+refusé (132000) si l'envoi ne fournit pas le média. Il n'y a donc pas d'envoi
+« dégradé sans pièce jointe » — les fiches de test produisent un PDF factice
+pour cette raison.
+
+Un échec du téléversement `/media` est **temporaire**, jamais définitif : la
+fiche est intacte, seule la tentative est perdue.
 
 ## Ce que le code fait
 
@@ -36,6 +47,7 @@ téléphones et les sauvegardes iCloud/Google de chaque destinataire.
 | `WhatsAppCloudChannel` | Adaptateur `DeliveryChannel` en push. Dernière barrière avant Meta. |
 | `WhatsappSendingGuard` | Les quatre freins : coupe-circuit, bascule, débit, arriéré. |
 | `WhatsappWebhookController` | Accusés de réception signés (`GET`/`POST /api/v1/webhooks/whatsapp`). |
+| `FichePdf` | Rend la fiche en PDF (même vue Blade que l'export par email) et un exemplaire factice. |
 | `FicheLinkController` | `GET /f/{token}` — cible stable du bouton, redirige (302). |
 | `whatsapp:dispatch` | Vide la file — la Cloud API est en **push**, plus rien ne vient chercher les fiches. |
 
@@ -82,6 +94,21 @@ par WhatsApp, sans expiration ni révocation.
 Le jeton ne change pas au renvoi manuel : un lien stable qui se périmerait au
 premier renvoi ne serait pas un lien stable.
 
+### Le lien survit à la connexion
+
+Les agents ont tous un compte, mais n'ouvrent pas encore le portail au
+quotidien : le clic tombe presque toujours sur un navigateur non connecté.
+
+La destination visée traverse donc l'authentification. Le garde de routage
+redirige vers `/login?next=/authority/guests/{id}`, la page de connexion la
+relaie à l'étape 2FA, et l'agent atterrit **sur la fiche**, pas sur l'accueil.
+Sans cela le premier clic n'aboutissait jamais — et sur un levier d'adoption,
+il n'y a pas de second clic.
+
+Le paramètre est revalidé à chaque étape et n'accepte qu'un chemin interne :
+une page de connexion des forces de l'ordre qui redirige où on lui dit serait
+un tremplin de hameçonnage avec le bon nom de domaine.
+
 ## Les garde-fous, et pourquoi ils existent
 
 Le numéro émetteur est **neuf** et la vérification d'entreprise Meta est encore
@@ -96,6 +123,16 @@ des comptes qui ne lui ont jamais écrit est le profil exact que Meta bannit.
 | Plafond | `WHATSAPP_MAX_SENDS_PER_DAY` (500) | Reprise le lendemain + alerte. |
 | Arriéré | `WHATSAPP_BACKLOG_ALERT_THRESHOLD` (50) | Au-delà, **l'envoi automatique s'arrête** et réclame une décision humaine. |
 | Qualité | codes Meta 131049 / 80007 | Pause globale de 15 min. |
+| Débit horaire | `WHATSAPP_MAX_PER_HOUR` (30) | Fenêtre glissante, mesurée sur le journal — un worker qui redémarre ne remet pas le compteur à zéro. |
+| Montée en charge | `WHATSAPP_WARMUP_*` (24 h, 6/h, 120 s) | Un numéro fraîchement appairé émet lentement : c'est le profil du compte jetable qui déclenche les sanctions. |
+| Cadence | `WHATSAPP_MIN_INTERVAL_SECONDS` (45) + `WHATSAPP_INTERVAL_JITTER_RATIO` (0,4) | Un intervalle constant est une signature d'automate aussi lisible qu'une rafale. |
+| Disjoncteur | `WHATSAPP_CIRCUIT_BREAKER_FAILURES` (5) | N refus d'affilée = restriction de compte. Coupe le relais EN BASE et alerte ; la reprise est un geste humain. |
+
+Les cinq derniers viennent des garde-fous écrits après la **restriction du
+17/08/2026**, quand le numéro a été suspendu 6 h pour « activité laissant
+penser à du spam ». Ils étaient attachés au relais WhatsApp Web ; rien en eux
+ne lui était propre, et une suspension sur le canal officiel coûterait le
+numéro professionnel vérifié — autrement plus cher qu'une carte SIM.
 
 Aucun de ces freins ne perd de fiche : tout reste en attente.
 
@@ -168,6 +205,13 @@ aucune n'apparaît dans les journaux.
 | `WHATSAPP_MAX_SENDS_PER_DAY` | `500` | Atteint : reprise le lendemain + alerte admin. |
 | `WHATSAPP_BACKLOG_ALERT_THRESHOLD` | `50` | Au-delà, **l'envoi automatique s'arrête** et réclame une décision humaine. |
 | `WHATSAPP_QUALITY_PAUSE_MINUTES` | `15` | Pause globale après un code Meta de débit ou de qualité. |
+| `WHATSAPP_MAX_PER_HOUR` | `30` | Plafond sur une heure glissante. |
+| `WHATSAPP_MIN_INTERVAL_SECONDS` | `45` | Cadence plancher entre deux envois. |
+| `WHATSAPP_INTERVAL_JITTER_RATIO` | `0.4` | Part d'aléa sur cette cadence. |
+| `WHATSAPP_WARMUP_HOURS` | `24` | Durée de la montée en charge après appairage. |
+| `WHATSAPP_WARMUP_MAX_PER_HOUR` | `6` | Plafond horaire pendant la montée en charge. |
+| `WHATSAPP_WARMUP_MIN_INTERVAL_SECONDS` | `120` | Cadence pendant la montée en charge. |
+| `WHATSAPP_CIRCUIT_BREAKER_FAILURES` | `5` | Refus consécutifs avant coupure du relais. |
 | `WHATSAPP_BACKLOG_REPORT_PATH` | `storage/app/whatsapp/` | Destination du CSV des fiches annulées. |
 
 ### Modèle et lien
@@ -181,6 +225,11 @@ aucune n'apparaît dans les journaux.
 | `WHATSAPP_API_VERSION` | `v21.0` | Version de l'API Graph. |
 | `WHATSAPP_API_BASE_URL` | `https://graph.facebook.com` | Hôte Graph. Rarement modifié. |
 | `WHATSAPP_API_TIMEOUT` | `30` | Délai d'appel, en secondes. |
+
+**Aucune variable nouvelle n'apparaît avec ce merge** : `WHATSAPP_API_BASE_URL`
+et `WHATSAPP_API_TIMEOUT` sont les anciennes `WHATSAPP_CLOUD_BASE_URL` et
+`_TIMEOUT` renommées, et les garde-fous anti-restriction ci-dessus existaient
+déjà sur `main`.
 
 `FRONTEND_URL` et `APP_URL` doivent être justes : la première est la cible de
 la redirection du bouton, la seconde compose la base du lien et l'URL du
@@ -285,6 +334,14 @@ php artisan whatsapp:check-config --admin
 ```bash
 php artisan whatsapp:templates --create
 ```
+
+La commande téléverse d'abord un PDF d'exemple via l'API Resumable Upload
+(`/{APP_ID}/uploads`) pour obtenir le `header_handle` : **sans lui, Meta refuse
+la création d'un modèle à en-tête DOCUMENT.** Les données de l'exemple sont
+fictives — aucune fiche réelle ne part chez Meta.
+
+Pour interroger un autre compte WhatsApp Business (deux WABA coexistent
+pendant une bascule) : `php artisan whatsapp:templates <waba_id>`.
 
 Puis, pour suivre (l'approbation est asynchrone, de quelques minutes à quelques
 jours — et hors de notre contrôle) :

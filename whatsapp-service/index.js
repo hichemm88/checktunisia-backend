@@ -125,6 +125,9 @@ const recovery = createRecovery({
  */
 let sendingSuspendedUntil = 0;
 let suspensionReason = null;
+// Début de la veille en cours : sert à ignorer un ordre de reprise ANTÉRIEUR
+// (un vieux clic « Reprendre » ne doit pas annuler une veille toute neuve).
+let suspensionStartedAt = 0;
 
 /** État réel à annoncer au backend — la veille prime sur le « ready » de la bibliothèque. */
 function currentStatus() {
@@ -279,9 +282,26 @@ async function reportSession(status, reason = null) {
   state.session = status;
   state.reason = reason;
   try {
-    await api.post('/internal/whatsapp/session', { status, reason });
+    // Numéro réellement appairé : c'est le backend qui décide, à partir de lui,
+    // si la réputation repart de zéro (montée en charge). Un ré-appairage avec
+    // un AUTRE numéro est un compte neuf pour Meta, même si le service, lui, a
+    // des mois de service. Best-effort : `client.info` n'existe qu'une fois prêt.
+    await api.post('/internal/whatsapp/session', {
+      status,
+      reason,
+      phone_number: connectedNumber(),
+    });
   } catch (err) {
     console.warn('[whatsapp] report session failed:', err.message);
+  }
+}
+
+/** @returns {string|null} numéro connecté (chiffres), ou null si pas encore prêt. */
+function connectedNumber() {
+  try {
+    return client?.info?.wid?.user ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -331,6 +351,7 @@ async function haltSending(reason) {
   if (sendingSuspendedUntil > Date.now()) return;
 
   sendingSuspendedUntil = Date.now() + HALT_COOLDOWN_MS;
+  suspensionStartedAt = Date.now();
   suspensionReason = reason;
   const minutes = Math.round(HALT_COOLDOWN_MS / 60000);
   console.error(`[whatsapp] envois suspendus ${minutes} min — ${reason}. Le service reste joignable (/health, /qr, /debug).`);
@@ -370,6 +391,35 @@ function resumeSendingIfDue() {
   suspensionReason = null;
   recovery.success(); // compteurs remis à neuf : la veille valait la sanction
   console.log('[whatsapp] fin de la veille technique — reprise des envois.');
+
+  return true;
+}
+
+/*
+ * Reprise sur ordre d'un administrateur (bouton « Reprendre »).
+ *
+ * La veille technique est décidée par le worker et vit dans SA mémoire : la
+ * base n'en sait rien. Un exploitant qui venait de réparer la panne (session
+ * ré-appairée, worker recyclé) n'avait donc aucun moyen d'écourter les 30 min
+ * — il attendait sans savoir pourquoi rien ne repartait.
+ *
+ * On ne retient que les demandes POSTÉRIEURES au début de la veille : sinon un
+ * vieil horodatage, laissé en base par un clic d'hier, annulerait aussitôt
+ * chaque nouvelle mise en veille.
+ */
+let lastHandledResumeRequest = 0;
+function liftSuspensionIfRequested(resumeRequestedAt) {
+  if (!resumeRequestedAt || sendingSuspendedUntil <= Date.now()) return false;
+
+  const requestedMs = Date.parse(resumeRequestedAt);
+  if (!Number.isFinite(requestedMs)) return false;
+  if (requestedMs <= suspensionStartedAt || requestedMs <= lastHandledResumeRequest) return false;
+
+  lastHandledResumeRequest = requestedMs;
+  sendingSuspendedUntil = 0;
+  suspensionReason = null;
+  recovery.success();
+  console.log('[whatsapp] veille levée à la demande d\'un administrateur — reprise des envois.');
 
   return true;
 }
@@ -603,7 +653,18 @@ function startPageLivenessWatchdog() {
     }
 
     try {
-      await withTimeout(client.pupPage.evaluate('1'), 15000, 'sonde de vivacité');
+      // On sonde la PRÉSENCE DES HELPERS, pas seulement la vivacité de la page.
+      // `evaluate('1')` réussissait sur une page bien vivante mais dont
+      // l'injection whatsapp-web.js avait disparu (ré-appairage, a fortiori avec
+      // un autre numéro) : la sonde voyait tout vert pendant que chaque envoi
+      // mourait sur « Cannot read properties of undefined (reading 'getChat') ».
+      // Un helper manquant vaut une page muette : reload, puis recyclage.
+      const injected = await withTimeout(
+        client.pupPage.evaluate('typeof window.WWebJS !== "undefined" && typeof window.Store !== "undefined"'),
+        15000,
+        'sonde de vivacité',
+      );
+      if (!injected) throw new Error('injection whatsapp-web.js absente de la page (window.WWebJS/Store)');
       misses = 0;
       reloads = 0;
     } catch (err) {
@@ -702,7 +763,7 @@ function withTimeout(promise, ms, label) {
 }
 
 // ── Boucle de travail (FIFO, un envoi à la fois) ─────────────────────────────
-async function sendJob(job, minIntervalSeconds) {
+async function sendJob(job, minIntervalSeconds, jitterRatio) {
   let media = null;
 
   if (job.has_photo && job.photo_url) {
@@ -728,8 +789,19 @@ async function sendJob(job, minIntervalSeconds) {
     message_id: sent?.id?._serialized ?? sent?.id?.$1 ?? sent?.id?.id ?? null,
   });
 
-  // Délai minimum anti-ban entre deux messages.
-  await sleep(Math.max(minIntervalSeconds, 1) * 1000);
+  // Délai minimum anti-ban entre deux messages, volontairement IRRÉGULIER : un
+  // intervalle constant à la milliseconde près est en soi une signature
+  // d'automate. La gigue n'écourte jamais l'attente sous le plancher, elle
+  // ne fait qu'ajouter.
+  await sleep(jitteredIntervalMs(minIntervalSeconds, jitterRatio));
+}
+
+/** Plancher, plus un tirage aléatoire dans [0, ratio × plancher]. */
+function jitteredIntervalMs(minIntervalSeconds, jitterRatio = 0) {
+  const floorMs = Math.max(Number(minIntervalSeconds) || 0, 1) * 1000;
+  const ratio = Math.min(Math.max(Number(jitterRatio) || 0, 0), 1);
+
+  return Math.round(floorMs + Math.random() * ratio * floorMs);
 }
 
 async function tick() {
@@ -752,6 +824,14 @@ async function tick() {
     // ⚠️ Pendant une veille technique, l'état réel EST « disconnected » : sans
     // cette nuance, la resynchronisation aurait aussitôt réannoncé « ready » et
     // annulé la mise en veille qu'on venait de décider.
+    // Reprise demandée par un administrateur : elle lève la veille technique.
+    // Sans ça, « Reprendre » ne remettait que `paused` à false côté base — la
+    // veille du worker, elle, courait jusqu'à son terme (30 min) sans qu'aucun
+    // bouton n'y puisse rien, y compris après une panne déjà réparée.
+    if (liftSuspensionIfRequested(control.resume_requested_at) && ready) {
+      await reportSession('ready');
+    }
+
     const localStatus = currentStatus();
     if (control.session_status && control.session_status !== localStatus) {
       console.warn(`[whatsapp] resynchronisation d'état : backend=${control.session_status}, local=${localStatus}`);
@@ -768,7 +848,11 @@ async function tick() {
     }
 
     try {
-      await withTimeout(sendJob(job, control.min_interval_seconds), SEND_TIMEOUT_MS, `envoi ${job.id}`);
+      await withTimeout(
+        sendJob(job, control.min_interval_seconds, control.interval_jitter_ratio),
+        SEND_TIMEOUT_MS,
+        `envoi ${job.id}`,
+      );
       recovery.success();
     } catch (err) {
       state.failedCount += 1;
@@ -780,7 +864,7 @@ async function tick() {
        * rien, et le déclencher revenait à transformer l'incident d'UNE fiche en
        * panne de tout le canal, jusqu'à épuisement du quota Railway.
        */
-      const outcome = recovery.failure(err);
+      const outcome = recovery.failure(err, { maxRefusals: control.circuit_breaker_failures });
       console.warn(`[whatsapp] envoi ${job.id} échoué [${outcome.kind}]:`, err.message);
       await api.post(`/internal/whatsapp/jobs/${job.id}/result`, {
         status: 'failed',
@@ -796,6 +880,24 @@ async function tick() {
         // que de consommer les tentatives des fiches suivantes pour rien.
         case 'backoff':
           return ERROR_BACKOFF_MS;
+
+        /*
+         * Disjoncteur. WhatsApp refuse en série alors que la page répond : le
+         * canal est bloqué, pas les fiches. Le worker s'arrête ET demande au
+         * backend de couper durablement — sa propre veille ne survivrait pas au
+         * prochain redémarrage de conteneur, un compte restreint si.
+         *
+         * C'est le seul cas où réessayer est PIRE que ne rien faire : chaque
+         * tentative sous restriction est une infraction de plus.
+         */
+        case 'halt':
+          console.error(`[whatsapp] disjoncteur : ${outcome.refusals} refus consécutifs [${outcome.kind}] — arrêt des envois.`);
+          await api.post('/internal/whatsapp/halt', {
+            reason: `${outcome.refusals} envois refusés d'affilée alors que la session répondait — dernière erreur : ${String(err.message || err)}`.slice(0, 500),
+          }).catch((e) => console.warn('[whatsapp] coupure non transmise au backend :', e.message));
+          await haltSending(`${outcome.refusals} envois refusés d'affilée — restriction de compte probable`);
+
+          return IDLE_POLL_MS;
 
         case 'reload':
           console.warn(`[whatsapp] ${outcome.pageFailures} échecs d'envoi consécutifs imputables à la page — rechargement (tentative ${outcome.reloads}/${MAX_PAGE_RELOADS}).`);
@@ -878,6 +980,9 @@ app.get('/health', (_req, res) => {
     sending_suspended: suspended,
     suspended_until: suspended ? new Date(sendingSuspendedUntil).toISOString() : null,
     suspension_reason: suspended ? suspensionReason : null,
+    // Refus consécutifs de WhatsApp : au seuil, le disjoncteur coupe le relais.
+    // Un compteur qui grimpe est le signe avant-coureur d'une restriction.
+    refusal_streak: recovery.refusalStreak(),
   });
 });
 

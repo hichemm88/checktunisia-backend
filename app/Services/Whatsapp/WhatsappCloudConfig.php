@@ -62,6 +62,21 @@ final class WhatsappCloudConfig
     }
 
     /**
+     * Variables absentes parmi les seules nécessaires à l'ENVOI.
+     *
+     * Exiger les secrets du webhook pour envoyer une fiche de test serait
+     * confondre émettre et recevoir : on peut vouloir éprouver la chaîne
+     * d'envoi avant d'avoir enregistré le webhook, et c'est même l'ordre
+     * naturel de mise en service.
+     *
+     * @return array<int,string>
+     */
+    public static function missingToSend(): array
+    {
+        return self::absentIn(self::REQUIRED_TO_SEND);
+    }
+
+    /**
      * Variables absentes parmi celles qu'exigent les commandes
      * d'administration — en plus de celles de l'envoi.
      *

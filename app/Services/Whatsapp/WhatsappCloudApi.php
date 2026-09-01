@@ -3,6 +3,7 @@
 namespace App\Services\Whatsapp;
 
 use App\Contracts\DeliveryResult;
+use App\Services\Delivery\TransientDeliveryFailure;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -81,6 +82,63 @@ class WhatsappCloudApi
     }
 
     /**
+     * Téléverse un média et renvoie son identifiant, valable 30 jours.
+     *
+     * La Cloud API n'accepte aucune pièce jointe en ligne : il faut cet appel
+     * préalable à /media. Rien n'est mis en cache — une fiche n'est envoyée
+     * qu'une fois, et un identifiant périmé coûterait plus cher à diagnostiquer
+     * que le téléversement à refaire.
+     *
+     * Lève TransientDeliveryFailure plutôt que de renvoyer un DeliveryResult :
+     * l'échec survient pendant la PRÉPARATION, la fiche est intacte et
+     * repartira au prochain tour. Le confondre avec un refus de Meta ferait
+     * marquer « définitivement échouée » une fiche que rien n'empêche
+     * d'envoyer — sur un canal légal, la nuance décide si la fiche part ou non.
+     *
+     * @throws TransientDeliveryFailure
+     */
+    public function uploadMedia(string $contents, string $filename, string $mimeType = 'application/pdf'): string
+    {
+        if (! $this->isConfigured()) {
+            throw new TransientDeliveryFailure('Cloud API non configurée : téléversement impossible.');
+        }
+
+        try {
+            $response = $this->client()
+                ->attach('file', $contents, $filename, ['Content-Type' => $mimeType])
+                ->post($this->graph($this->phoneNumberId().'/media'), [
+                    'messaging_product' => 'whatsapp',
+                ]);
+        } catch (\Throwable $e) {
+            throw new TransientDeliveryFailure('Téléversement de la fiche impossible : '.$e->getMessage());
+        }
+
+        $id = $response->successful() ? $response->json('id') : null;
+
+        if (blank($id)) {
+            $code = $response->json('error.code');
+            $message = $response->json('error.message');
+
+            Log::warning('[whatsapp-cloud] téléversement refusé', [
+                'http' => $response->status(),
+                'code' => $code,
+                // Le nom du fichier porte le nom du voyageur : on ne le
+                // journalise pas. Sa taille suffit au diagnostic.
+                'bytes' => strlen($contents),
+            ]);
+
+            throw new TransientDeliveryFailure(
+                'Téléversement de la fiche refusé : '.WhatsappCloudErrors::describe(
+                    is_numeric($code) ? (int) $code : null,
+                    is_string($message) ? $message : 'HTTP '.$response->status(),
+                )
+            );
+        }
+
+        return (string) $id;
+    }
+
+    /**
      * Modèles déclarés sur le compte, indexés par « nom:langue ».
      *
      * @return array<string,array<string,mixed>>
@@ -109,6 +167,80 @@ class WhatsappCloudApi
         }
 
         return $indexed;
+    }
+
+    /**
+     * Téléverse un fichier d'EXEMPLE et renvoie son `header_handle`.
+     *
+     * À ne pas confondre avec `uploadMedia()`, bien que les deux « téléversent
+     * un PDF ». Ce sont deux API distinctes, sur deux objets différents :
+     *
+     *  - `/{phone_number_id}/media` sert à ENVOYER une pièce jointe dans un
+     *    message. Renvoie un identifiant valable 30 jours.
+     *  - `/{app_id}/uploads` (Resumable Upload) sert à faire APPROUVER un
+     *    modèle dont l'en-tête est un média. Renvoie un handle permanent, seul
+     *    format accepté dans le champ `example.header_handle`.
+     *
+     * Sans ce handle, Meta REFUSE la création d'un modèle à en-tête DOCUMENT.
+     * C'est le genre de détail qui ne se découvre qu'en essuyant le refus.
+     *
+     * Deux temps : ouvrir une session d'envoi, puis pousser les octets.
+     *
+     * @return string handle à placer dans example.header_handle
+     *
+     * @throws \RuntimeException
+     */
+    public function uploadTemplateSample(string $contents, string $filename, string $mimeType = 'application/pdf'): string
+    {
+        $appId = config('whatsapp.cloud.app_id');
+
+        if (blank($appId)) {
+            throw new \RuntimeException(
+                'WHATSAPP_APP_ID est requis pour téléverser l\'exemple de média du modèle.'
+            );
+        }
+
+        // 1. Session d'envoi. Le jeton d'application, et non celui de
+        //    l'utilisateur système : l'objet visé est l'app, pas le numéro.
+        $appToken = $appId.'|'.config('whatsapp.cloud.app_secret');
+
+        $session = Http::acceptJson()
+            ->timeout((int) config('whatsapp.cloud.timeout', 30))
+            ->post($this->graph($appId.'/uploads'), [
+                'file_name' => $filename,
+                'file_length' => strlen($contents),
+                'file_type' => $mimeType,
+                'access_token' => $appToken,
+            ]);
+
+        $sessionId = $session->json('id');
+
+        if (! $session->successful() || blank($sessionId)) {
+            throw new \RuntimeException(
+                'Ouverture de la session de téléversement refusée : '.$this->describeFailure($session)
+            );
+        }
+
+        // 2. Les octets. `file_offset: 0` — un seul morceau : nos exemples font
+        //    quelques dizaines de kilo-octets, la reprise n'a pas d'objet.
+        $upload = Http::withHeaders([
+            'Authorization' => 'OAuth '.$appToken,
+            'file_offset' => '0',
+            'Content-Type' => $mimeType,
+        ])
+            ->timeout((int) config('whatsapp.cloud.timeout', 30))
+            ->withBody($contents, $mimeType)
+            ->post($this->graph(ltrim((string) $sessionId, '/')));
+
+        $handle = $upload->json('h');
+
+        if (! $upload->successful() || blank($handle)) {
+            throw new \RuntimeException(
+                'Téléversement de l\'exemple refusé : '.$this->describeFailure($upload)
+            );
+        }
+
+        return (string) $handle;
     }
 
     /**

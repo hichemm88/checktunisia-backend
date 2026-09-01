@@ -68,7 +68,7 @@ class WhatsappAlertService
         //
         // Cache::add est atomique (écrit seulement si absent) : deux appels
         // simultanés ne peuvent pas produire deux emails.
-        if (! Cache::add($this->outageKey($status, $state), true, now()->addDays(7))) {
+        if (!Cache::add($this->outageKey($status, $state), true, now()->addDays(7))) {
             Log::info('[whatsapp] alerte déjà envoyée pour cet événement de session — email supprimé.');
 
             return;
@@ -89,7 +89,7 @@ class WhatsappAlertService
          * n'est pas perdue de vue pour autant — `whatsapp:check-health` la
          * reprend toutes les 10 minutes.
          */
-        if (! $needsPairing && ! Cache::add('whatsapp:alerted:floor', true, now()->addHour())) {
+        if (!$needsPairing && !Cache::add('whatsapp:alerted:floor', true, now()->addHour())) {
             Log::info('[whatsapp] coupure signalée il y a moins d\'une heure — email supprimé (la panne reste suivie).');
 
             return;
@@ -262,6 +262,35 @@ class WhatsappAlertService
     }
 
     /**
+     * Disjoncteur déclenché : WhatsApp refuse les envois alors que la session
+     * fonctionne. Presque toujours une restriction de compte.
+     *
+     * L'alerte dit explicitement de NE PAS relancer tout de suite : le réflexe
+     * naturel (« Reprendre », « Renvoyer tout ») est ici le geste qui transforme
+     * une suspension de quelques heures en bannissement définitif du numéro.
+     */
+    public function relayHalted(?string $reason, WhatsappSessionState $state): void
+    {
+        $number = $state->phone_number ? ' ('.$state->phone_number.')' : '';
+
+        $this->dispatch(
+            'WhatsApp Qayed — relais coupé automatiquement',
+            "Le relais WhatsApp a été mis en pause automatiquement : plusieurs envois d'affilée ont été "
+            ."refusés alors que la session était connectée.\n\n"
+            .'Motif : '.($reason ?? '—')."\n"
+            ."Numéro émetteur{$number}\n\n"
+            ."C'est la signature d'une restriction de compte imposée par WhatsApp. Les fiches sont "
+            ."conservées en attente, rien n'est perdu.\n\n"
+            .'NE RELANCEZ PAS tout de suite. Chaque nouvelle tentative pendant une restriction est une '
+            ."infraction supplémentaire, et c'est ainsi qu'une suspension de quelques heures devient un "
+            ."bannissement définitif du numéro.\n\n"
+            .'Vérifiez d\'abord l\'état du compte dans WhatsApp sur le téléphone émetteur. Une fois la '
+            .'restriction levée, reprenez avec « Reprendre » : les envois repartiront à cadence réduite.',
+            SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
+        );
+    }
+
+    /**
      * @param  string|null  $ctaButton  bouton pré-rendu (SystemMailer::ctaButton) inséré sous le texte.
      */
     private function dispatch(string $subject, string $body, ?string $ctaButton = null): void
@@ -285,7 +314,7 @@ class WhatsappAlertService
 
             // Push (best-effort — seuls les admins ayant l'app mobile en ont)
             $tokens = DeviceToken::whereIn('user_id', $admins->pluck('id'))->pluck('token')->all();
-            if (! empty($tokens)) {
+            if (!empty($tokens)) {
                 dispatch(new SendExpoPushJob(array_values(array_unique($tokens)), $subject, $body, [
                     'type' => 'whatsapp_alert',
                 ]))->afterResponse();

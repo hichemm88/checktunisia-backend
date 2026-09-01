@@ -180,11 +180,18 @@ class ObservabilityTest extends TestCase
                     'queue'     => ['driver', 'pending', 'failed_total'],
                     'scheduler' => ['last_run_at', 'stale'],
                     'whatsapp'  => ['pending', 'failed', 'sent'],
+                    'webauthn'  => ['rp_id', 'origins', 'user_verification', 'credentials'],
                     'checked_at',
                 ],
             ]);
 
         $this->assertTrue($response->json('data.database.reachable'));
+
+        // La configuration WebAuthn effective doit être lisible : une origine
+        // légitime absente de la liste ne se voit autrement que dans le
+        // journal d'audit, une fois l'utilisateur déjà bloqué.
+        $this->assertIsArray($response->json('data.webauthn.origins'));
+        $this->assertNotEmpty($response->json('data.webauthn.rp_id'));
         // failed_jobs existe (migration 2026_07_26) : -1 signalerait une table absente.
         $this->assertGreaterThanOrEqual(0, $response->json('data.queue.failed_total'));
     }

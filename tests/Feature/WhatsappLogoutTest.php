@@ -2,9 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Mail\SystemMail;
+use App\Models\User;
 use App\Models\WhatsappSessionState;
+use App\Services\Whatsapp\WhatsappAlertService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
 /**
@@ -38,7 +42,7 @@ class WhatsappLogoutTest extends TestCase
         Mail::fake();
     }
 
-    private function report(string $status, ?string $reason = null): \Illuminate\Testing\TestResponse
+    private function report(string $status, ?string $reason = null): TestResponse
     {
         return $this->withHeaders($this->workerHeaders())
             ->postJson('/api/v1/internal/whatsapp/session', array_filter([
@@ -94,6 +98,26 @@ class WhatsappLogoutTest extends TestCase
 
         $this->assertSame(WhatsappSessionState::STATUS_READY, $state->status);
         $this->assertNull($state->revoked_at, 'une session reprise n\'est plus révoquée');
+
+        /*
+         * La session repart, mais PAS les envois.
+         *
+         * Ce test affirmait `canDispatch()` : la file reprenait seule dès le
+         * scan du QR. Le 17/08/2026 a montré ce que ça coûte — Meta restreint le
+         * numéro 6 h, révoque l'appareil à la seconde où la restriction expire,
+         * et 45 fiches attendaient de se déverser dans un canal qui venait
+         * d'éjecter l'émetteur. Une révocation n'est jamais anodine ; reprendre
+         * demande désormais un humain, qui a d'abord vérifié l'état du compte
+         * sur le téléphone.
+         *
+         * Une reconnexion ORDINAIRE, elle, ne pause toujours rien — voir
+         * WhatsappRelayTest::test_an_ordinary_reconnection_does_not_pause_the_relay.
+         */
+        $this->assertTrue($state->paused, 'un ré-appairage après révocation laisse le relais en pause');
+        $this->assertFalse($state->canDispatch());
+
+        // Et le geste humain rouvre bien le canal.
+        $state->forceFill(['paused' => false])->save();
         $this->assertTrue($state->canDispatch());
     }
 
@@ -161,16 +185,16 @@ class WhatsappLogoutTest extends TestCase
     // commande planifiée whatsapp:check-health (toutes les 10 min). Chacun avait
     // sa propre déduplication, et aucune ne portait sur l'ÉVÉNEMENT lui-même.
 
-    private function admin(): \App\Models\User
+    private function admin(): User
     {
-        return \App\Models\User::factory()->platformAdmin()->create();
+        return User::factory()->platformAdmin()->create();
     }
 
     /** Nombre d'emails d'alerte réellement partis. */
     private function sentAlerts(): int
     {
         $count = 0;
-        Mail::assertSent(\App\Mail\SystemMail::class, function () use (&$count) {
+        Mail::assertSent(SystemMail::class, function () use (&$count) {
             $count++;
 
             return true;
@@ -190,7 +214,7 @@ class WhatsappLogoutTest extends TestCase
         // La commande planifiée passe et constate la même panne, avec son
         // propre libellé. Elle ne doit pas produire un second email.
         $state = WhatsappSessionState::current()->fresh();
-        app(\App\Services\Whatsapp\WhatsappAlertService::class)
+        app(WhatsappAlertService::class)
             ->sessionDown($state->status, 'La session n\'est plus opérationnelle depuis 20 min.', $state);
 
         $this->assertSame(1, $this->sentAlerts());

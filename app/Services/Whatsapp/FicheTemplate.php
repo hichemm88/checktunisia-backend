@@ -23,21 +23,44 @@ use App\Models\WhatsappSendLog;
  * Ces contraintes ne sont pas cosmétiques : une variable mal formée fait
  * échouer la fiche entière, définitivement, pour un espace en trop.
  *
- * Changement de conception assumé par rapport au relais WhatsApp Web : la
- * photo du document ne part PLUS dans WhatsApp. Un modèle ne porte qu'un seul
- * média et l'envoi hors fenêtre de 24 h impose le modèle ; le destinataire
- * consulte la fiche complète, pièces comprises, derrière le bouton.
+ * ── La forme du message, et pourquoi elle est hybride ──────────────────────
+ *
+ * Le modèle porte trois choses, chacune pour une raison distincte :
+ *
+ *  1. Un EN-TÊTE DOCUMENT : le PDF de la fiche, pièce d'identité comprise.
+ *     C'est ce qui rétablit la parité avec le relais WhatsApp Web, qui
+ *     envoyait la photo du document — et c'est le seul moyen de faire tenir
+ *     une fiche multi-ligne dans un modèle, puisqu'aucune variable ne peut
+ *     contenir de retour à la ligne.
+ *  2. Un CORPS résumé : le destinataire trie dans un fil unique, il doit
+ *     savoir de quoi il s'agit sans ouvrir la pièce jointe.
+ *  3. Un BOUTON URL : la fiche dans Qayed, pour l'historique et le contexte
+ *     que le PDF ne porte pas.
+ *
+ * Le nom de l'établissement est la PREMIÈRE variable du corps, et non un
+ * en-tête texte : l'en-tête est occupé par le document, et un modèle Meta n'en
+ * a qu'un.
  */
 class FicheTemplate
 {
     /** Nombre de variables du corps, tel qu'approuvé chez Meta. */
-    public const BODY_VARIABLES = 8;
+    public const BODY_VARIABLES = 9;
+
+    /**
+     * Longueur maximale d'une variable.
+     *
+     * Meta plafonne la taille du message rendu ; un nom d'établissement collé
+     * depuis un tableur, ou une adresse à rallonge, suffisent à le dépasser et
+     * à faire refuser la fiche ENTIÈRE. Couper ici coûte trois points de
+     * suspension, ne pas couper coûte la transmission.
+     */
+    private const MAX_VARIABLE_LENGTH = 200;
 
     /**
      * Variables de la fiche d'un voyageur.
      *
      * @param  string  $ficheToken  jeton public de la ligne d'envoi (suffixe du bouton)
-     * @return array{header: array<int,string>, body: array<int,string>, button: array<int,string>}
+     * @return array{body: array<int,string>, button: array<int,string>}
      */
     public static function params(CheckIn $checkIn, Guest $guest, string $ficheToken): array
     {
@@ -49,10 +72,10 @@ class FicheTemplate
             : $companions->count().' ('.$fields['companions'].')';
 
         return [
-            'header' => [
-                self::clean(mb_strtoupper((string) ($checkIn->hotel?->name ?? 'Propriété'))),
-            ],
             'body' => [
+                // L'établissement d'abord : le destinataire trie sur ce nom
+                // dans un fil unique, c'est la première chose qu'il cherche.
+                self::clean(mb_strtoupper((string) ($checkIn->hotel?->name ?? 'Propriété'))),
                 self::clean(self::address($checkIn)),
                 self::clean(trim($fields['last_name'].' '.$fields['first_name'])),
                 self::clean($fields['nationality']),
@@ -83,19 +106,23 @@ class FicheTemplate
     /**
      * Fiche factice du bouton « message test » de l'administration.
      *
-     * Le modèle étant figé, un test ne peut pas préfixer « [TEST] » dans le
-     * corps sans changer les variables : la mention part donc là où elle reste
-     * lisible, dans le nom d'établissement de l'en-tête.
+     * Le modèle étant figé, la mention « [TEST] » ne peut pas être une ligne
+     * de plus : elle est préfixée au nom d'établissement, première variable du
+     * corps, où elle reste la première chose lue.
      *
-     * @return array{header: array<int,string>, body: array<int,string>, button: array<int,string>}
+     * @return array{body: array<int,string>, button: array<int,string>}
      */
     public static function testParams(?string $propertyName = null, string $ficheToken = 'test'): array
     {
         $now = now('Africa/Tunis');
 
         return [
-            'header' => ['[TEST] '.mb_strtoupper($propertyName ?? 'QAYED DEMO')],
             'body' => [
+                // `clean()` ici aussi : le nom vient de la base, il peut
+                // contenir un saut de ligne ou une rafale d'espaces. Une fiche
+                // de TEST qui échoue en 132012 ferait conclure à une panne du
+                // canal — le pire diagnostic possible au moment de la bascule.
+                self::clean('[TEST] '.mb_strtoupper((string) ($propertyName ?? 'QAYED DEMO'))),
                 '12 rue de l\'Exemple, Tunis',
                 'EXEMPLE Voyageur',
                 'Tunisie',
@@ -118,7 +145,7 @@ class FicheTemplate
      * l'hébergeur a pu corriger le nom du voyageur depuis l'enfilage, et c'est
      * la fiche corrigée qui doit partir.
      *
-     * @return array{header: array<int,string>, body: array<int,string>, button: array<int,string>}|null
+     * @return array{body: array<int,string>, button: array<int,string>}|null
      *                                                                                                   null si la fiche n'est plus reconstituable (check-in ou voyageur supprimé)
      */
     public static function paramsForJob(WhatsappSendLog $job): ?array
@@ -145,17 +172,29 @@ class FicheTemplate
      * Le composant `button` porte `sub_type: url` et `index: "0"` : le modèle
      * n'a qu'un bouton, et Meta indexe les boutons à partir de zéro.
      *
-     * @param  array{header?: array<int,string>, body?: array<int,string>, button?: array<int,string>}  $params
+     * L'en-tête est un DOCUMENT, jamais du texte. Il est OBLIGATOIRE : un
+     * modèle approuvé avec en-tête média est refusé (132000) si l'envoi ne
+     * fournit pas le média. C'est pourquoi `$document` n'a pas de valeur par
+     * défaut utilisable — l'appelant doit avoir téléversé la pièce.
+     *
+     * @param  array{body?: array<int,string>, button?: array<int,string>}  $params
+     * @param  array{id: string, filename: string}|null  $document  média téléversé (/media)
      * @return array<int,array<string,mixed>>
      */
-    public static function components(array $params): array
+    public static function components(array $params, ?array $document = null): array
     {
         $components = [];
 
-        if (! empty($params['header'])) {
+        if ($document !== null) {
             $components[] = [
                 'type' => 'header',
-                'parameters' => self::textParameters($params['header']),
+                'parameters' => [[
+                    'type' => 'document',
+                    'document' => [
+                        'id' => $document['id'],
+                        'filename' => $document['filename'],
+                    ],
+                ]],
             ];
         }
 
@@ -196,10 +235,19 @@ class FicheTemplate
      */
     private static function clean(?string $value): string
     {
+        // Un seul passage écrase sauts de ligne, tabulations et espaces
+        // multiples : les trois formes que Meta refuse, pour le message
+        // ENTIER et pas seulement pour la variable fautive.
         $flat = preg_replace('/\s+/u', ' ', (string) $value);
         $flat = trim((string) $flat);
 
-        return $flat !== '' ? $flat : '—';
+        if ($flat === '') {
+            return '—';
+        }
+
+        return mb_strlen($flat) > self::MAX_VARIABLE_LENGTH
+            ? mb_substr($flat, 0, self::MAX_VARIABLE_LENGTH - 1).'…'
+            : $flat;
     }
 
     /**

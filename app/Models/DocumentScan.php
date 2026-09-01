@@ -24,14 +24,52 @@ class DocumentScan extends Model
         // Copie compressée en base (base64) — le disque Railway est éphémère,
         // les fichiers de scans disparaissent à chaque redéploiement.
         'image_data',
+        // Cadre du document dans la photo (fractions 0–1), détecté une fois
+        // puis mémorisé — la même pièce est rendue par trois chemins.
+        'crop_box', 'crop_detected_at',
     ];
 
     protected $hidden = ['file_path', 'file_hash', 'image_data'];
 
+    /**
+     * Scan illustrant la fiche de police d'un voyageur.
+     *
+     * Résolution partagée par le relais WhatsApp et l'export PDF : les deux
+     * doivent montrer LA MÊME pièce, faute de quoi une fiche transmise par un
+     * canal ne serait pas la même que par l'autre.
+     *
+     * Le repli sur « n'importe quel scan du check-in » est réservé au séjour à
+     * UN seul voyageur — les premiers scans n'étaient pas rattachés à un
+     * voyageur, et sans ce repli leurs fiches partaient sans photo. Au-delà d'un
+     * voyageur, mieux vaut aucune photo qu'une pièce d'identité attribuée à la
+     * mauvaise personne.
+     */
+    public static function forFiche(CheckIn $checkIn, Guest $guest): ?self
+    {
+        $forGuest = static::query()
+            ->where('check_in_id', $checkIn->id)
+            ->where('guest_id', $guest->id)
+            ->latest('created_at')
+            ->first();
+
+        if ($forGuest) {
+            return $forGuest;
+        }
+
+        if ($checkIn->guests->count() <= 1) {
+            return static::query()
+                ->where('check_in_id', $checkIn->id)
+                ->latest('created_at')
+                ->first();
+        }
+
+        return null;
+    }
+
     /** Octets JPEG de la copie compressée stockée en base (base64 → binaire). */
     public function imageBytes(): ?string
     {
-        if (! $this->image_data) {
+        if (!$this->image_data) {
             return null;
         }
 
@@ -44,6 +82,8 @@ class DocumentScan extends Model
     {
         return [
             'ocr_raw_result' => 'array',
+            'crop_box' => 'array',
+            'crop_detected_at' => 'datetime',
             'ocr_confidence' => 'float',
             'ocr_processed_at' => 'datetime',
         ];

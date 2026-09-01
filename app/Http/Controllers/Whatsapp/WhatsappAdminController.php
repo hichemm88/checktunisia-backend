@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Whatsapp;
 
 use App\Http\Controllers\Controller;
+use App\Models\AuthorityUserProfile;
 use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
 use App\Services\Delivery\DeliveryChannelManager;
@@ -69,6 +70,8 @@ class WhatsappAdminController extends Controller
             ->groupBy('status')
             ->pluck('c', 'status');
 
+        $throttle = $this->outbox->throttle($state);
+
         return response()->json(['data' => [
             'enabled' => $this->outbox->enabled(),
             'session' => $state->status,
@@ -76,11 +79,27 @@ class WhatsappAdminController extends Controller
             'paused' => $state->paused,
             'last_ready_at' => $state->last_ready_at,
             'heartbeat_at' => $state->heartbeat_at,
+            // Cadence en vigueur. Sans ça, une file bridée par le plafond
+            // horaire est indiscernable d'une file en panne : « 14 en attente »
+            // et rien qui part, sans la moindre explication à l'écran.
+            'throttle' => [
+                'sending' => $throttle['allowed'],
+                'warmup' => $throttle['warmup'],
+                'sent_last_hour' => $throttle['sent_last_hour'],
+                'max_per_hour' => $throttle['max_per_hour'],
+                'min_interval_seconds' => $throttle['min_interval_seconds'],
+                'next_slot_at' => $throttle['next_slot_at'],
+                'paired_at' => $state->paired_at,
+            ],
             'queue' => [
                 'pending' => (int) ($counts[WhatsappSendLog::STATUS_PENDING] ?? 0),
                 'sent' => (int) ($counts[WhatsappSendLog::STATUS_SENT] ?? 0),
                 'failed' => (int) ($counts[WhatsappSendLog::STATUS_FAILED] ?? 0),
                 'cancelled' => (int) ($counts[WhatsappSendLog::STATUS_CANCELLED] ?? 0),
+                // Fiches que « Renvoyer tout » débloquerait : échouées + en
+                // attente d'un backoff (jusqu'à 4 h). Sans ce compteur, le bouton
+                // restait caché alors que la file était figée.
+                'stuck' => $this->outbox->stuckCount(),
             ],
             /*
              | Pourquoi rien ne part.
@@ -134,7 +153,7 @@ class WhatsappAdminController extends Controller
 
         // Résolution destinataire (JID → nom d'agent) : la plupart des envois
         // vont désormais à un agent précis, l'admin doit voir lequel.
-        $profilesByNumber = \App\Models\AuthorityUserProfile::whereNotNull('whatsapp_number')
+        $profilesByNumber = AuthorityUserProfile::whereNotNull('whatsapp_number')
             ->with(['user:id,first_name,last_name', 'organization:id,name'])
             ->get()
             ->keyBy(fn ($p) => preg_replace('/\D+/', '', (string) $p->whatsapp_number));
@@ -200,7 +219,7 @@ class WhatsappAdminController extends Controller
     {
         $data = $request->validate(['property_name' => 'nullable|string|max:120']);
 
-        if (! $this->outbox->enabled()) {
+        if (!$this->outbox->enabled()) {
             return response()->json([
                 'data' => null,
                 'errors' => [['code' => 'WHATSAPP_DISABLED', 'message' => 'Le relais WhatsApp est désactivé (WHATSAPP_POLICE_ENABLED=false ou destinataire absent).', 'field' => null]],
@@ -225,7 +244,12 @@ class WhatsappAdminController extends Controller
     public function resume(): JsonResponse
     {
         $state = WhatsappSessionState::current();
-        $state->forceFill(['paused' => false])->save();
+        // `paused` ne couvrait que la pause ADMIN. Le worker a sa propre veille
+        // (30 min après échecs répétés), interne à son processus : « Reprendre »
+        // ne la levait pas, et rien d'autre ne le pouvait — il fallait attendre.
+        // L'horodatage est relayé par control() ; le worker en déduit qu'une
+        // reprise a été demandée après le début de sa veille, et la lève.
+        $state->forceFill(['paused' => false, 'resume_requested_at' => now()])->save();
 
         return response()->json(['data' => ['paused' => false]]);
     }

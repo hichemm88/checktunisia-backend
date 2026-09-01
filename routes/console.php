@@ -1,5 +1,9 @@
 <?php
 
+use App\Services\Observability\SchedulerHeartbeat;
+use App\Services\Webauthn\ChallengeStore;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schedule;
 
 // Notify hotel admins about expiring subscriptions — runs daily at 8:00 AM
@@ -35,6 +39,21 @@ Schedule::command('checkins:notify-pending')->everyTenMinutes()->withoutOverlapp
 // Remind staff about active stays due to depart today with no check-out — 14:00 Tunis (§8)
 Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone('Africa/Tunis');
 
+// Récapitulatif quotidien des fiches de police, tous établissements du
+// destinataire, envoyé par email pendant que le relais WhatsApp est hors
+// service (numéro émetteur restreint par Meta le 17/08/2026).
+//
+// Inerte sans POLICE_DIGEST_RECIPIENT, et la commande s'éteint d'elle-même
+// après POLICE_DIGEST_UNTIL — un envoi quotidien de pièces d'identité ne doit
+// pas survivre à la raison qui l'a motivé faute qu'on ait pensé à l'arrêter.
+//
+// L'heure est configurable : la retransmission manuelle aux autorités dépend de
+// la disponibilité d'une personne, pas d'une contrainte technique.
+Schedule::command('police:daily-digest')
+    ->dailyAt((string) config('police_digest.hour', '17:00'))
+    ->timezone('Africa/Tunis')
+    ->withoutOverlapping(30);
+
 // MODULE PROVISOIRE — relais WhatsApp : purge horaire des images de documents
 // au-delà de la rétention (24 h). Minimisation des données.
 Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
@@ -45,10 +64,26 @@ Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
 // les fiches. La Cloud API fonctionne en PUSH — sans cette tâche, plus rien ne
 // consomme la file et les fiches s'accumulent en silence.
 //
-// Chaque minute : le débit réel est plafonné par les garde-fous
-// (WHATSAPP_MAX_SENDS_PER_MINUTE), pas par la fréquence de la tâche. La
-// commande est inerte quand le canal actif est en pull.
-Schedule::command('whatsapp:dispatch')->everyMinute()->withoutOverlapping();
+// UNE seule tâche pour cette file. `whatsapp:push` (branche main) et
+// `whatsapp:dispatch` faisaient le même travail avec des garde-fous
+// différents : les laisser cohabiter, c'était deux processus se disputant les
+// mêmes lignes et deux plafonds appliqués chacun dans son coin. Les règles de
+// `whatsapp:push` — cadence avec gigue, disjoncteur sur refus consécutifs —
+// ont été reprises dans `whatsapp:dispatch`, qui porte aussi la bascule, le
+// coupe-circuit et le garde-fou d'arriéré.
+//
+// Chaque minute, mais verrou borné à 15 min : une exécution cadencée dure
+// plusieurs minutes (une fiche toutes les ~45 s), et un processus tué en cours
+// ne doit pas bloquer la file jusqu'au lendemain — le défaut de Laravel est de
+// 24 h. La commande est inerte quand le canal actif est en pull.
+Schedule::command('whatsapp:dispatch')->everyMinute()->withoutOverlapping(15);
+
+// Challenges WebAuthn périmés. Ils sont déjà inutilisables passé leur
+// expiration (et purgés au fil de l'eau à chaque émission) : ce passage
+// quotidien évite simplement que la table enfle sur une longue période creuse.
+Schedule::call(fn () => app(ChallengeStore::class)->pruneExpired())
+    ->name('webauthn-prune-challenges')
+    ->dailyAt('04:30');
 
 // Rapport « prochain check-in » à la demande : inerte tant que non armé
 // (Cache 'checkin_report.watch'), s'auto-désarme après envoi.
@@ -85,7 +120,7 @@ Schedule::command('qayed:db-backup')
     ->onFailure(function () {
         // Filet en plus de la remontée interne de la commande : couvre aussi
         // le cas où le processus meurt avant d'avoir pu se signaler lui-même.
-        \Illuminate\Support\Facades\Log::error('[backup] la tâche planifiée s\'est terminée en échec');
+        Log::error('[backup] la tâche planifiée s\'est terminée en échec');
 
         if (config('sentry.dsn')) {
             \Sentry\captureMessage('Qayed : échec de la tâche planifiée de sauvegarde');
@@ -96,8 +131,8 @@ Schedule::command('qayed:db-backup')
 // invisible : le serveur web répond normalement pendant que la file cesse
 // d'être drainée et que les fiches ne partent plus. Lu par
 // GET /admin/health, qui marque « stale » au-delà de 5 minutes.
-Schedule::call(fn () => \Illuminate\Support\Facades\Cache::put(
-    \App\Services\Observability\SchedulerHeartbeat::CACHE_KEY,
+Schedule::call(fn () => Cache::put(
+    SchedulerHeartbeat::CACHE_KEY,
     now()->toIso8601String(),
     now()->addHour(),
 ))
@@ -120,7 +155,7 @@ Schedule::call(fn () => \Illuminate\Support\Facades\Cache::put(
 // `name` AVANT `withoutOverlapping` : l'inverse lève une LogicException au
 // chargement de ce fichier — donc à CHAQUE commande artisan, y compris
 // `migrate` au démarrage du conteneur.
-Schedule::call(fn () => app(\App\Services\Observability\SchedulerHeartbeat::class)->ping())
+Schedule::call(fn () => app(SchedulerHeartbeat::class)->ping())
     ->name('scheduler-external-probe')
     ->everyFiveMinutes()
     ->withoutOverlapping();

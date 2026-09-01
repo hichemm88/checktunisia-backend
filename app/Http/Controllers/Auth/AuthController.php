@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
+use App\Services\Auth\SessionIssuer;
 use App\Services\Email\SystemMailer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -61,33 +62,8 @@ class AuthController extends Controller
             ]);
         }
 
-        $token = $user->createToken('api-token', ['*'], now()->addHours(8));
-        $hotel = $user->isHotelStaff() ? $user->hotel() : null;
-
         return response()->json([
-            'data' => [
-                'token' => $token->plainTextToken,
-                'token_type' => 'Bearer',
-                'expires_at' => $token->accessToken->expires_at,
-                'user' => [
-                    'id' => $user->id,
-                    'email' => $user->email,
-                    'first_name' => $user->first_name,
-                    'last_name' => $user->last_name,
-                    'phone' => $user->phone,
-                    'role' => $user->primary_role,
-                    'role_org' => $user->role_org,
-                    'hotel' => $hotel ? [
-                        'id' => $hotel->id,
-                        'name' => $hotel->name,
-                        'slug' => $hotel->slug,
-                        'type' => $hotel->type,
-                        'subscription_status' => $hotel->activeSubscription?->status ?? 'none',
-                    ] : null,
-                    'authority_profile' => $this->buildAuthorityProfile($user),
-                    'permissions' => $user->getAllPermissions()->pluck('name'),
-                ],
-            ],
+            'data' => SessionIssuer::issue($user, SessionIssuer::METHOD_PASSWORD),
         ]);
     }
 
@@ -143,28 +119,12 @@ class AuthController extends Controller
     public function me(Request $request): JsonResponse
     {
         $user = $request->user()->load(['roles', 'hotels']);
-        $hotel = $user->isHotelStaff() ? $user->hotel() : null;
 
         return response()->json([
-            'data' => [
-                'id' => $user->id,
-                'email' => $user->email,
-                'first_name' => $user->first_name,
-                'last_name' => $user->last_name,
-                'phone' => $user->phone,
-                'role' => $user->primary_role,
-                'role_org' => $user->role_org,
-                'hotel' => $hotel ? [
-                    'id' => $hotel->id,
-                    'name' => $hotel->name,
-                    'slug' => $hotel->slug,
-                    'type' => $hotel->type,
-                    'subscription_status' => $hotel->activeSubscription?->status ?? 'none',
-                    'subscription_expires_at' => $hotel->activeSubscription?->expires_at,
-                ] : null,
-                'authority_profile' => $this->buildAuthorityProfile($user),
-                'permissions' => $user->getAllPermissions()->pluck('name'),
-            ],
+            'data' => SessionIssuer::userPayload(
+                $user,
+                SessionIssuer::authMethodOf($user->currentAccessToken()),
+            ),
         ]);
     }
 
@@ -301,34 +261,6 @@ class AuthController extends Controller
                 ->numbers()
                 ->symbols()
                 ->uncompromised(),
-        ];
-    }
-
-    /**
-     * Build the authority_profile payload for login/me responses.
-     * Returns null for non-authority users.
-     */
-    private function buildAuthorityProfile(User $user): ?array
-    {
-        if (! $user->isAuthorityUser()) {
-            return null;
-        }
-
-        $profile = $user->authorityProfile()->with('organization')->first();
-        if (! $profile) {
-            return null;
-        }
-
-        $org = $profile->organization;
-
-        return [
-            'org_id' => $org?->id,
-            'org_name' => $org?->name,
-            'org_type' => $org?->type,      // 'ministry' | 'police'
-            'governorate' => $org?->governorate, // null for ministry (national scope)
-            'badge_number' => $profile->badge_number,
-            'rank' => $profile->rank,
-            'expires_at' => $profile->expires_at?->toDateString(),
         ];
     }
 }

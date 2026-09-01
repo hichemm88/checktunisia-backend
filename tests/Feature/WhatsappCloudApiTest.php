@@ -8,6 +8,7 @@ use App\Models\CheckIn;
 use App\Models\Hotel;
 use App\Models\User;
 use App\Models\WhatsappSendLog;
+use App\Models\WhatsappSessionState;
 use App\Services\Whatsapp\FicheTemplate;
 use App\Services\Whatsapp\WhatsappCloudConfig;
 use App\Services\Whatsapp\WhatsappCloudErrors;
@@ -65,6 +66,10 @@ class WhatsappCloudApiTest extends TestCase
             'whatsapp.guard.sending_enabled' => true,
             // Bascule dans le passé : le comportement nominal.
             'whatsapp.guard.cutover_at' => now()->subDay()->toIso8601String(),
+            // Cadence neutralisée : 45 s entre deux envois rendraient la suite
+            // inutilisable. Elle est vérifiée séparément, sur son propre calcul.
+            'whatsapp.min_interval_seconds' => 0,
+            'whatsapp.interval_jitter_ratio' => 0,
         ]);
     }
 
@@ -77,7 +82,7 @@ class WhatsappCloudApiTest extends TestCase
 
         app(WhatsappOutboxService::class)->dispatchPending();
 
-        Http::assertSent(function ($request) {
+        $this->assertTemplateSent(function ($request) {
             // Le texte libre n'aboutit que dans une fenêtre de 24 h ouverte par
             // un message ENTRANT. Personne ne répond à une fiche de police :
             // la fenêtre est toujours fermée, seul le modèle passe.
@@ -95,10 +100,15 @@ class WhatsappCloudApiTest extends TestCase
 
         app(WhatsappOutboxService::class)->dispatchPending();
 
-        Http::assertSent(function ($request) {
+        $this->assertTemplateSent(function ($request) {
             $byType = collect($request['template']['components'])->keyBy('type');
 
-            $this->assertCount(1, $byType['header']['parameters']);
+            // L'en-tête est un DOCUMENT — le PDF de la fiche, pièce d'identité
+            // comprise — et non du texte : c'est ce qui rétablit la parité avec
+            // le relais WhatsApp Web.
+            $this->assertSame('document', $byType['header']['parameters'][0]['type']);
+            $this->assertSame('media-1', $byType['header']['parameters'][0]['document']['id']);
+
             $this->assertCount(FicheTemplate::BODY_VARIABLES, $byType['body']['parameters']);
 
             // Le bouton porte le SUFFIXE de l'URL, pas l'URL entière : la base
@@ -124,10 +134,97 @@ class WhatsappCloudApiTest extends TestCase
         // Meta rejette (132012) toute variable contenant un saut de ligne, une
         // tabulation ou plus de quatre espaces consécutifs. Une fiche perdue
         // pour un espace en trop, c'est une fiche perdue quand même.
-        foreach (array_merge($params['header'], $params['body']) as $value) {
+        foreach ($params['body'] as $value) {
             $this->assertDoesNotMatchRegularExpression('/[\r\n\t]|\s{5,}/u', $value);
             $this->assertNotSame('', $value, 'Meta refuse une variable vide.');
         }
+    }
+
+    public function test_the_fiche_pdf_travels_as_the_template_header(): void
+    {
+        $this->fakeAccepted();
+        $this->completeCheckIn();
+
+        app(WhatsappOutboxService::class)->dispatchPending();
+
+        // Le PDF est téléversé AVANT le message : la Cloud API n'accepte
+        // aucune pièce jointe en ligne.
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/media'));
+
+        $this->assertTemplateSent(function ($request) {
+            $header = collect($request['template']['components'])->firstWhere('type', 'header');
+
+            $this->assertSame('document', $header['parameters'][0]['type']);
+            // Le nom de fichier est ce que le destinataire voit avant d'ouvrir,
+            // dans un fil où toutes les fiches s'empilent.
+            $this->assertStringContainsString('fiche-police', $header['parameters'][0]['document']['filename']);
+
+            return true;
+        });
+    }
+
+    public function test_a_refused_media_upload_is_temporary_never_a_lost_fiche(): void
+    {
+        Http::fake([
+            '*/media' => Http::response(['error' => ['message' => 'Upload failed']], 500),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.X']]], 200),
+        ]);
+
+        $this->completeCheckIn();
+        app(WhatsappOutboxService::class)->dispatchPending();
+
+        $job = WhatsappSendLog::first();
+
+        // Un /media momentanément indisponible ne dit RIEN de la fiche.
+        // La marquer définitivement échouée la perdrait pour de bon.
+        $this->assertSame(WhatsappSendLog::STATUS_PENDING, $job->status);
+        $this->assertNotNull($job->next_attempt_at);
+
+        // Et surtout : rien n'est parti sans sa pièce jointe.
+        Http::assertNotSent(fn ($request) => str_ends_with($request->url(), '/messages'));
+    }
+
+    public function test_repeated_refusals_trip_the_circuit_breaker(): void
+    {
+        config(['whatsapp.circuit_breaker_failures' => 2]);
+
+        $this->fakeMediaOkAndMessage(Http::response(
+            ['error' => ['code' => 131026, 'message' => 'Receiver incapable']], 400
+        ));
+
+        // Deux destinataires, donc deux refus d'affilée.
+        $this->hotel->whatsappRecipientProfiles()->sync([
+            $this->authorityRecipient('21611111111')->id,
+            $this->authorityRecipient('21622222222')->id,
+        ]);
+
+        $this->completeCheckIn();
+        app(WhatsappOutboxService::class)->dispatchPending();
+
+        // Plusieurs refus alors que l'API répond, c'est la signature d'une
+        // restriction de compte : insister transforme une suspension de
+        // quelques heures en bannissement. Le relais se coupe EN BASE, et la
+        // reprise reste un geste humain.
+        $this->assertTrue(WhatsappSessionState::current()->fresh()->paused);
+    }
+
+    public function test_the_hourly_ceiling_holds_the_queue_back(): void
+    {
+        config(['whatsapp.max_per_hour' => 1]);
+        $this->fakeAccepted();
+
+        $this->hotel->whatsappRecipientProfiles()->sync([
+            $this->authorityRecipient('21611111111')->id,
+            $this->authorityRecipient('21622222222')->id,
+        ]);
+
+        $this->completeCheckIn();
+        app(WhatsappOutboxService::class)->dispatchPending();
+
+        // Le plafond horaire se mesure sur le JOURNAL, pas sur un compteur en
+        // mémoire : un processus qui redémarre ne repart pas de zéro.
+        $this->assertSame(1, WhatsappSendLog::where('status', WhatsappSendLog::STATUS_SENT)->count());
+        $this->assertSame(1, WhatsappSendLog::where('status', WhatsappSendLog::STATUS_PENDING)->count());
     }
 
     // ── Multi-destinataires ──────────────────────────────────────────────────
@@ -140,9 +237,12 @@ class WhatsappCloudApiTest extends TestCase
         ]);
 
         $wamids = ['wamid.A', 'wamid.B'];
-        Http::fake(function () use (&$wamids) {
-            return Http::response(['messages' => [['id' => array_shift($wamids)]]], 200);
-        });
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => function () use (&$wamids) {
+                return Http::response(['messages' => [['id' => array_shift($wamids)]]], 200);
+            },
+        ]);
 
         $this->completeCheckIn();
 
@@ -174,11 +274,14 @@ class WhatsappCloudApiTest extends TestCase
             Http::response(['error' => ['code' => 131026, 'message' => 'Receiver incapable']], 400),
             Http::response(['messages' => [['id' => 'wamid.OK']]], 200),
         ];
-        // Fermeture classique et reference : une fonction flechee capture par
-        // VALEUR, chaque appel renverrait alors la meme premiere reponse.
-        Http::fake(function () use (&$responses) {
-            return array_shift($responses);
-        });
+        // Fermeture classique et référence : une fonction fléchée capture par
+        // VALEUR, chaque appel renverrait alors la même première réponse.
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => function () use (&$responses) {
+                return array_shift($responses);
+            },
+        ]);
 
         $this->completeCheckIn();
         app(WhatsappOutboxService::class)->dispatchPending();
@@ -221,9 +324,9 @@ class WhatsappCloudApiTest extends TestCase
 
     public function test_a_permanent_error_fails_immediately_instead_of_retrying_for_24h(): void
     {
-        Http::fake(['graph.facebook.com/*' => Http::response(
+        $this->fakeMediaOkAndMessage(Http::response(
             ['error' => ['code' => 131026, 'message' => 'Receiver incapable']], 400
-        )]);
+        ));
 
         $this->completeCheckIn();
         app(WhatsappOutboxService::class)->dispatchPending();
@@ -239,9 +342,9 @@ class WhatsappCloudApiTest extends TestCase
 
     public function test_a_rate_limit_error_pauses_every_send_not_just_this_one(): void
     {
-        Http::fake(['graph.facebook.com/*' => Http::response(
+        $this->fakeMediaOkAndMessage(Http::response(
             ['error' => ['code' => 131049, 'message' => 'Held for quality']], 400
-        )]);
+        ));
 
         $this->completeCheckIn();
         app(WhatsappOutboxService::class)->dispatchPending();
@@ -460,7 +563,7 @@ class WhatsappCloudApiTest extends TestCase
         $token = WhatsappSendLog::first()->public_token;
         $this->assertNotNull($token);
 
-        Http::assertSent(function ($request) use ($token) {
+        $this->assertTemplateSent(function ($request) use ($token) {
             $button = collect($request['template']['components'])->firstWhere('type', 'button');
 
             // Le bouton porte le JETON de l'envoi, pas l'identifiant du
@@ -721,9 +824,39 @@ class WhatsappCloudApiTest extends TestCase
 
     // ── Aides ────────────────────────────────────────────────────────────────
 
+    /**
+     * Deux appels par fiche, et pas un seul : /media téléverse le PDF, puis
+     * /messages envoie le modèle qui le référence. Simuler le second sans le
+     * premier ferait échouer tous les envois sur un téléversement vide — et
+     * l'échec ressemblerait à un problème de message.
+     */
     private function fakeAccepted(string $wamid = 'wamid.TEST'): void
     {
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => $wamid]]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => $wamid]]], 200),
+        ]);
+    }
+
+    /** Téléversement OK, message refusé — pour éprouver la gestion d'erreur. */
+    private function fakeMediaOkAndMessage(mixed $message): void
+    {
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => $message,
+        ]);
+    }
+
+    /** L'envoi du modèle, isolé du téléversement. */
+    private function assertTemplateSent(\Closure $assertion): void
+    {
+        Http::assertSent(function ($request) use ($assertion) {
+            if (! str_ends_with($request->url(), '/messages')) {
+                return false;
+            }
+
+            return $assertion($request);
+        });
     }
 
     private function completeCheckIn(): CheckIn

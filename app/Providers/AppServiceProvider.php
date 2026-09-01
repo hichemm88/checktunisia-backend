@@ -2,8 +2,10 @@
 
 namespace App\Providers;
 
+use App\Services\Whatsapp\WhatsappCloudConfig;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 
@@ -19,11 +21,16 @@ class AppServiceProvider extends ServiceProvider
             \App\Services\OCR\OcrService::class,
             fn () => new \App\Services\OCR\OcrService((string) config('ocr.driver', 'mock')),
         );
+
+        // Le service WebAuthn construit un sérialiseur Symfony complet à
+        // l'instanciation : une seule fois par requête suffit.
+        $this->app->singleton(\App\Services\Webauthn\WebauthnService::class);
     }
 
     public function boot(): void
     {
         $this->configureRateLimiters();
+        $this->warnOnIncompleteWhatsappConfig();
     }
 
     /**
@@ -45,8 +52,6 @@ class AppServiceProvider extends ServiceProvider
         // l'usage normal mais pour arrêter une boucle folle ou un aspirateur.
         // Repère : le tableau de bord se rafraîchit toutes les 60 s par onglet
         // ouvert, et un check-in complet représente ~10 requêtes.
-        $this->warnOnIncompleteWhatsappConfig();
-
         RateLimiter::for('api', function (Request $request) {
             // Le webhook Meta porte sa propre limite (throttle:whatsapp-webhook),
             // bien plus haute : un lot d'accusés de réception peut dépasser 120
@@ -111,10 +116,28 @@ class AppServiceProvider extends ServiceProvider
         // publique, pas de rationner Meta. La signature, elle, est vérifiée
         // dans le contrôleur : une requête non signée ne coûte qu'un HMAC.
         RateLimiter::for('whatsapp-webhook', fn (Request $request) => Limit::perMinute(300)->by($request->ip()));
+
+        // Cérémonies WebAuthn (émission de challenge, vérification d'assertion).
+        // Ces routes sont publiques : sans limite, elles laisseraient créer des
+        // challenges à volonté et marteler la vérification.
+        //
+        // Plus haut que /auth/login (5/min) à dessein. Une connexion par
+        // passkey légitime coûte DEUX requêtes (options puis vérification) ;
+        // le seul affichage de la page de connexion en consomme une de plus
+        // quand le navigateur propose le remplissage conditionnel ; et une
+        // réception à plusieurs postes partage une seule IP publique. Le
+        // facteur limitant reste cryptographique, pas le débit : une assertion
+        // sans la clé privée ne peut pas être forgée, quel que soit le nombre
+        // d'essais.
+        RateLimiter::for('webauthn', fn (Request $request) => Limit::perMinute(30)->by($this->signature($request)));
     }
 
     /**
      * Canal légal armé mais mal configuré : le dire, fort, à chaque démarrage.
+     *
+     * Appelé depuis boot() et non depuis configureRateLimiters() : ce contrôle
+     * n'a rien à voir avec les limiteurs de débit, et l'enterrer là le rendait
+     * invisible au premier lecteur venu.
      *
      * Volontairement une entrée de journal critique (relayée à Sentry) et NON
      * une exception. Faire tomber l'application pour une variable WhatsApp
@@ -122,21 +145,19 @@ class AppServiceProvider extends ServiceProvider
      * registre : le remède serait pire que le mal.
      *
      * Le déploiement, lui, DOIT échouer — c'est le rôle de
-     * `php artisan whatsapp:check-config`, à placer dans la commande de
-     * démarrage du conteneur. Voir docs/whatsapp-cloud-api.md.
+     * `php artisan whatsapp:check-config`, appelé par docker/start.sh et à
+     * poser en Pre-Deploy Command. Voir docs/whatsapp-cloud-api.md.
      */
     protected function warnOnIncompleteWhatsappConfig(): void
     {
-        if (! \App\Services\Whatsapp\WhatsappCloudConfig::isArmed()) {
+        if (! WhatsappCloudConfig::isArmed()) {
             return;
         }
 
-        $missing = \App\Services\Whatsapp\WhatsappCloudConfig::missing();
+        $missing = WhatsappCloudConfig::missing();
 
         if ($missing !== []) {
-            \Illuminate\Support\Facades\Log::critical(
-                '[whatsapp] '.\App\Services\Whatsapp\WhatsappCloudConfig::explain($missing)
-            );
+            Log::critical('[whatsapp] '.WhatsappCloudConfig::explain($missing));
         }
     }
 

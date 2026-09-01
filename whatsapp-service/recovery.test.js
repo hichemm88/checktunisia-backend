@@ -73,18 +73,55 @@ test('une erreur inconnue reste au niveau de la fiche — le doute ne redémarre
   assert.strictEqual(classifyFailure('erreur sans objet'), 'job');
 });
 
+test("l'injection perdue est une panne de page, pas une fiche fautive", () => {
+  // Constaté en production après un ré-appairage avec un AUTRE numéro : la page
+  // vivait, mais window.WWebJS avait disparu. Classée 'job', la panne ne
+  // recyclait jamais le worker et les fiches en attente échouaient en boucle
+  // jusqu'à l'abandon à 24 h.
+  const lostInjection = [
+    new Error("Evaluation failed: TypeError: Cannot read properties of undefined (reading 'getChat')"),
+    new Error("Cannot read properties of undefined (reading 'createWid')"),
+    new Error("Cannot read properties of undefined (reading 'getMessageModel')"),
+    new Error('Evaluation failed: ReferenceError: WWebJS is not defined'),
+    new Error("Cannot read properties of undefined (reading 'Store')"),
+  ];
+  for (const err of lostInjection) {
+    assert.strictEqual(classifyFailure(err), 'page', err.message);
+  }
+
+  // …sans élargir le filet : un déréférencement quelconque reste une fiche.
+  assert.strictEqual(
+    classifyFailure(new Error("Cannot read properties of undefined (reading 'caption')")),
+    'job',
+  );
+});
+
 // ── Escalade ─────────────────────────────────────────────────────────────────
 
 test('des fiches qui échouent une à une ne provoquent jamais de redémarrage', () => {
   const dataPath = tmpRoot();
   const recovery = createRecovery({ dataPath, maxPageFailures: 3 });
 
-  // Vingt fiches refusées d'affilée : la file Laravel gère leur backoff, le
-  // worker ne se sabote pas pour autant.
+  /*
+   * Vingt fiches refusées d'affilée : la file Laravel gère leur backoff, le
+   * worker ne se sabote pas pour autant — ni rechargement, ni recyclage du
+   * conteneur, le quota de crashs Railway reste intact.
+   *
+   * Ce test affirmait aussi que les vingt rendaient 'continue'. C'est le trou
+   * par lequel une restriction de compte est passée le 17/08/2026 : refuser
+   * vingt fois d'affilée n'est plus une histoire de fiches, et s'obstiner
+   * transforme une suspension de 6 h en bannissement définitif. Le disjoncteur
+   * coupe désormais en cours de route ; la garantie d'origine — ne pas se
+   * saborder — est ce qui reste vérifié ici.
+   */
+  const decisions = new Set();
   for (let i = 0; i < 20; i += 1) {
-    const outcome = recovery.failure(new Error('wid error: invalid wid'));
-    assert.strictEqual(outcome.decision, 'continue');
+    decisions.add(recovery.failure(new Error('wid error: invalid wid')).decision);
   }
+
+  assert.ok(!decisions.has('reload'), 'aucun rechargement de page');
+  assert.ok(!decisions.has('restart'), 'aucun recyclage de conteneur');
+  assert.deepStrictEqual([...decisions].sort(), ['continue', 'halt']);
 });
 
 test('un backend indisponible fait temporiser, pas redémarrer', () => {
@@ -240,4 +277,88 @@ test('les entrées hors fenêtre sont oubliées et le journal ne grossit pas san
 
   // Deux heures plus tard, plus rien ne compte.
   assert.deepStrictEqual(readRestarts(dataPath, { windowMs: 3600000, now: now + 7200000 }), []);
+});
+
+// ── Disjoncteur : restriction de compte ──────────────────────────────────────
+
+test('un refus explicite de WhatsApp est reconnu comme une affaire de compte', () => {
+  const accountErrors = [
+    'Your account is temporarily restricted',
+    'Account has been banned for spam',
+    'Votre compte est actuellement restreint',
+    'Rate limited: too many messages',
+    'too many requests',
+    'not authorized to send messages to this recipient',
+  ];
+
+  for (const message of accountErrors) {
+    assert.strictEqual(classifyFailure(new Error(message)), 'account', message);
+  }
+});
+
+test("un refus de compte coupe le canal dès le premier, sans attendre le seuil", () => {
+  // Réessayer sous restriction n'est pas neutre : chaque tentative est une
+  // infraction de plus. Rien ne justifie d'en accumuler cinq pour s'en assurer.
+  const recovery = createRecovery({ dataPath: tmpRoot(), maxRefusals: 5 });
+  const outcome = recovery.failure(new Error('Your account is temporarily restricted'));
+
+  assert.strictEqual(outcome.kind, 'account');
+  assert.strictEqual(outcome.decision, 'halt');
+});
+
+test('une série de refus muets finit par couper le canal', () => {
+  /*
+   * Le cas réellement observé le 17/08/2026 : le compte est restreint, mais les
+   * refus n'annoncent pas leur cause — ils arrivent en 'job', fiche après
+   * fiche. Le worker les servait toutes, consciencieusement, à raison d'une
+   * infraction par tentative.
+   */
+  const recovery = createRecovery({ dataPath: tmpRoot(), maxRefusals: 3 });
+
+  assert.strictEqual(recovery.failure(new Error('destinataire refusé')).decision, 'continue');
+  assert.strictEqual(recovery.failure(new Error('destinataire refusé')).decision, 'continue');
+
+  const tripped = recovery.failure(new Error('destinataire refusé'));
+  assert.strictEqual(tripped.decision, 'halt');
+  assert.strictEqual(tripped.refusals, 3);
+});
+
+test('le seuil du disjoncteur est pilotable sans redéployer le worker', () => {
+  // Il vient de la config Laravel, relayée par control() à chaque tour.
+  const recovery = createRecovery({ dataPath: tmpRoot(), maxRefusals: 99 });
+
+  assert.strictEqual(recovery.failure(new Error('refus'), { maxRefusals: 2 }).decision, 'continue');
+  assert.strictEqual(recovery.failure(new Error('refus'), { maxRefusals: 2 }).decision, 'halt');
+});
+
+test('un envoi réussi remet le compteur de refus à zéro', () => {
+  // Sans ça, des refus isolés étalés sur des jours finiraient par couper un
+  // canal parfaitement sain.
+  const recovery = createRecovery({ dataPath: tmpRoot(), maxRefusals: 2 });
+
+  assert.strictEqual(recovery.failure(new Error('refus')).decision, 'continue');
+  recovery.success();
+  assert.strictEqual(recovery.refusalStreak(), 0);
+  assert.strictEqual(recovery.failure(new Error('refus')).decision, 'continue');
+});
+
+test('une panne backend ne compte pas comme un refus de WhatsApp', () => {
+  // Laravel indisponible n'est pas Meta qui dit non : couper le relais pour un
+  // redéploiement du backend serait une panne fabriquée de toutes pièces.
+  const recovery = createRecovery({ dataPath: tmpRoot(), maxRefusals: 2 });
+
+  for (let i = 0; i < 5; i += 1) {
+    assert.strictEqual(recovery.failure(new Error('Request failed with status code 502')).decision, 'backoff');
+  }
+  assert.strictEqual(recovery.refusalStreak(), 0);
+});
+
+test('une panne de page garde son chemin de réparation, sans passer par le disjoncteur', () => {
+  // Un renderer pendu se répare par un navigateur neuf. Couper le relais à sa
+  // place laisserait une panne réparable en panne durable.
+  const recovery = createRecovery({ dataPath: tmpRoot(), maxRefusals: 2, maxPageFailures: 2 });
+
+  assert.strictEqual(recovery.failure(new Error('Target closed')).decision, 'continue');
+  assert.strictEqual(recovery.failure(new Error('Target closed')).decision, 'reload');
+  assert.strictEqual(recovery.refusalStreak(), 0);
 });
