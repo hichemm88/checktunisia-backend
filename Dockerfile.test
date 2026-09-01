@@ -23,6 +23,16 @@ RUN docker-php-ext-configure gd --with-jpeg --with-freetype --with-webp \
     zip bcmath mbstring \
     exif pcntl intl gd
 
+# Mémoire : même valeur qu'en production (Dockerfile).
+#
+# Le défaut de 128 Mo était suffisant tant que la suite ne composait aucun PDF.
+# Depuis que le canal Cloud API joint la fiche en pièce jointe, les tests d'envoi
+# passent par DomPDF et dépassent ce plafond : la suite mourait sur « Allowed
+# memory size exhausted », alors que la PRODUCTION, elle, était déjà relevée.
+# Deux environnements qui ne partagent pas leurs limites ne prouvent rien l'un
+# de l'autre.
+RUN echo "memory_limit=512M" > /usr/local/etc/php/conf.d/memory.ini
+
 # Redis
 RUN pecl install redis && docker-php-ext-enable redis
 

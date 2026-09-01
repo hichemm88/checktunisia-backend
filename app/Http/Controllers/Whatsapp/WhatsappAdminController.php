@@ -6,7 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\AuthorityUserProfile;
 use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
+use App\Services\Delivery\DeliveryChannelManager;
+use App\Services\Whatsapp\WhatsappCloudConfig;
 use App\Services\Whatsapp\WhatsappOutboxService;
+use App\Services\Whatsapp\WhatsappSendingGuard;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -22,10 +25,44 @@ class WhatsappAdminController extends Controller
     public function __construct(private WhatsappOutboxService $outbox) {}
 
     /**
-     * État de santé du relais — sans aucun secret (ni le destinataire).
-     * Sert aussi la route publique GET /health/whatsapp.
+     * GET health/whatsapp — route PUBLIQUE, sans session.
+     *
+     * Strict minimum. Elle servait jusqu'ici la même charge utile que l'écran
+     * d'administration : profondeur de file, état de session, motif de la
+     * dernière déconnexion. Rien de tout cela n'est secret au sens d'un
+     * jeton, mais rien de tout cela n'a à être lisible par n'importe qui :
+     * la profondeur de file dit combien de voyageurs ont été enregistrés, et
+     * le motif de blocage décrit notre configuration interne.
+     *
+     * Ce qui reste est ce dont les deux seuls appelants ont besoin : le
+     * front (« puis-je annoncer que la fiche partira ? ») et une sonde
+     * externe (« est-ce que ça va ? »). Le détail vit derrière
+     * GET admin/whatsapp/health, authentifié.
      */
-    public function health(): JsonResponse
+    public function publicHealth(DeliveryChannelManager $channels, WhatsappSendingGuard $guard): JsonResponse
+    {
+        $enabled = $this->outbox->enabled();
+
+        return response()->json(['data' => [
+            'enabled' => $enabled,
+            // Verdict grossier, sans dire pourquoi : « degraded » suffit à
+            // déclencher un regard humain, qui lira le détail côté admin.
+            'status' => match (true) {
+                ! $enabled => 'disabled',
+                $this->blockingReason($channels, $guard) !== null => 'degraded',
+                default => 'ok',
+            },
+        ]]);
+    }
+
+    /**
+     * GET admin/whatsapp/health — état complet, réservé aux administrateurs.
+     *
+     * Aucun secret ici non plus : ni jeton, ni identifiant Meta, ni numéro de
+     * destinataire, ni jeton public de fiche. Des compteurs, un état de
+     * session, et la raison pour laquelle rien ne part.
+     */
+    public function health(DeliveryChannelManager $channels, WhatsappSendingGuard $guard): JsonResponse
     {
         $state = WhatsappSessionState::current();
         $counts = WhatsappSendLog::query()
@@ -64,7 +101,34 @@ class WhatsappAdminController extends Controller
                 // restait caché alors que la file était figée.
                 'stuck' => $this->outbox->stuckCount(),
             ],
+            /*
+             | Pourquoi rien ne part.
+             |
+             | Sans cette information, un canal bloqué par un garde-fou est
+             | indiscernable d'un canal qui n'a rien à envoyer : la file gonfle
+             | en silence, exactement comme pendant le bannissement du relais
+             | Web. Aucun secret ici — un nom de canal, un booléen, une phrase.
+             */
+            'channel' => $channels->active()->name(),
+            'sending_blocked' => $this->blockingReason($channels, $guard) !== null,
+            'blocked_reason' => $this->blockingReason($channels, $guard),
+            // Noms de variables absentes, jamais leurs valeurs : de quoi
+            // corriger sans avoir à deviner, et sans rien divulguer.
+            'missing_config' => WhatsappCloudConfig::missingForAdmin(),
         ]]);
+    }
+
+    /**
+     * Motif de blocage — uniquement quand le canal actif transmet lui-même.
+     *
+     * Les garde-fous (bascule, débit, arriéré) protègent la réputation du
+     * numéro émetteur de la Cloud API. Les appliquer à un canal en pull
+     * afficherait « dégradé » sur un relais qui n'en dépend pas — un signal
+     * faux, donc un signal qu'on apprend à ignorer.
+     */
+    private function blockingReason(DeliveryChannelManager $channels, WhatsappSendingGuard $guard): ?string
+    {
+        return $channels->active()->supportsPush() ? $guard->blockingReason() : null;
     }
 
     /** GET admin/whatsapp/logs — journal filtrable par propriété / statut / date. */

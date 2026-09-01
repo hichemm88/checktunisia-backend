@@ -27,9 +27,21 @@ class DeliveryChannelTest extends TestCase
 
     // ── Sélection du canal ───────────────────────────────────────────────────
 
-    public function test_web_channel_is_the_default(): void
+    public function test_cloud_channel_is_the_default(): void
     {
-        // Rien ne doit changer en production tant que la variable n'est pas posée.
+        // Le relais WhatsApp Web a été banni : c'est la Cloud API qui transmet
+        // par défaut, sans qu'aucune variable n'ait à être posée. Un défaut
+        // resté sur « web » aurait signifié, en production, un canal légal
+        // muet sans que rien ne le signale.
+        $this->assertInstanceOf(WhatsAppCloudChannel::class, app(DeliveryChannelManager::class)->active());
+    }
+
+    public function test_provider_legacy_falls_back_to_the_web_channel(): void
+    {
+        // Retour arrière d'urgence : une seule variable, sans connaître le nom
+        // interne des canaux.
+        config(['whatsapp.channel' => 'web']);
+
         $this->assertInstanceOf(WhatsAppWebChannel::class, app(DeliveryChannelManager::class)->active());
     }
 
@@ -47,8 +59,8 @@ class DeliveryChannelTest extends TestCase
 
     public function test_the_two_channels_format_recipients_differently(): void
     {
-        $web = new WhatsAppWebChannel;
-        $cloud = new WhatsAppCloudChannel;
+        $web = new WhatsAppWebChannel();
+        $cloud = app(WhatsAppCloudChannel::class);
 
         // C'est précisément ce détail qui aurait fuité partout sans interface.
         $this->assertSame('21620123456@c.us', $web->formatRecipient('+216 20 123 456'));
@@ -57,7 +69,7 @@ class DeliveryChannelTest extends TestCase
 
     public function test_cloud_channel_rejects_truncated_numbers(): void
     {
-        $cloud = new WhatsAppCloudChannel;
+        $cloud = app(WhatsAppCloudChannel::class);
 
         $this->assertNull($cloud->formatRecipient('123'), 'Un numéro tronqué doit être refusé, pas transmis.');
         $this->assertNull($cloud->formatRecipient(null));
@@ -80,7 +92,42 @@ class DeliveryChannelTest extends TestCase
             'whatsapp.channel' => 'cloud',
             'whatsapp.cloud.token' => 'test-token',
             'whatsapp.cloud.phone_number_id' => '123456',
+            // Posés explicitement, alors qu'ils ont un défaut : un test ne doit
+            // rien devoir à l'environnement. La CI copie .env.example en .env,
+            // où chaque réglage optionnel figure VIDE — et une variable vide
+            // n'est pas une variable absente, elle écrase le défaut. Les URL
+            // Graph devenaient « », et toutes ces commandes mouraient sur
+            // « URI must include a scheme and host ».
+            'whatsapp.cloud.base_url' => 'https://graph.facebook.com',
+            'whatsapp.cloud.api_version' => 'v21.0',
+            'whatsapp.cloud.timeout' => 30,
+            // Bascule armée dans le passé : sans elle, les garde-fous
+            // refusent tout envoi — c'est leur rôle, testé plus loin.
+            'whatsapp.guard.cutover_at' => '2000-01-01T00:00:00+00:00',
+            'whatsapp.guard.sending_enabled' => true,
         ]);
+    }
+
+    /** Job minimal, postérieur à la bascule, avec ses variables de modèle. */
+    private function cloudJob(array $attributes = []): WhatsappSendLog
+    {
+        $job = new WhatsappSendLog(array_merge([
+            'recipient' => '21620123456',
+            'caption' => 'Fiche voyageur',
+            // `is_test` : l'en-tête du modèle est un DOCUMENT obligatoire, et
+            // ce job n'a pas de check-in. FichePdf rend alors la pièce
+            // factice, ce qui rend le job envoyable sans données réelles.
+            'is_test' => true,
+            'template_params' => [
+                'body' => ['RESIDENCE TEST', 'Adresse', 'DUPONT Jean', 'France', 'Passeport n° X1', '01/01/2026', '02/01/2026', '12', 'Aucun'],
+                'button' => ['guest-uuid'],
+            ],
+        ], $attributes));
+
+        // created_at n'est pas fillable : la bascule se juge dessus.
+        $job->created_at = now();
+
+        return $job;
     }
 
     public function test_cloud_channel_sends_and_returns_the_message_id(): void
@@ -88,19 +135,23 @@ class DeliveryChannelTest extends TestCase
         $this->configureCloud();
 
         Http::fake([
-            'graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.TEST']]], 200),
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.TEST']]], 200),
         ]);
 
-        $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'Fiche voyageur']);
-
-        $result = (new WhatsAppCloudChannel)->send($job);
+        $result = app(WhatsAppCloudChannel::class)->send($this->cloudJob());
 
         $this->assertTrue($result->success);
         $this->assertSame('wamid.TEST', $result->messageId);
 
-        Http::assertSent(fn ($request) => $request['messaging_product'] === 'whatsapp'
+        // Modèle, et non texte libre : hors fenêtre de 24 h — le cas de
+        // toutes les fiches — Meta ne laisse passer que ça.
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/messages')
+            && $request['messaging_product'] === 'whatsapp'
             && $request['to'] === '21620123456'
-            && $request['text']['body'] === 'Fiche voyageur');
+            && $request['type'] === 'template'
+            && $request['template']['name'] === 'fiche_police_nouvelle'
+            && $request['template']['language']['code'] === 'fr');
     }
 
     public function test_cloud_channel_marks_4xx_as_permanent(): void
@@ -108,18 +159,17 @@ class DeliveryChannelTest extends TestCase
         $this->configureCloud();
 
         Http::fake([
-            'graph.facebook.com/*' => Http::response(['error' => ['message' => 'Invalid recipient']], 400),
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['error' => ['message' => 'Invalid recipient']], 400),
         ]);
 
-        $result = (new WhatsAppCloudChannel)->send(
-            new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x'])
-        );
+        $result = app(WhatsAppCloudChannel::class)->send($this->cloudJob());
 
         $this->assertFalse($result->success);
         // Retenter à l'identique ne changerait rien : ce serait gaspiller des
         // tentatives et retarder l'alerte.
         $this->assertFalse($result->retryable);
-        $this->assertSame('Invalid recipient', $result->error);
+        $this->assertStringContainsString('Invalid recipient', (string) $result->error);
     }
 
     public function test_cloud_channel_marks_5xx_and_429_as_retryable(): void
@@ -127,11 +177,12 @@ class DeliveryChannelTest extends TestCase
         $this->configureCloud();
 
         foreach ([500, 503, 429] as $status) {
-            Http::fake(['graph.facebook.com/*' => Http::response(['error' => ['message' => 'oops']], $status)]);
+            Http::fake([
+                '*/media' => Http::response(['id' => 'media-1'], 200),
+                '*/messages' => Http::response(['error' => ['message' => 'oops']], $status),
+            ]);
 
-            $result = (new WhatsAppCloudChannel)->send(
-                new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x'])
-            );
+            $result = app(WhatsAppCloudChannel::class)->send($this->cloudJob());
 
             $this->assertFalse($result->success, "HTTP {$status}");
             $this->assertTrue($result->retryable, "HTTP {$status} doit être réessayable.");
@@ -144,9 +195,7 @@ class DeliveryChannelTest extends TestCase
 
         Http::fake();
 
-        $result = (new WhatsAppCloudChannel)->send(
-            new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x'])
-        );
+        $result = app(WhatsAppCloudChannel::class)->send($this->cloudJob());
 
         $this->assertFalse($result->success);
         Http::assertNothingSent();
@@ -221,14 +270,19 @@ class DeliveryChannelTest extends TestCase
     public function test_cloud_channel_sends_a_template_when_one_is_configured(): void
     {
         $this->configureCloud();
-        config(['whatsapp.cloud.template_name' => 'fiche_police', 'whatsapp.cloud.template_language' => 'fr']);
+        config(['whatsapp.cloud.template.name' => 'fiche_police', 'whatsapp.cloud.template.language' => 'fr']);
 
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.T']]], 200),
+        ]);
 
         $hotel = Hotel::factory()->withActiveSubscription()->create(['name' => 'Dar Test']);
-        $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => "Ligne 1\nLigne 2", 'hotel_id' => $hotel->id]);
+        // `is_test` : l'en-tête du modèle est un DOCUMENT obligatoire et ce job
+        // n'a pas de check-in — FichePdf rend alors la pièce factice.
+        $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => "Ligne 1\nLigne 2", 'hotel_id' => $hotel->id, 'is_test' => true]);
 
-        $result = (new WhatsAppCloudChannel)->send($job);
+        $result = app(WhatsAppCloudChannel::class)->send($job);
 
         $this->assertTrue($result->success);
         Http::assertSent(function ($request) {
@@ -250,14 +304,17 @@ class DeliveryChannelTest extends TestCase
          * d'établissement collé depuis un tableur suffit à tout faire tomber.
          */
         $this->configureCloud();
-        config(['whatsapp.cloud.template_name' => 'fiche_police']);
+        config(['whatsapp.cloud.template.name' => 'fiche_police']);
 
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.T']]], 200),
+        ]);
 
         $hotel = Hotel::factory()->withActiveSubscription()->create(['name' => "Dar\nTest    Sousse"]);
-        $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x', 'hotel_id' => $hotel->id]);
+        $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => 'x', 'hotel_id' => $hotel->id, 'is_test' => true]);
 
-        (new WhatsAppCloudChannel)->send($job);
+        app(WhatsAppCloudChannel::class)->send($job);
 
         Http::assertSent(function ($request) {
             if (!str_ends_with($request->url(), '/messages')) {
@@ -283,7 +340,7 @@ class DeliveryChannelTest extends TestCase
         // Le /media peut tomber sans que la fiche soit en cause : elle doit
         // repartir au tour suivant, pas être abandonnée.
         $this->configureCloud();
-        config(['whatsapp.cloud.template_name' => 'fiche_police']);
+        config(['whatsapp.cloud.template.name' => 'fiche_police']);
 
         Http::fake([
             '*/media' => Http::response(['error' => ['message' => 'Service indisponible']], 503),
@@ -304,7 +361,7 @@ class DeliveryChannelTest extends TestCase
             'queued_at' => now(),
         ]);
 
-        $result = (new WhatsAppCloudChannel)->send($job);
+        $result = app(WhatsAppCloudChannel::class)->send($job);
 
         $this->assertFalse($result->success);
         $this->assertTrue($result->retryable, 'un /media en panne ne condamne pas la fiche');
@@ -317,7 +374,7 @@ class DeliveryChannelTest extends TestCase
         // l'accueillir. Elle doit donc partir en pièce jointe — et c'est ce qui
         // ramène au passage la photo de la pièce d'identité.
         $this->configureCloud();
-        config(['whatsapp.cloud.template_name' => 'fiche_police']);
+        config(['whatsapp.cloud.template.name' => 'fiche_police']);
 
         Http::fake([
             '*/media' => Http::response(['id' => 'MEDIA-42'], 200),
@@ -338,7 +395,7 @@ class DeliveryChannelTest extends TestCase
             'queued_at' => now(),
         ]);
 
-        $this->assertTrue((new WhatsAppCloudChannel)->send($job)->success);
+        $this->assertTrue(app(WhatsAppCloudChannel::class)->send($job)->success);
 
         Http::assertSent(function ($request) {
             if (!str_ends_with($request->url(), '/messages')) {
@@ -357,14 +414,22 @@ class DeliveryChannelTest extends TestCase
         // Le message [TEST] sert précisément à valider la chaîne : il ne doit
         // pas être le seul à ne pas pouvoir l'emprunter, faute de PDF.
         $this->configureCloud();
-        config(['whatsapp.cloud.template_name' => 'fiche_police']);
+        config(['whatsapp.cloud.template.name' => 'fiche_police']);
 
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.T']]], 200),
+        ]);
 
         $job = new WhatsappSendLog(['recipient' => '21620123456', 'caption' => '[TEST]', 'is_test' => true]);
 
-        $this->assertTrue((new WhatsAppCloudChannel)->send($job)->success);
-        Http::assertNotSent(fn ($request) => str_ends_with($request->url(), '/media'));
+        $this->assertTrue(app(WhatsAppCloudChannel::class)->send($job)->success);
+
+        // Le modèle exige un en-tête DOCUMENT : un job de test produit donc
+        // une pièce FACTICE et la téléverse comme les autres. Sans elle,
+        // l'essai — seul moyen d'exercer la chaîne sans déranger un policier —
+        // serait refusé par Meta en 132000.
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/media'));
     }
 
     // ── Drainage de la file par le canal push ────────────────────────────────
@@ -401,12 +466,15 @@ class DeliveryChannelTest extends TestCase
          * silence : tout configuré, et rien qui part.
          */
         $this->configureCloud();
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200),
+        ]);
 
         $job = $this->queueFiche();
         $this->assertSame('initializing', WhatsappSessionState::current()->status);
 
-        $this->artisan('whatsapp:push')->assertExitCode(0);
+        $this->artisan('whatsapp:dispatch')->assertExitCode(0);
 
         $job->refresh();
         $this->assertSame('sent', $job->status);
@@ -422,7 +490,7 @@ class DeliveryChannelTest extends TestCase
 
         $job = $this->queueFiche();
 
-        $this->artisan('whatsapp:push')->assertExitCode(0);
+        $this->artisan('whatsapp:dispatch')->assertExitCode(0);
 
         $this->assertSame('pending', $job->fresh()->status);
         Http::assertNothingSent();
@@ -432,12 +500,15 @@ class DeliveryChannelTest extends TestCase
     {
         // Le coupe-circuit humain vaut pour les deux transports.
         $this->configureCloud();
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200),
+        ]);
         WhatsappSessionState::current()->update(['paused' => true]);
 
         $job = $this->queueFiche();
 
-        $this->artisan('whatsapp:push')->assertExitCode(0);
+        $this->artisan('whatsapp:dispatch')->assertExitCode(0);
 
         $this->assertSame('pending', $job->fresh()->status);
         Http::assertNothingSent();
@@ -453,13 +524,16 @@ class DeliveryChannelTest extends TestCase
          */
         $this->configureCloud();
         config(['whatsapp.circuit_breaker_failures' => 2, 'whatsapp.min_interval_seconds' => 1]);
-        Http::fake(['graph.facebook.com/*' => Http::response(['error' => ['message' => 'Refusé']], 400)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['error' => ['message' => 'Refusé']], 400),
+        ]);
 
         $this->queueFiche();
         $this->queueFiche();
         $survivor = $this->queueFiche();
 
-        $this->artisan('whatsapp:push')->assertExitCode(0);
+        $this->artisan('whatsapp:dispatch')->assertExitCode(0);
 
         $this->assertTrue(WhatsappSessionState::current()->fresh()->paused, 'le relais doit être coupé');
         $this->assertSame('pending', $survivor->fresh()->status, 'la file restante est préservée');
@@ -470,11 +544,14 @@ class DeliveryChannelTest extends TestCase
         // Un 5xx ne dit rien de notre légitimité : on rend la main sans couper
         // le relais ni brûler les tentatives des fiches suivantes.
         $this->configureCloud();
-        Http::fake(['graph.facebook.com/*' => Http::response(['error' => ['message' => 'oops']], 503)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['error' => ['message' => 'oops']], 503),
+        ]);
 
         $job = $this->queueFiche();
 
-        $this->artisan('whatsapp:push')->assertExitCode(0);
+        $this->artisan('whatsapp:dispatch')->assertExitCode(0);
 
         $this->assertSame('pending', $job->fresh()->status);
         $this->assertFalse(WhatsappSessionState::current()->fresh()->paused);
@@ -486,7 +563,10 @@ class DeliveryChannelTest extends TestCase
         // bloc — c'est exactement ce que Meta a sanctionné.
         $this->configureCloud();
         config(['whatsapp.max_per_hour' => 1]);
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200),
+        ]);
 
         WhatsappSendLog::create([
             'recipient' => '21620123456', 'caption' => 'déjà partie',
@@ -494,7 +574,7 @@ class DeliveryChannelTest extends TestCase
         ]);
         $job = $this->queueFiche();
 
-        $this->artisan('whatsapp:push')->assertExitCode(0);
+        $this->artisan('whatsapp:dispatch')->assertExitCode(0);
 
         $this->assertSame('pending', $job->fresh()->status);
         Http::assertNothingSent();
@@ -510,12 +590,15 @@ class DeliveryChannelTest extends TestCase
          */
         $this->configureCloud();
         config(['whatsapp.min_interval_seconds' => 3, 'whatsapp.interval_jitter_ratio' => 0]);
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200),
+        ]);
 
         $this->queueFiche();
 
         $startedAt = microtime(true);
-        $this->artisan('whatsapp:push')->assertExitCode(0);
+        $this->artisan('whatsapp:dispatch')->assertExitCode(0);
         $elapsed = microtime(true) - $startedAt;
 
         $this->assertLessThan(3, $elapsed, 'une file vidée ne doit pas retenir la commande');
@@ -527,13 +610,16 @@ class DeliveryChannelTest extends TestCase
         // collées. C'est la rafale que les heuristiques anti-spam repèrent.
         $this->configureCloud();
         config(['whatsapp.min_interval_seconds' => 2, 'whatsapp.interval_jitter_ratio' => 0]);
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.OK']]], 200),
+        ]);
 
         $this->queueFiche();
         $this->queueFiche();
 
         $startedAt = microtime(true);
-        $this->artisan('whatsapp:push')->assertExitCode(0);
+        $this->artisan('whatsapp:dispatch')->assertExitCode(0);
         $elapsed = microtime(true) - $startedAt;
 
         $this->assertGreaterThanOrEqual(2, $elapsed, 'les envois doivent être espacés');
@@ -550,7 +636,10 @@ class DeliveryChannelTest extends TestCase
          * disparaîtrait de la file sans être parvenue à personne.
          */
         $this->configureCloud();
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.T']]], 200),
+        ]);
 
         $job = $this->queueFiche();
 
@@ -569,7 +658,10 @@ class DeliveryChannelTest extends TestCase
         // Le numéro de test Meta ne parle qu'aux destinataires déclarés :
         // l'essai doit pouvoir viser un autre numéro que celui de production.
         $this->configureCloud();
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.T']]], 200),
+        ]);
 
         $this->queueFiche();
 
@@ -588,7 +680,10 @@ class DeliveryChannelTest extends TestCase
             'whatsapp.cloud.token' => 'test-token',
             'whatsapp.cloud.phone_number_id' => '123456',
         ]);
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.T']]], 200),
+        ]);
 
         $this->artisan('whatsapp:cloud-test', ['--to' => '21699888777'])->assertExitCode(0);
 
@@ -601,7 +696,8 @@ class DeliveryChannelTest extends TestCase
         // destinataire non déclaré, jeton périmé. Le masquer coûterait une nuit.
         $this->configureCloud();
         Http::fake([
-            'graph.facebook.com/*' => Http::response(
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(
                 ['error' => ['message' => 'Template name does not exist in the translation']],
                 400,
             ),
@@ -628,7 +724,10 @@ class DeliveryChannelTest extends TestCase
         // arrive en « to216… ». C'est pourtant depuis cette console qu'on
         // exerce le canal en production.
         $this->configureCloud();
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.T']]], 200),
+        ]);
 
         $this->artisan('whatsapp:cloud-test', ['destinataire' => '21699888777'])->assertExitCode(0);
 
@@ -642,7 +741,10 @@ class DeliveryChannelTest extends TestCase
         // dans une console qui abîme les tirets.
         $this->configureCloud();
         config(['whatsapp.recipient' => '21693116000@c.us']);
-        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.T']]], 200)]);
+        Http::fake([
+            '*/media' => Http::response(['id' => 'media-1'], 200),
+            '*/messages' => Http::response(['messages' => [['id' => 'wamid.T']]], 200),
+        ]);
 
         $this->artisan('whatsapp:cloud-test')->assertExitCode(0);
 
@@ -655,19 +757,24 @@ class DeliveryChannelTest extends TestCase
     private function configureWaba(): void
     {
         $this->configureCloud();
-        config(['whatsapp.cloud.waba_id' => '1344652027784374']);
+        config([
+            'whatsapp.cloud.waba_id' => '1344652027784374',
+            'whatsapp.cloud.app_id' => '2254097432105620',
+            'whatsapp.cloud.app_secret' => 'app-secret',
+            'whatsapp.cloud.webhook_verify_token' => 'verify-me',
+        ]);
     }
 
     public function test_templates_command_confirms_an_approved_template(): void
     {
         $this->configureWaba();
-        config(['whatsapp.cloud.template_name' => 'fiche_police', 'whatsapp.cloud.template_language' => 'fr']);
+        config(['whatsapp.cloud.template.name' => 'fiche_police', 'whatsapp.cloud.template.language' => 'fr']);
 
         Http::fake(['graph.facebook.com/*' => Http::response(['data' => [
             ['name' => 'fiche_police', 'language' => 'fr', 'status' => 'APPROVED', 'category' => 'UTILITY'],
         ]], 200)]);
 
-        $this->artisan('whatsapp:cloud-templates')
+        $this->artisan('whatsapp:templates')
             ->expectsOutputToContain('est approuvé')
             ->assertExitCode(0);
     }
@@ -681,13 +788,13 @@ class DeliveryChannelTest extends TestCase
          * diagnostic, on recrée un modèle qui existe déjà.
          */
         $this->configureWaba();
-        config(['whatsapp.cloud.template_name' => 'fiche_police', 'whatsapp.cloud.template_language' => 'fr']);
+        config(['whatsapp.cloud.template.name' => 'fiche_police', 'whatsapp.cloud.template.language' => 'fr']);
 
         Http::fake(['graph.facebook.com/*' => Http::response(['data' => [
             ['name' => 'fiche_police', 'language' => 'en_US', 'status' => 'APPROVED', 'category' => 'UTILITY'],
         ]], 200)]);
 
-        $this->artisan('whatsapp:cloud-templates')
+        $this->artisan('whatsapp:templates')
             ->expectsOutputToContain('en [en_US] mais PAS en « fr »')
             ->assertExitCode(0);
     }
@@ -695,13 +802,13 @@ class DeliveryChannelTest extends TestCase
     public function test_templates_command_flags_a_pending_template(): void
     {
         $this->configureWaba();
-        config(['whatsapp.cloud.template_name' => 'fiche_police', 'whatsapp.cloud.template_language' => 'fr']);
+        config(['whatsapp.cloud.template.name' => 'fiche_police', 'whatsapp.cloud.template.language' => 'fr']);
 
         Http::fake(['graph.facebook.com/*' => Http::response(['data' => [
             ['name' => 'fiche_police', 'language' => 'fr', 'status' => 'PENDING', 'category' => 'UTILITY'],
         ]], 200)]);
 
-        $this->artisan('whatsapp:cloud-templates')
+        $this->artisan('whatsapp:templates')
             ->expectsOutputToContain('PENDING')
             ->assertExitCode(0);
     }
@@ -714,7 +821,7 @@ class DeliveryChannelTest extends TestCase
             ['error' => ['message' => 'Invalid OAuth access token']], 401,
         )]);
 
-        $this->artisan('whatsapp:cloud-templates')
+        $this->artisan('whatsapp:templates')
             ->expectsOutputToContain('Invalid OAuth access token')
             ->assertExitCode(1);
     }
@@ -731,7 +838,7 @@ class DeliveryChannelTest extends TestCase
         $this->configureWaba();
         Http::fake(['graph.facebook.com/*' => Http::response(['data' => []], 200)]);
 
-        $this->artisan('whatsapp:cloud-templates', ['waba' => '9999999999'])->assertExitCode(0);
+        $this->artisan('whatsapp:templates', ['waba' => '9999999999'])->assertExitCode(0);
 
         Http::assertSent(fn ($request) => str_contains($request->url(), '/9999999999/message_templates'));
     }

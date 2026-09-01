@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\WhatsappSendLog;
 use App\Services\Delivery\FichePdf;
 use App\Services\Delivery\WhatsAppCloudChannel;
+use App\Services\Whatsapp\WhatsappCloudConfig;
 use Illuminate\Console\Command;
 
 /**
@@ -38,8 +39,7 @@ class TestWhatsappCloud extends Command
     protected $signature = 'whatsapp:cloud-test
         {destinataire? : Destinataire (chiffres internationaux). Défaut : WHATSAPP_RECIPIENT}
         {--to= : Idem, en option}
-        {--fiche= : Identifiant d\'une ligne whatsapp_send_log à recopier (défaut : la plus récente avec photo)}
-        {--text : Force le texte libre au lieu du modèle (ne marche que dans la fenêtre de 24 h)}';
+        {--fiche= : Identifiant d\'une ligne whatsapp_send_log à recopier (défaut : la plus récente avec photo)}';
 
     protected $description = 'Envoie une fiche de test via la Cloud API, sans toucher au canal de production';
 
@@ -54,20 +54,34 @@ class TestWhatsappCloud extends Command
             return self::FAILURE;
         }
 
-        // Le canal est instancié directement : l'essai ne doit dépendre ni de
-        // WHATSAPP_CHANNEL, ni le modifier.
-        $channel = new WhatsAppCloudChannel;
+        // Le canal est résolu par le conteneur — il a des dépendances (client
+        // API, garde-fous) — mais SANS toucher à WHATSAPP_CHANNEL : l'essai ne
+        // doit ni dépendre du canal de production, ni le modifier.
+        $channel = app(WhatsAppCloudChannel::class);
 
-        if (!$channel->isConfigured()) {
-            $this->error('Cloud API non configurée. Vérifiez WHATSAPP_CLOUD_TOKEN et WHATSAPP_CLOUD_PHONE_NUMBER_ID.');
+        if ($missing = WhatsappCloudConfig::missingToSend()) {
+            $this->error(WhatsappCloudConfig::explain($missing));
 
             return self::FAILURE;
         }
 
-        if ($this->option('text')) {
-            // Le repli texte n'est légitime qu'en essai : en production tous nos
-            // envois sont hors fenêtre de 24 h et exigent un modèle.
-            config(['whatsapp.cloud.template_name' => null]);
+        if (!$channel->isConfigured()) {
+            $this->error('Canal Cloud API non configuré (whatsapp.enabled ?).');
+
+            return self::FAILURE;
+        }
+
+        /*
+         * La bascule protège l'ARRIÉRÉ, pas les essais.
+         *
+         * Un essai est humain, délibéré et daté de maintenant : le bloquer
+         * parce que WHATSAPP_CLOUD_API_CUTOVER_AT n'est pas encore posée
+         * rendrait le canal impossible à éprouver AVANT de le mettre en
+         * service — c'est-à-dire exactement au moment où l'on en a besoin.
+         */
+        if (blank(config('whatsapp.guard.cutover_at'))) {
+            config(['whatsapp.guard.cutover_at' => now()->subMinute()->toIso8601String()]);
+            $this->comment('Bascule non armée : ignorée pour cet essai (elle ne protège que l\'arriéré).');
         }
 
         $source = $this->sourceFiche();
@@ -75,7 +89,7 @@ class TestWhatsappCloud extends Command
 
         $this->line('Canal    : '.$channel->name());
         $this->line('Vers     : '.$to);
-        $this->line('Modèle   : '.(config('whatsapp.cloud.template_name') ?: '(texte libre)'));
+        $this->line('Modèle   : '.config('whatsapp.cloud.template.name').' ('.config('whatsapp.cloud.template.language').')');
         $this->line('Fiche    : '.($source ? $source->id.($job->scan_id ? ' (avec photo)' : ' (sans photo)') : 'factice'));
         $this->line('PDF joint: '.($source && FichePdf::forJob($job) !== null ? 'oui' : 'non'));
         $this->newLine();
@@ -123,16 +137,26 @@ class TestWhatsappCloud extends Command
     private function detachedCopy(?WhatsappSendLog $source, string $to): WhatsappSendLog
     {
         if (!$source) {
-            return new WhatsappSendLog([
+            $job = new WhatsappSendLog([
                 'recipient' => $to,
                 'caption' => '[TEST CLOUD] Vérification du canal officiel — aucune fiche réelle.',
                 'is_test' => true,
             ]);
+            // Sans check-in, FichePdf rend le document factice : l'en-tête du
+            // modèle est obligatoire, un essai sans pièce jointe serait refusé.
+            $job->created_at = now();
+
+            return $job;
         }
 
         $copy = $source->replicate(['id', 'status', 'sent_at', 'message_id_whatsapp', 'claimed_at', 'attempts']);
         $copy->recipient = $to;
         $copy->exists = false;
+
+        // La fiche recopiée peut dater de l'arriéré : le garde-fou de bascule
+        // la refuserait, alors que l'ESSAI, lui, est bien postérieur. On date
+        // la copie de maintenant — l'original n'est pas touché.
+        $copy->created_at = now();
 
         return $copy;
     }

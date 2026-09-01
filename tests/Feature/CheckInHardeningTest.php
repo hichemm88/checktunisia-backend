@@ -50,6 +50,14 @@ class CheckInHardeningTest extends TestCase
             'whatsapp.enabled' => true,
             'whatsapp.recipient' => '21612345678@c.us',
             'whatsapp.worker_secret' => 'test-secret',
+            // Ces garanties (une fiche par voyageur, jamais de doublon, renvoi
+            // qui régénère la fiche corrigée) portent sur l'enfilage, pas sur
+            // le transport. On les vérifie donc sur le canal RÉELLEMENT actif
+            // en production — la Cloud API — plutôt que sur le relais banni.
+            'whatsapp.channel' => 'cloud',
+            'whatsapp.cloud.token' => 'test-token',
+            'whatsapp.cloud.phone_number_id' => '123456',
+            'whatsapp.guard.cutover_at' => '2000-01-01T00:00:00+00:00',
         ]);
     }
 

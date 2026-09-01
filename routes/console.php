@@ -58,14 +58,25 @@ Schedule::command('police:daily-digest')
 // au-delà de la rétention (24 h). Minimisation des données.
 Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
 
-// Transmission par le canal PUSH (Cloud API). Inerte tant que le canal actif
-// est en pull : le worker Node réclame alors les fiches lui-même. Planifiée dès
-// maintenant pour que la bascule ne tienne qu'à une variable d'environnement,
-// sans qu'il faille aussi penser à armer un ordonnancement ce jour-là.
-// Verrou borné à 15 min : une exécution cadencée peut durer plusieurs minutes
-// (10 fiches à 45 s), mais un processus tué en cours ne doit pas bloquer la
-// file jusqu'au lendemain — le défaut de Laravel est de 24 h.
-Schedule::command('whatsapp:push')->everyMinute()->withoutOverlapping(15);
+// Transmission des fiches par la WhatsApp Cloud API.
+//
+// Le relais WhatsApp Web fonctionnait en PULL : un worker Node venait chercher
+// les fiches. La Cloud API fonctionne en PUSH — sans cette tâche, plus rien ne
+// consomme la file et les fiches s'accumulent en silence.
+//
+// UNE seule tâche pour cette file. `whatsapp:push` (branche main) et
+// `whatsapp:dispatch` faisaient le même travail avec des garde-fous
+// différents : les laisser cohabiter, c'était deux processus se disputant les
+// mêmes lignes et deux plafonds appliqués chacun dans son coin. Les règles de
+// `whatsapp:push` — cadence avec gigue, disjoncteur sur refus consécutifs —
+// ont été reprises dans `whatsapp:dispatch`, qui porte aussi la bascule, le
+// coupe-circuit et le garde-fou d'arriéré.
+//
+// Chaque minute, mais verrou borné à 15 min : une exécution cadencée dure
+// plusieurs minutes (une fiche toutes les ~45 s), et un processus tué en cours
+// ne doit pas bloquer la file jusqu'au lendemain — le défaut de Laravel est de
+// 24 h. La commande est inerte quand le canal actif est en pull.
+Schedule::command('whatsapp:dispatch')->everyMinute()->withoutOverlapping(15);
 
 // Challenges WebAuthn périmés. Ils sont déjà inutilisables passé leur
 // expiration (et purgés au fil de l'eau à chaque émission) : ce passage
