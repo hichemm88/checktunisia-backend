@@ -10,6 +10,7 @@ use App\Models\SubscriptionPlan;
 use App\Models\User;
 use Database\Seeders\SubscriptionPlanSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Tests\TestCase;
 
 /**
@@ -19,6 +20,32 @@ use Tests\TestCase;
 class AdminKpiTest extends TestCase
 {
     use RefreshDatabase;
+
+    /**
+     * Temps figé au 15 du mois courant.
+     *
+     * Ces tests posent une donnée « il y a deux jours » puis vérifient un
+     * compteur « ce mois-ci ». Les premiers jours de chaque mois, ces deux
+     * phrases ne désignent pas la même période : la donnée tombe dans le mois
+     * précédent, le compteur reste à zéro, et le test échoue sans qu'aucun
+     * code métier n'ait bougé. La suite était donc verte vingt-sept jours sur
+     * trente — et rouge le 1er septembre 2026, sur `main` comme sur toutes les
+     * branches ouvertes.
+     *
+     * Figer le temps plutôt que corriger chaque date : la panne ne vient pas
+     * d'une ligne mais de l'écart entre « il y a N jours » et « ce mois-ci »,
+     * qui reviendrait à la première donnée ajoutée ici. Le 15 laisse quatorze
+     * jours de marge de chaque côté.
+     *
+     * Laravel rétablit l'heure réelle après chaque test : rien ne déborde sur
+     * le reste de la suite.
+     */
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Carbon::setTestNow(now()->startOfMonth()->addDays(14)->setTime(12, 0));
+    }
 
     private function plan(): SubscriptionPlan
     {
