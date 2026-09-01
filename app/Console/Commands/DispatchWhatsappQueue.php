@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Services\Delivery\DeliveryChannelManager;
+use App\Services\Whatsapp\WhatsappCloudConfig;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Console\Command;
 
@@ -33,9 +34,16 @@ class DispatchWhatsappQueue extends Command
             return self::SUCCESS;
         }
 
+        if ($missing = WhatsappCloudConfig::missing()) {
+            // Échec bruyant, avec la liste exacte : un canal mal configuré qui
+            // se tait ressemble exactement à un canal qui n'a rien à envoyer.
+            // C'est ainsi qu'un arriéré se constitue sans que personne ne voie.
+            $this->error(WhatsappCloudConfig::explain($missing));
+
+            return self::FAILURE;
+        }
+
         if (! $channel->isConfigured()) {
-            // Échec bruyant : un canal mal configuré qui se tait ressemble
-            // exactement à un canal qui n'a rien à envoyer.
             $this->error("Canal « {$channel->name()} » non configuré — aucune fiche ne peut partir.");
 
             return self::FAILURE;

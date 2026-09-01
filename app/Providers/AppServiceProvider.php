@@ -45,6 +45,8 @@ class AppServiceProvider extends ServiceProvider
         // l'usage normal mais pour arrêter une boucle folle ou un aspirateur.
         // Repère : le tableau de bord se rafraîchit toutes les 60 s par onglet
         // ouvert, et un check-in complet représente ~10 requêtes.
+        $this->warnOnIncompleteWhatsappConfig();
+
         RateLimiter::for('api', function (Request $request) {
             // Le webhook Meta porte sa propre limite (throttle:whatsapp-webhook),
             // bien plus haute : un lot d'accusés de réception peut dépasser 120
@@ -109,6 +111,33 @@ class AppServiceProvider extends ServiceProvider
         // publique, pas de rationner Meta. La signature, elle, est vérifiée
         // dans le contrôleur : une requête non signée ne coûte qu'un HMAC.
         RateLimiter::for('whatsapp-webhook', fn (Request $request) => Limit::perMinute(300)->by($request->ip()));
+    }
+
+    /**
+     * Canal légal armé mais mal configuré : le dire, fort, à chaque démarrage.
+     *
+     * Volontairement une entrée de journal critique (relayée à Sentry) et NON
+     * une exception. Faire tomber l'application pour une variable WhatsApp
+     * empêcherait aussi d'enregistrer les check-in et de consulter le
+     * registre : le remède serait pire que le mal.
+     *
+     * Le déploiement, lui, DOIT échouer — c'est le rôle de
+     * `php artisan whatsapp:check-config`, à placer dans la commande de
+     * démarrage du conteneur. Voir docs/whatsapp-cloud-api.md.
+     */
+    protected function warnOnIncompleteWhatsappConfig(): void
+    {
+        if (! \App\Services\Whatsapp\WhatsappCloudConfig::isArmed()) {
+            return;
+        }
+
+        $missing = \App\Services\Whatsapp\WhatsappCloudConfig::missing();
+
+        if ($missing !== []) {
+            \Illuminate\Support\Facades\Log::critical(
+                '[whatsapp] '.\App\Services\Whatsapp\WhatsappCloudConfig::explain($missing)
+            );
+        }
     }
 
     /**

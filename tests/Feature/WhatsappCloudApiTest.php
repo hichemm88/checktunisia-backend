@@ -9,11 +9,15 @@ use App\Models\Hotel;
 use App\Models\User;
 use App\Models\WhatsappSendLog;
 use App\Services\Whatsapp\FicheTemplate;
+use App\Services\Whatsapp\WhatsappCloudConfig;
 use App\Services\Whatsapp\WhatsappCloudErrors;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use App\Services\Whatsapp\WhatsappSendingGuard;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -55,6 +59,7 @@ class WhatsappCloudApiTest extends TestCase
             'whatsapp.cloud.token' => 'test-token',
             'whatsapp.cloud.phone_number_id' => '123456',
             'whatsapp.cloud.waba_id' => 'waba-1',
+            'whatsapp.cloud.app_id' => 'app-1',
             'whatsapp.cloud.app_secret' => 'app-secret',
             'whatsapp.cloud.webhook_verify_token' => 'verify-me',
             'whatsapp.guard.sending_enabled' => true,
@@ -356,6 +361,93 @@ class WhatsappCloudApiTest extends TestCase
         $this->assertSame(1, WhatsappSendLog::where('status', WhatsappSendLog::STATUS_PENDING)->count());
     }
 
+    // ── Configuration : une seule famille de noms ────────────────────────────
+
+    public function test_the_config_reads_one_family_of_variable_names(): void
+    {
+        // Deux familles vivant en parallèle, ce sont deux endroits où poser un
+        // jeton, un seul qui compte, et aucun moyen de savoir lequel est lu.
+        // Ce test échoue si un repli WHATSAPP_CLOUD_* réapparaît.
+        $source = file_get_contents(config_path('whatsapp.php'));
+
+        preg_match_all("/env\('(WHATSAPP_[A-Z_]+)'/", $source, $matches);
+        $read = array_unique($matches[1]);
+
+        $legacy = array_values(array_filter(
+            $read,
+            fn ($name) => str_starts_with($name, 'WHATSAPP_CLOUD_')
+                // Le nom du garde-fou de bascule est celui de la consigne
+                // d'origine ; il ne fait partie d'aucune famille en double.
+                && $name !== 'WHATSAPP_CLOUD_API_CUTOVER_AT',
+        ));
+
+        $this->assertSame([], $legacy, 'Repli sur d\'anciens noms de variables : '.implode(', ', $legacy));
+    }
+
+    public function test_missing_variables_are_named_not_guessed(): void
+    {
+        config([
+            'whatsapp.cloud.token' => null,
+            'whatsapp.cloud.app_secret' => null,
+        ]);
+
+        $missing = WhatsappCloudConfig::missing();
+
+        // Le message doit nommer ce qui manque : « ça ne marche pas » oblige à
+        // deviner, et on devine mal sous pression.
+        $this->assertSame(['WHATSAPP_API_TOKEN', 'WHATSAPP_APP_SECRET'], $missing);
+        $this->assertStringContainsString('WHATSAPP_API_TOKEN', WhatsappCloudConfig::explain($missing));
+    }
+
+    public function test_the_deployment_check_fails_when_a_variable_is_missing(): void
+    {
+        config(['whatsapp.cloud.token' => null]);
+
+        // Le déploiement peut échouer sans conséquence pour personne : c'est
+        // le bon endroit où être intransigeant.
+        $this->artisan('whatsapp:check-config')
+            ->expectsOutputToContain('WHATSAPP_API_TOKEN')
+            ->assertExitCode(1);
+    }
+
+    public function test_the_deployment_check_passes_on_a_complete_config(): void
+    {
+        $this->artisan('whatsapp:check-config --admin')->assertExitCode(0);
+    }
+
+    public function test_the_deployment_check_is_silent_when_the_channel_is_not_armed(): void
+    {
+        // Inutile de crier sur un environnement qui n'envoie rien.
+        config(['whatsapp.channel' => 'web', 'whatsapp.cloud.token' => null]);
+
+        $this->artisan('whatsapp:check-config')->assertExitCode(0);
+    }
+
+    public function test_dispatch_refuses_and_names_what_is_missing(): void
+    {
+        config(['whatsapp.cloud.phone_number_id' => null]);
+        Http::fake();
+
+        $this->artisan('whatsapp:dispatch')
+            ->expectsOutputToContain('WHATSAPP_PHONE_NUMBER_ID')
+            ->assertExitCode(1);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_admin_health_names_the_missing_variables_without_their_values(): void
+    {
+        config(['whatsapp.cloud.waba_id' => null]);
+
+        $response = $this->actingAs(User::factory()->platformAdmin()->create())
+            ->getJson('/api/v1/admin/whatsapp/health')
+            ->assertOk();
+
+        $this->assertContains('WHATSAPP_WABA_ID', $response->json('data.missing_config'));
+        // Des noms, jamais des valeurs.
+        $this->assertStringNotContainsString('test-token', $response->getContent());
+    }
+
     // ── Lien « Consulter la fiche » ──────────────────────────────────────────
 
     public function test_the_button_points_at_the_redirect_route_not_at_a_screen(): void
@@ -416,6 +508,42 @@ class WhatsappCloudApiTest extends TestCase
         // Un lien stable qui se périmerait au premier renvoi ne serait pas un
         // lien stable : le policier garde le message d'origine.
         $this->assertSame($token, $job->fresh()->public_token);
+    }
+
+    public function test_the_token_invariant_is_enforced_by_the_database(): void
+    {
+        // Un invariant qui ne vit que dans le modèle tient jusqu'à la première
+        // écriture qui contourne Eloquent — reprise de données, script SQL,
+        // insertOrIgnore écrit dans six mois. On vérifie donc la contrainte là
+        // où elle compte : en base.
+        $this->expectException(QueryException::class);
+
+        DB::table('whatsapp_send_log')->insert([
+            'id' => (string) Str::uuid(),
+            'recipient' => '21611111111',
+            'caption' => 'Fiche sans jeton',
+            'status' => WhatsappSendLog::STATUS_PENDING,
+            'queued_at' => now(),
+            'public_token' => null,
+        ]);
+    }
+
+    public function test_the_token_column_rejects_duplicates(): void
+    {
+        $first = $this->sentJob('wamid.UNIQ');
+
+        // Deux fiches partageant un jeton, ce sont deux policiers qui ouvrent
+        // le même dossier — ou l'un qui ouvre celui de l'autre.
+        $this->expectException(QueryException::class);
+
+        DB::table('whatsapp_send_log')->insert([
+            'id' => (string) Str::uuid(),
+            'recipient' => '21622222222',
+            'caption' => 'Doublon',
+            'status' => WhatsappSendLog::STATUS_PENDING,
+            'queued_at' => now(),
+            'public_token' => $first->public_token,
+        ]);
     }
 
     // ── Ce que la route publique de santé laisse voir ────────────────────────

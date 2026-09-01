@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Services\Whatsapp\WhatsappCloudConfig;
 use Illuminate\Console\Command;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -37,12 +38,13 @@ class ConfigureWhatsappWebhook extends Command
 
     public function handle(): int
     {
-        foreach (['app_id' => 'WHATSAPP_APP_ID', 'app_secret' => 'WHATSAPP_APP_SECRET', 'token' => 'WHATSAPP_API_TOKEN', 'waba_id' => 'WHATSAPP_WABA_ID', 'webhook_verify_token' => 'WHATSAPP_WEBHOOK_VERIFY_TOKEN'] as $key => $var) {
-            if (blank(config('whatsapp.cloud.'.$key))) {
-                $this->error("Configuration manquante : {$var}.");
+        // Une seule source de vérité sur « ce que le code exige » :
+        // WhatsappCloudConfig. Dupliquer la liste ici garantissait qu'elle
+        // divergerait de la documentation au premier ajout.
+        if ($missing = WhatsappCloudConfig::missingForAdmin()) {
+            $this->error(WhatsappCloudConfig::explain($missing));
 
-                return self::FAILURE;
-            }
+            return self::FAILURE;
         }
 
         $callback = (string) config('whatsapp.cloud.webhook_callback_url');

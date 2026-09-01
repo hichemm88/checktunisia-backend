@@ -92,19 +92,31 @@ return [
     | WhatsApp Cloud API (Meta Graph) — canal officiel
     |--------------------------------------------------------------------------
     |
-    | Les noms de variables posés en production sont ceux de la console Meta
-    | (WHATSAPP_API_TOKEN, WHATSAPP_PHONE_NUMBER_ID…). Les noms historiques
-    | WHATSAPP_CLOUD_* restent acceptés en repli pour ne casser aucun
-    | environnement déjà configuré. AUCUN de ces secrets n'a de valeur par
-    | défaut : un canal non configuré doit refuser d'envoyer, pas improviser.
+    | UNE SEULE FAMILLE DE NOMS : « WHATSAPP_ » + le terme employé par la
+    | console Meta. Pas de repli sur d'anciens noms.
+    |
+    | Le repli semblait prudent ; il ne l'était pas. Deux familles vivant en
+    | parallèle, ce sont deux endroits où poser un jeton, un seul qui compte,
+    | et aucun moyen de savoir lequel est lu — on croit avoir configuré le
+    | canal alors qu'on a rempli les variables mortes. Sur un canal qui porte
+    | une obligation légale, cette ambiguïté vaut plus cher que la migration
+    | qu'elle évite.
+    |
+    | Variables retirées de Railway au passage (elles n'étaient lues par rien
+    | pour les trois dernières) : WHATSAPP_CLOUD_TOKEN,
+    | WHATSAPP_CLOUD_PHONE_NUMBER_ID, WHATSAPP_CLOUD_WABA_ID,
+    | WHATSAPP_CLOUD_TEMPLATE, WHATSAPP_CLOUD_TEMPLATE_LANG.
+    |
+    | Aucun secret n'a de valeur par défaut : un canal non configuré doit
+    | refuser d'envoyer et le dire, pas improviser. Voir WhatsappCloudConfig.
     */
     'cloud' => [
-        'token' => env('WHATSAPP_API_TOKEN', env('WHATSAPP_CLOUD_TOKEN')),
-        'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID', env('WHATSAPP_CLOUD_PHONE_NUMBER_ID')),
+        'token' => env('WHATSAPP_API_TOKEN'),
+        'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
         'waba_id' => env('WHATSAPP_WABA_ID'),
-        'base_url' => env('WHATSAPP_CLOUD_BASE_URL', 'https://graph.facebook.com'),
-        'api_version' => env('WHATSAPP_API_VERSION', env('WHATSAPP_CLOUD_API_VERSION', 'v21.0')),
-        'timeout' => (int) env('WHATSAPP_CLOUD_TIMEOUT', 30),
+        'base_url' => env('WHATSAPP_API_BASE_URL', 'https://graph.facebook.com'),
+        'api_version' => env('WHATSAPP_API_VERSION', 'v21.0'),
+        'timeout' => (int) env('WHATSAPP_API_TIMEOUT', 30),
 
         /*
         | Webhook Meta. `verify_token` répond au défi de vérification (GET),
@@ -137,6 +149,16 @@ return [
         | hygiène de données personnelles.
         */
         'template' => [
+            /*
+            | Ces deux valeurs doivent correspondre EXACTEMENT au modèle
+            | approuvé chez Meta — nom et code langue. Un écart d'une lettre
+            | produit un 132001 sur chaque fiche, définitif, sans que rien ne
+            | distingue le cas d'un modèle réellement absent.
+            |
+            | Les défauts sont ceux que soumet `php artisan whatsapp:templates
+            | --create` : en production, ne rien poser vaut mieux que poser
+            | une valeur qui pourrait diverger.
+            */
             'name' => env('WHATSAPP_TEMPLATE_NAME', 'fiche_police_nouvelle'),
             'language' => env('WHATSAPP_TEMPLATE_LANGUAGE', 'fr'),
 

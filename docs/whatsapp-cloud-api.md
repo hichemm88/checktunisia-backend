@@ -114,6 +114,24 @@ php artisan whatsapp:allow-backlog --minutes=60
 Toutes vivent dans `config/whatsapp.php`. Aucune n'est en dur dans le code,
 aucune n'apparaît dans les journaux.
 
+> ### Une seule famille de noms
+>
+> `WHATSAPP_` + le terme employé par la console Meta. **Il n'y a plus de repli
+> sur d'anciens noms.**
+>
+> Le repli semblait prudent ; il ne l'était pas. Deux familles vivant en
+> parallèle, ce sont deux endroits où poser un jeton, un seul qui compte, et
+> aucun moyen de savoir lequel est lu — on croit avoir configuré le canal
+> alors qu'on a rempli les variables mortes.
+>
+> **À supprimer de Railway** (les trois dernières n'étaient lues par rien) :
+> `WHATSAPP_CLOUD_TOKEN`, `WHATSAPP_CLOUD_PHONE_NUMBER_ID`,
+> `WHATSAPP_CLOUD_WABA_ID`, `WHATSAPP_CLOUD_TEMPLATE`,
+> `WHATSAPP_CLOUD_TEMPLATE_LANG`.
+>
+> Pour vérifier ce que le code exige vraiment, sans grep :
+> `php artisan whatsapp:check-config`.
+
 ### Obligatoires — sans elles, rien ne part
 
 | Variable | Rôle |
@@ -161,6 +179,8 @@ aucune n'apparaît dans les journaux.
 | `WHATSAPP_FICHE_URL_BASE` | `APP_URL` + `/f/` | Base du bouton. **Figée à l'approbation** : la changer impose un nouveau modèle. |
 | `WHATSAPP_WEBHOOK_CALLBACK_URL` | `APP_URL` + `/api/v1/webhooks/whatsapp` | URL déclarée à Meta. |
 | `WHATSAPP_API_VERSION` | `v21.0` | Version de l'API Graph. |
+| `WHATSAPP_API_BASE_URL` | `https://graph.facebook.com` | Hôte Graph. Rarement modifié. |
+| `WHATSAPP_API_TIMEOUT` | `30` | Délai d'appel, en secondes. |
 
 `FRONTEND_URL` et `APP_URL` doivent être justes : la première est la cible de
 la redirection du bouton, la seconde compose la base du lien et l'URL du
@@ -171,8 +191,41 @@ webhook.
 | Variable | Effet |
 |---|---|
 | `WHATSAPP_PROVIDER=legacy` | Alias de `WHATSAPP_CHANNEL=web`. Le relais est banni : il ne transmettra rien. |
-| `WHATSAPP_CLOUD_TOKEN`, `WHATSAPP_CLOUD_PHONE_NUMBER_ID`, `WHATSAPP_CLOUD_API_VERSION` | Anciens noms, toujours acceptés en repli des nouveaux. |
 | `WHATSAPP_WORKER_SECRET`, `WHATSAPP_QR_URL`, `WHATSAPP_SESSION_VAULT_*` | Relais Web uniquement. Sans effet sur la Cloud API. |
+| `WHATSAPP_CLOUD_*` | **Plus lues.** À supprimer de l'environnement — voir l'encadré ci-dessus. |
+
+## Si une variable obligatoire manque
+
+Le danger n'est pas la panne, c'est le **silence** : jusqu'ici, une variable
+absente ne produisait aucune erreur — le canal se contentait de ne rien
+envoyer, exactement comme un canal qui n'a rien à envoyer. C'est ainsi qu'un
+arriéré de 715 fiches s'est constitué sans que personne ne le voie.
+
+Quatre endroits le disent désormais, du plus tôt au plus tard :
+
+| Où | Comportement |
+|---|---|
+| `php artisan whatsapp:check-config` | **Sort en erreur** avec la liste exacte des variables manquantes. À placer dans la commande de démarrage du conteneur. |
+| Démarrage de l'application | Entrée de journal **critique** (relayée à Sentry) si le canal est armé et incomplet. |
+| `whatsapp:dispatch`, `whatsapp:templates`, `whatsapp:configure-webhook` | Refusent de s'exécuter, avec la liste. |
+| `GET admin/whatsapp/health` | Champ `missing_config` : les noms des variables absentes, jamais leurs valeurs. |
+
+Dans la commande de démarrage Railway :
+
+```bash
+php artisan migrate --force && php artisan whatsapp:check-config && …
+```
+
+### Pourquoi l'application ne s'arrête pas d'elle-même
+
+Faire planter le conteneur pour une variable WhatsApp empêcherait aussi
+d'enregistrer les check-in, de consulter le registre et de payer un
+abonnement. Un hébergeur qui ne peut plus rien faire est un dommage plus grave
+que des fiches qui attendent en file.
+
+Le **déploiement**, lui, peut échouer sans conséquence pour personne : c'est
+le bon endroit où être intransigeant, et c'est ce que fait
+`whatsapp:check-config`.
 
 ## Ordre de mise en service
 
@@ -193,6 +246,12 @@ Aucun envoi n'est possible. C'est l'état correct pour un déploiement.
 l'emporterait sur le défaut. **Vérifier explicitement cette variable** — un
 canal resté sur `web` signifie un canal légal muet, sans que rien ne le
 signale.
+
+Vérifier immédiatement que le code voit bien vos variables :
+
+```bash
+php artisan whatsapp:check-config --admin
+```
 
 ### 2. Créer le modèle et attendre l'approbation
 

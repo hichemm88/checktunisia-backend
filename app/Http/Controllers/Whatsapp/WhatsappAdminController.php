@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
 use App\Services\Delivery\DeliveryChannelManager;
+use App\Services\Whatsapp\WhatsappCloudConfig;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use App\Services\Whatsapp\WhatsappSendingGuard;
 use Illuminate\Http\JsonResponse;
@@ -92,6 +93,9 @@ class WhatsappAdminController extends Controller
             'channel' => $channels->active()->name(),
             'sending_blocked' => $this->blockingReason($channels, $guard) !== null,
             'blocked_reason' => $this->blockingReason($channels, $guard),
+            // Noms de variables absentes, jamais leurs valeurs : de quoi
+            // corriger sans avoir à deviner, et sans rien divulguer.
+            'missing_config' => WhatsappCloudConfig::missingForAdmin(),
         ]]);
     }
 

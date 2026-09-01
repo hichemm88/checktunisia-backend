@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Services\Whatsapp\WhatsappCloudApi;
+use App\Services\Whatsapp\WhatsappCloudConfig;
 use Illuminate\Console\Command;
 
 /**
@@ -28,8 +29,14 @@ class WhatsappTemplates extends Command
 
     public function handle(WhatsappCloudApi $api): int
     {
+        if ($missing = WhatsappCloudConfig::missingForAdmin()) {
+            $this->error(WhatsappCloudConfig::explain($missing));
+
+            return self::FAILURE;
+        }
+
         if (! $api->canManageTemplates()) {
-            $this->error('Configuration incomplète : WHATSAPP_API_TOKEN et WHATSAPP_WABA_ID sont requis.');
+            $this->error('Gestion des modèles indisponible : jeton ou identifiant de compte (WABA) refusé.');
 
             return self::FAILURE;
         }
