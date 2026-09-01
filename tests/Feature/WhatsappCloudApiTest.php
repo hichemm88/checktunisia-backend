@@ -59,6 +59,14 @@ class WhatsappCloudApiTest extends TestCase
             'whatsapp.direct_routing' => true,
             'whatsapp.cloud.token' => 'test-token',
             'whatsapp.cloud.phone_number_id' => '123456',
+            // Explicites : voir le commentaire de DeliveryChannelTest. Un test
+            // qui hérite d'un défaut de configuration est un test qui passe
+            // chez soi et tombe en CI.
+            'whatsapp.cloud.base_url' => 'https://graph.facebook.com',
+            'whatsapp.cloud.api_version' => 'v21.0',
+            'whatsapp.cloud.timeout' => 30,
+            'whatsapp.cloud.template.name' => 'fiche_police_nouvelle',
+            'whatsapp.cloud.template.language' => 'fr',
             'whatsapp.cloud.waba_id' => 'waba-1',
             'whatsapp.cloud.app_id' => 'app-1',
             'whatsapp.cloud.app_secret' => 'app-secret',

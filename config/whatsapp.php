@@ -20,6 +20,31 @@
 |
 */
 
+/*
+|--------------------------------------------------------------------------
+| Une variable VIDE vaut une variable ABSENTE
+|--------------------------------------------------------------------------
+|
+| `env('X', 'defaut')` ne rend « defaut » que si X n'existe PAS. Si X existe
+| avec une valeur vide — « X= » dans un fichier .env — il rend la chaîne vide,
+| et le défaut est perdu.
+|
+| Ce n'est pas théorique. `.env.example` documente chaque réglage optionnel
+| par une ligne « X= », et la CI copie ce fichier en .env : toutes les valeurs
+| par défaut de ce fichier étaient donc écrasées par du vide. L'URL de l'API
+| Graph devenait « », et chaque appel mourait sur « URI must include a scheme
+| and host » — une panne totale du canal, invisible en local où le .env de
+| développement ne contient aucune de ces lignes.
+|
+| Le même piège attend en production : laisser une variable vide dans Railway
+| ne « prend pas le défaut », cela efface le défaut.
+*/
+$envOr = function (string $key, $default) {
+    $value = env($key);
+
+    return ($value === null || $value === '') ? $default : $value;
+};
+
 return [
 
     // Interrupteur général. À false : aucun enfilage, aucun worker, aucune
@@ -35,7 +60,7 @@ return [
     // que soit le rattachement établissement→agents. À true, un établissement
     // AVEC des destinataires assignés envoie directement ; sans, il garde le
     // numéro global. Défaut true (le rattachement par établissement fait la bascule).
-    'direct_routing' => (bool) env('WHATSAPP_DIRECT_ROUTING', true),
+    'direct_routing' => (bool) $envOr('WHATSAPP_DIRECT_ROUTING', true),
 
     // Secret partagé entre Laravel et le service Node. Le worker s'authentifie
     // avec ce jeton sur les routes /api/v1/internal/whatsapp/*.
@@ -61,15 +86,15 @@ return [
     // Délai minimum entre deux envois, appliqué côté worker.
     // 3 s à l'origine : trop rapide, et surtout METRONOMIQUE — une régularité
     // à la milliseconde près est en soi une signature d'automate.
-    'min_interval_seconds' => (int) env('WHATSAPP_MIN_INTERVAL_SECONDS', 45),
+    'min_interval_seconds' => (int) $envOr('WHATSAPP_MIN_INTERVAL_SECONDS', 45),
 
     // Part d'aléa appliquée à ce délai (0.4 = ±40 %). Casse la régularité.
-    'interval_jitter_ratio' => (float) env('WHATSAPP_INTERVAL_JITTER_RATIO', 0.4),
+    'interval_jitter_ratio' => (float) $envOr('WHATSAPP_INTERVAL_JITTER_RATIO', 0.4),
 
     // Plafond d'envois par heure glissante, appliqué côté Laravel — le worker
     // perd la mémoire à chaque redémarrage, le backend non. Une file de 200
     // fiches (arriéré après panne) ne doit JAMAIS partir d'un bloc.
-    'max_per_hour' => (int) env('WHATSAPP_MAX_PER_HOUR', 30),
+    'max_per_hour' => (int) $envOr('WHATSAPP_MAX_PER_HOUR', 30),
 
     /*
     | Montée en charge après appairage. Un numéro neuf qui se met aussitôt à
@@ -81,9 +106,9 @@ return [
     | WhatsappSessionState::phone_number) — pas à chaque reconnexion du même
     | numéro, qui ne repart pas de zéro en réputation.
     */
-    'warmup_hours' => (int) env('WHATSAPP_WARMUP_HOURS', 24),
-    'warmup_max_per_hour' => (int) env('WHATSAPP_WARMUP_MAX_PER_HOUR', 6),
-    'warmup_min_interval_seconds' => (int) env('WHATSAPP_WARMUP_MIN_INTERVAL_SECONDS', 120),
+    'warmup_hours' => (int) $envOr('WHATSAPP_WARMUP_HOURS', 24),
+    'warmup_max_per_hour' => (int) $envOr('WHATSAPP_WARMUP_MAX_PER_HOUR', 6),
+    'warmup_min_interval_seconds' => (int) $envOr('WHATSAPP_WARMUP_MIN_INTERVAL_SECONDS', 120),
 
     /*
     | Disjoncteur. N échecs d'envoi consécutifs SANS panne de page (la page
@@ -94,7 +119,7 @@ return [
     | compris après redémarrage du worker) et les administrateurs sont alertés.
     | La reprise est un geste humain : bouton « Reprendre ».
     */
-    'circuit_breaker_failures' => (int) env('WHATSAPP_CIRCUIT_BREAKER_FAILURES', 5),
+    'circuit_breaker_failures' => (int) $envOr('WHATSAPP_CIRCUIT_BREAKER_FAILURES', 5),
 
     // Backoff des retries, en minutes depuis le premier échec du job.
     // 1 min, 5 min, 15 min, 1 h, puis toutes les 4 h jusqu'à 24 h max.
@@ -102,12 +127,12 @@ return [
     'retry_schedule_minutes' => [1, 5, 15, 60, 240, 480, 720, 960, 1200, 1440],
 
     // Âge maximum d'un job avant abandon définitif (24 h).
-    'max_age_minutes' => (int) env('WHATSAPP_MAX_AGE_MINUTES', 1440),
+    'max_age_minutes' => (int) $envOr('WHATSAPP_MAX_AGE_MINUTES', 1440),
 
     // Rétention des images de documents (heures). Minimisation des données : les
     // scans ne sont conservés que le temps nécessaire aux envois (retries max
     // 24 h), puis purgés automatiquement. Aligné sur max_age_minutes.
-    'image_retention_hours' => (int) env('WHATSAPP_IMAGE_RETENTION_HOURS', 24),
+    'image_retention_hours' => (int) $envOr('WHATSAPP_IMAGE_RETENTION_HOURS', 24),
 
     // URL publique de la page /qr du service Node (whatsapp-service) — insérée
     // en bouton dans l'email d'alerte de déconnexion pour reconnecter en un clic.
@@ -129,7 +154,7 @@ return [
     |
     | Voir docs/canal-transmission.md pour la procédure de bascule.
     */
-    'channel' => env('WHATSAPP_CHANNEL', env('WHATSAPP_PROVIDER') === 'legacy' ? 'web' : 'cloud'),
+    'channel' => $envOr('WHATSAPP_CHANNEL', env('WHATSAPP_PROVIDER') === 'legacy' ? 'web' : 'cloud'),
 
     /*
     | Mode ombre : le canal cible est exercé À BLANC sur chaque job (résolution
@@ -166,9 +191,9 @@ return [
         'token' => env('WHATSAPP_API_TOKEN'),
         'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
         'waba_id' => env('WHATSAPP_WABA_ID'),
-        'base_url' => env('WHATSAPP_API_BASE_URL', 'https://graph.facebook.com'),
-        'api_version' => env('WHATSAPP_API_VERSION', 'v21.0'),
-        'timeout' => (int) env('WHATSAPP_API_TIMEOUT', 30),
+        'base_url' => $envOr('WHATSAPP_API_BASE_URL', 'https://graph.facebook.com'),
+        'api_version' => $envOr('WHATSAPP_API_VERSION', 'v21.0'),
+        'timeout' => (int) $envOr('WHATSAPP_API_TIMEOUT', 30),
 
         /*
         | Webhook Meta. `verify_token` répond au défi de vérification (GET),
@@ -185,9 +210,9 @@ return [
 
         // URL de rappel déclarée à Meta. Le préfixe d'API du projet est
         // /api/v1 : c'est cette forme-là qui doit être enregistrée.
-        'webhook_callback_url' => env(
+        'webhook_callback_url' => $envOr(
             'WHATSAPP_WEBHOOK_CALLBACK_URL',
-            rtrim(env('APP_URL', 'https://api.qayed.tn'), '/').'/api/v1/webhooks/whatsapp',
+            rtrim((string) $envOr('APP_URL', 'https://api.qayed.tn'), '/').'/api/v1/webhooks/whatsapp',
         ),
 
         /*
@@ -211,8 +236,8 @@ return [
             | --create` : en production, ne rien poser vaut mieux que poser
             | une valeur qui pourrait diverger.
             */
-            'name' => env('WHATSAPP_TEMPLATE_NAME', 'fiche_police_nouvelle'),
-            'language' => env('WHATSAPP_TEMPLATE_LANGUAGE', 'fr'),
+            'name' => $envOr('WHATSAPP_TEMPLATE_NAME', 'fiche_police_nouvelle'),
+            'language' => $envOr('WHATSAPP_TEMPLATE_LANGUAGE', 'fr'),
 
             /*
             | Base de l'URL du bouton « Consulter la fiche ».
@@ -227,9 +252,9 @@ return [
             | Le suffixe {{1}} est le jeton public de la ligne d'envoi (ULID),
             | pas un identifiant métier.
             */
-            'fiche_url_base' => env(
+            'fiche_url_base' => $envOr(
                 'WHATSAPP_FICHE_URL_BASE',
-                rtrim(env('APP_URL', 'https://api.qayed.tn'), '/').'/f/',
+                rtrim((string) $envOr('APP_URL', 'https://api.qayed.tn'), '/').'/f/',
             ),
         ],
     ],
@@ -255,7 +280,7 @@ return [
         | démarrage) : c'est ce qui en fait un vrai coupe-circuit, actionnable
         | en quelques secondes depuis Railway.
         */
-        'sending_enabled' => (bool) env('WHATSAPP_SENDING_ENABLED', true),
+        'sending_enabled' => (bool) $envOr('WHATSAPP_SENDING_ENABLED', true),
 
         /*
         | Instant de bascule vers la Cloud API (ISO 8601).
@@ -274,11 +299,11 @@ return [
 
         // Débit maximum, global à l'émetteur. Au-delà, la file attend le
         // créneau suivant — elle n'est jamais vidée ni tronquée.
-        'max_sends_per_minute' => (int) env('WHATSAPP_MAX_SENDS_PER_MINUTE', 20),
+        'max_sends_per_minute' => (int) $envOr('WHATSAPP_MAX_SENDS_PER_MINUTE', 20),
 
         // Plafond quotidien (jour civil, Africa/Tunis). Atteint : mise en
         // attente jusqu'au lendemain et alerte admin.
-        'max_sends_per_day' => (int) env('WHATSAPP_MAX_SENDS_PER_DAY', 500),
+        'max_sends_per_day' => (int) $envOr('WHATSAPP_MAX_SENDS_PER_DAY', 500),
 
         /*
         | Au-delà de ce nombre de fiches en attente, l'envoi automatique
@@ -288,11 +313,11 @@ return [
         | de travail, c'est le symptôme d'une panne. Le vider automatiquement
         | transforme une panne silencieuse en rafale vers des officiels.
         */
-        'backlog_alert_threshold' => (int) env('WHATSAPP_BACKLOG_ALERT_THRESHOLD', 50),
+        'backlog_alert_threshold' => (int) $envOr('WHATSAPP_BACKLOG_ALERT_THRESHOLD', 50),
 
         // Durée de la pause globale déclenchée par une erreur de débit ou de
         // qualité côté Meta (131049, 80007).
-        'quality_pause_minutes' => (int) env('WHATSAPP_QUALITY_PAUSE_MINUTES', 15),
+        'quality_pause_minutes' => (int) $envOr('WHATSAPP_QUALITY_PAUSE_MINUTES', 15),
 
         // Destination du rapport CSV des fiches annulées par la commande
         // whatsapp:cancel-backlog. Hors du dépôt : storage/ est ignoré par git.

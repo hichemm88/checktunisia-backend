@@ -92,6 +92,15 @@ class DeliveryChannelTest extends TestCase
             'whatsapp.channel' => 'cloud',
             'whatsapp.cloud.token' => 'test-token',
             'whatsapp.cloud.phone_number_id' => '123456',
+            // Posés explicitement, alors qu'ils ont un défaut : un test ne doit
+            // rien devoir à l'environnement. La CI copie .env.example en .env,
+            // où chaque réglage optionnel figure VIDE — et une variable vide
+            // n'est pas une variable absente, elle écrase le défaut. Les URL
+            // Graph devenaient « », et toutes ces commandes mouraient sur
+            // « URI must include a scheme and host ».
+            'whatsapp.cloud.base_url' => 'https://graph.facebook.com',
+            'whatsapp.cloud.api_version' => 'v21.0',
+            'whatsapp.cloud.timeout' => 30,
             // Bascule armée dans le passé : sans elle, les garde-fous
             // refusent tout envoi — c'est leur rôle, testé plus loin.
             'whatsapp.guard.cutover_at' => '2000-01-01T00:00:00+00:00',
