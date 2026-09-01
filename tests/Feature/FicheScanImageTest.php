@@ -69,18 +69,60 @@ class FicheScanImageTest extends TestCase
         return [$image->width(), $image->height()];
     }
 
-    public function test_every_document_lands_in_the_same_frame(): void
+    public function test_every_document_lands_in_the_frame_of_its_orientation(): void
     {
-        // Le cœur de la demande : un PDF uniforme, quelles que soient les
-        // sources. Passeport scanné, CIN photographiée de travers, capture
-        // d'écran — même cadre.
-        config(['fiche.photo_width' => 1200, 'fiche.photo_height' => 800]);
+        /*
+         * Le PDF reste uniforme — passeport scanné, CIN de travers, capture
+         * d'écran donnent toutes le même cadre — mais ce cadre SUIT désormais
+         * l'orientation de la source.
+         *
+         * Un cadre unique en paysage encadrait les clichés verticaux de bandes
+         * vides : la pièce n'occupait plus que 35 % de la largeur, contre 75 %
+         * à l'horizontale, soit 133 dpi utiles contre 289. Comme photographier
+         * une carte tenue en main donne le plus souvent un cliché vertical,
+         * c'était le cas le plus fréquent qui était le moins lisible.
+         */
+        config(['fiche.photo_long_edge' => 1600, 'fiche.photo_short_edge' => 1067]);
 
-        foreach ([[1600, 1200], [900, 1600], [400, 260], [3000, 2000], [800, 800]] as [$w, $h]) {
+        foreach ([
+            [1600, 1200, [1600, 1067]],   // paysage
+            [3000, 2000, [1600, 1067]],   // paysage
+            [400, 260, [1600, 1067]],     // paysage, petite source
+            [900, 1600, [1067, 1600]],    // portrait
+            [3024, 4032, [1067, 1600]],   // portrait, cliché de téléphone
+            // Carré : on garde le paysage, orientation du bloc qui accueille
+            // la pièce dans la vue.
+            [800, 800, [1600, 1067]],
+        ] as [$w, $h, $expected]) {
             $this->attachScan($w, $h);
 
-            $this->assertSame([1200, 800], $this->renderedSize(), "source {$w}x{$h}");
+            $this->assertSame($expected, $this->renderedSize(), "source {$w}x{$h}");
         }
+    }
+
+    public function test_a_portrait_photo_keeps_a_usable_resolution(): void
+    {
+        /*
+         * La mesure qui motive tout ce qui précède. La vue accorde ~79 mm de
+         * large à la pièce ; en dessous de ~220 dpi utiles, le numéro d'un
+         * document imprimé à 3 mm de haut devient difficile à lire.
+         *
+         * Avec l'ancien cadre fixe 1200x800, un cliché vertical tombait à
+         * 415 px utiles, soit 133 dpi. On vérifie ici que l'arête courte
+         * suffit à repasser au-dessus du seuil.
+         */
+        config(['fiche.photo_long_edge' => 1600, 'fiche.photo_short_edge' => 1067]);
+
+        $this->attachScan(3024, 4032);
+        [$width] = $this->renderedSize();
+
+        $dpi = $width / (79 / 25.4);
+
+        $this->assertGreaterThanOrEqual(
+            220,
+            $dpi,
+            "Un cliché vertical ne rend que {$width} px sur 79 mm, soit ".round($dpi)." dpi."
+        );
     }
 
     public function test_the_default_never_crops_the_document(): void
@@ -230,7 +272,7 @@ class FicheScanImageTest extends TestCase
                 }
             });
 
-        $this->assertSame([1200, 800], $this->renderedSize(), 'la pièce part quand même');
+        $this->assertSame([1600, 1067], $this->renderedSize(), 'la pièce part quand même');
     }
 
     public function test_an_undetected_document_is_not_re_analysed_forever(): void
@@ -319,7 +361,7 @@ class FicheScanImageTest extends TestCase
                 }
             });
 
-        $this->assertSame([1200, 800], $this->renderedSize(), 'le cadre reste uniforme');
+        $this->assertSame([1600, 1067], $this->renderedSize(), 'le cadre reste uniforme pour une orientation donnée');
 
         // Aucune bande blanche : le document remplit bien le cadre.
         $uri = FicheScanImage::dataUri($this->checkIn, $this->checkIn->guests()->first());
@@ -363,6 +405,6 @@ class FicheScanImageTest extends TestCase
 
         $c = $image->pickColor(4, 400)->toArray();
         $this->assertGreaterThan(245, $c[0], 'bande blanche attendue sur le côté');
-        $this->assertSame([1200, 800], [$image->width(), $image->height()]);
+        $this->assertSame([1600, 1067], [$image->width(), $image->height()]);
     }
 }
