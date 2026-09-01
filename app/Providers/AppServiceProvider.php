@@ -130,6 +130,21 @@ class AppServiceProvider extends ServiceProvider
         // sans la clé privée ne peut pas être forgée, quel que soit le nombre
         // d'essais.
         RateLimiter::for('webauthn', fn (Request $request) => Limit::perMinute(30)->by($this->signature($request)));
+
+        // Connexion des agents par code WhatsApp. Indexée sur l'IP : la
+        // requête est anonyme par construction, il n'y a pas d'utilisateur à
+        // qui l'attribuer.
+        //
+        // 12/min, pas 5 : l'écran de saisie du code envoie une requête par
+        // tentative, et un poste de police partage une IP publique — deux
+        // agents qui se connectent en même temps ne doivent pas se bloquer
+        // l'un l'autre. Ce limiteur n'est PAS la protection du mécanisme ; il
+        // empêche seulement de marteler la route. Les bornes qui comptent
+        // (trois demandes par numéro et par IP sur dix minutes, trois essais
+        // par code, verrouillage de quinze minutes) sont dans
+        // WhatsappOtpService, où elles peuvent distinguer une demande d'un
+        // essai.
+        RateLimiter::for('whatsapp-otp', fn (Request $request) => Limit::perMinute(12)->by($request->ip()));
     }
 
     /**
