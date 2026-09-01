@@ -352,6 +352,12 @@ php artisan whatsapp:templates
 
 **Ne pas continuer tant que le statut n'est pas `APPROVED`.**
 
+Si le modèle revient `REJECTED` — le corps compte 9 variables, ce que Meta
+refuse parfois pour un ratio texte-variables jugé trop faible — le plan de
+repli est prêt dans [whatsapp-template-repli.md](whatsapp-template-repli.md) :
+lire d'abord le motif, puis fusionner les variables sans rien perdre. Ne PAS
+relancer `--create` à l'identique.
+
 ### 3. Neutraliser l'arriéré — ne jamais l'envoyer
 
 Environ 715 fiches en attente datent du bannissement. Les séjours concernés
