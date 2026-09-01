@@ -109,6 +109,175 @@ Le paramètre est revalidé à chaque étape et n'accepte qu'un chemin interne :
 une page de connexion des forces de l'ordre qui redirige où on lui dit serait
 un tremplin de hameçonnage avec le bon nom de domaine.
 
+## Connexion des agents par code WhatsApp (OTP)
+
+### Le problème
+
+Un agent autorité est enregistré dans le backoffice avec un nom et un numéro
+WhatsApp. **Son adresse e-mail est fictive** — elle n'existe que pour remplir
+la colonne `users.email`. Il ne peut donc ni activer un mot de passe, ni
+recevoir de lien d'invitation, ni suivre une réinitialisation.
+
+Jusqu'ici, le bouton « Consulter la fiche » l'envoyait vers un écran de
+connexion qu'il **ne pouvait pas franchir**. Le seul facteur qu'il possède
+réellement est le téléphone sur lequel la fiche vient d'arriver.
+
+### Le parcours
+
+```
+message WhatsApp ──> /f/{token} ──302──> /login?next=/authority/guests/{id}
+                                              │
+                    « Recevoir un code sur WhatsApp »
+                                              │
+   POST /auth/otp/request {phone}  ──> 202 {"ok": true}   (toujours, quoi qu'il arrive)
+                                              │
+                            code à 6 chiffres, modèle qayed_otp
+                                              │
+   POST /auth/otp/verify {phone, code} ──> session 30 j, via = whatsapp_otp
+                                              │
+                                    la fiche visée s'ouvre
+```
+
+Le login mot de passe + 2FA et les passkeys sont **inchangés** : l'OTP s'ajoute
+comme troisième chemin, il n'en remplace aucun.
+
+### Ce qui rend ce chemin sûr
+
+Un code à six chiffres envoyé sur demande est, en soi, un mécanisme faible :
+10⁶ possibilités et un canal sur lequel on n'a aucune prise. Cinq règles le
+rendent acceptable, et **elles se tiennent toutes** — en retirer une rend les
+quatre autres décoratives.
+
+1. **Aucun envoi vers un numéro saisi librement.** Le numéro doit déjà être
+   enregistré par l'admin comme destinataire de fiches :
+   `receives_whatsapp_fiches` *et* rattachement à au moins un établissement.
+   C'est exactement l'ensemble des numéros vers lesquels une fiche part déjà.
+   Le formulaire ne choisit pas une destination, il désigne un enregistrement
+   existant.
+2. **Réponse et délai identiques**, que le numéro soit éligible ou non :
+   `202 {"ok": true}` dans tous les cas, y compris au-delà des limites de débit
+   et pour un numéro verrouillé. Un plancher de 700 ms couvre l'oracle temporel
+   — sans lui, un numéro inconnu répondrait en quelques millisecondes là où un
+   numéro réel attend un appel à Meta, et la différence se mesure depuis
+   n'importe quel navigateur.
+3. **Trois essais par code**, puis verrouillage du numéro **15 minutes**. C'est
+   ce qui ramène 10⁶ possibilités à trois tentatives. Un numéro verrouillé ne
+   peut pas non plus redemander un code : sinon le verrou se contourne d'un
+   clic sur « renvoyer ».
+4. **Trois demandes par fenêtre de 10 minutes**, par numéro **et** par IP —
+   deux limiteurs distincts. Un limiteur unique indexé sur le couple
+   (numéro, IP) laisserait marteler un même numéro depuis autant d'adresses
+   qu'on veut.
+5. **Le code n'est stocké que haché** (même hachage que les mots de passe),
+   n'est utilisable **qu'une fois**, et n'apparaît dans aucun journal : il
+   n'existe en clair qu'entre sa génération et son départ chez Meta.
+
+Aucun repli SMS ni e-mail : ce serait rouvrir la porte que la règle 1 ferme.
+
+### La file OTP est séparée de celle des fiches
+
+Un code **n'emprunte aucun** des garde-fous des fiches — seuil d'arriéré,
+plafond quotidien, débit par minute, bascule `cutover_at`, disjoncteur.
+
+Les garde-fous des fiches sont taillés pour un flux poussé vers des gens qui
+n'ont rien demandé. Un code est l'exact opposé : il est demandé, à l'instant,
+par la personne qui le reçoit, et il ne vaut rien cinq minutes plus tard. Les
+mélanger aurait deux effets, tous deux mauvais :
+
+- un arriéré de fiches — donc une **panne d'envoi** — fermerait aussi la porte
+  du portail, au moment précis où un agent cherche à consulter une fiche qu'il
+  n'a pas reçue ;
+- un afflux de connexions consommerait le quota quotidien des fiches, qui est
+  une obligation légale.
+
+Ce que l'OTP conserve : le **coupe-circuit global**
+(`WHATSAPP_SENDING_ENABLED`) et un **plafond horaire propre**
+(`WHATSAPP_OTP_MAX_PER_HOUR`), sans lequel cette file serait le seul chemin non
+borné vers Meta. L'envoi est **synchrone** : un code utile cinq minutes ne peut
+pas attendre un ordonnanceur.
+
+### La session, et sa révocation
+
+Une connexion OTP ouvre une session de **30 jours**, marquée `via=whatsapp_otp`
+(capacité `whatsapp-otp-session` sur le jeton Sanctum). Elle **vaut second
+facteur** : exiger en plus une TOTP renverrait l'agent vers une page de
+configuration qu'il ne peut pas atteindre, faute d'adresse e-mail réelle.
+
+La session est **liée à l'appareil** par une empreinte grossière de
+l'user-agent — famille de système et de navigateur, **sans numéro de version**.
+S'accrocher à l'user-agent complet déconnecterait tout le monde à chaque mise à
+jour de navigateur, c'est-à-dire tous les mois. Rejoué depuis un autre appareil,
+le jeton est **détruit** (401 `OTP_DEVICE_MISMATCH`), pas seulement refusé.
+
+Ce n'est pas une preuve cryptographique — un user-agent se forge. Ce n'est pas
+ce qu'on lui demande : elle rend inopérant le vol de jeton **ordinaire**
+(journal recopié, sauvegarde de navigateur, appareil prêté). Le facteur qui ne
+se forge pas reste la possession du numéro au moment de la connexion.
+
+Contrepartie des 30 jours, la **révocation** :
+
+```
+POST /api/v1/admin/authority-users/{id}/revoke-sessions
+```
+
+Toutes les sessions de l'agent tombent, sans distinction de facteur — au moment
+où l'on révoque, on ne sait pas laquelle est compromise. Téléphone perdu,
+mutation, numéro réattribué : sans ce bouton, l'accès survivrait un mois à
+l'événement.
+
+### Ce qui est journalisé
+
+Dans le journal d'activité existant, **numéro masqué** (`216********6`), jamais
+le code :
+
+| Action | Quand |
+|---|---|
+| `authority.otp_requested` | Chaque demande : éligible ou non, envoyée ou non, motif. |
+| `authority.otp_verify_failed` | Code faux, périmé, déjà utilisé, compte inutilisable. |
+| `authority.otp_locked` | Verrouillage du numéro après trois essais. |
+| `authority.otp_verify_locked` | Tentative sur un numéro verrouillé. |
+| `authority.otp_session_opened` | Ouverture de session : durée, appareil. |
+| `authority_user.sessions_revoked` | Révocation par un admin. |
+
+### Le modèle `qayed_otp`
+
+Catégorie **AUTHENTICATION**, créé par la même commande que le modèle de fiche :
+
+```bash
+php artisan whatsapp:templates --create
+```
+
+Meta **écrit le corps du message lui-même** pour cette catégorie : on ne fournit
+ni texte ni exemple, seulement des interrupteurs
+(`add_security_recommendation`, `code_expiration_minutes: 5`). Toute tentative
+de personnaliser la formulation vaut un rejet — et c'est voulu de leur côté :
+la forme d'un message de sécurité ne doit pas dépendre de l'expéditeur, sans
+quoi l'hameçonnage devient indiscernable du légitime.
+
+Le bouton est un **`COPY_CODE`** et non un `ONE_TAP` : l'autoremplissage en un
+tap exige une application mobile signée, empreinte de certificat déclarée chez
+Meta. Le portail est un site web ; « Copier le code » place le code dans le
+presse-papiers, d'où la gestion du collage côté frontend.
+
+À l'envoi, le code voyage **deux fois** : dans le corps et sur le bouton. Ce ne
+sont pas deux paramètres mais deux emplacements du même, et Meta refuse le
+message si l'un manque. `sub_type: url` sur un bouton COPY_CODE n'est pas une
+erreur : c'est la forme qu'impose la Cloud API pour les boutons de modèle
+d'authentification.
+
+### `/f/{token}` : deux modes
+
+`WHATSAPP_FICHE_LINK_MODE` vaut `portal` par défaut (redirection vers la fiche
+derrière la connexion, `next` préservé). En `info`, la route sert une page
+statique sans aucune donnée de fiche ni formulaire — utile pendant la fenêtre
+où le modèle est approuvé, donc le bouton cliquable, mais le portail pas encore
+ouvert.
+
+**Le jeton est vérifié dans les deux modes** (404 si inconnu). C'est encore plus
+nécessaire en mode `info`, où la page ne dépend pourtant pas de la fiche : sans
+cette vérification, `/f/n-importe-quoi` servirait la même page officielle, et le
+lien deviendrait un support d'hameçonnage au nom de Qayed.
+
 ## Les garde-fous, et pourquoi ils existent
 
 Le numéro émetteur est **neuf** et la vérification d'entreprise Meta est encore
@@ -214,22 +383,44 @@ aucune n'apparaît dans les journaux.
 | `WHATSAPP_CIRCUIT_BREAKER_FAILURES` | `5` | Refus consécutifs avant coupure du relais. |
 | `WHATSAPP_BACKLOG_REPORT_PATH` | `storage/app/whatsapp/` | Destination du CSV des fiches annulées. |
 
+Les deux réglages de l'OTP vivent **hors** de ce tableau : la file de connexion
+est séparée de celle des fiches, et aucun garde-fou ci-dessus ne s'y applique.
+
+| Variable | Défaut | Effet |
+|---|---|---|
+| `WHATSAPP_OTP_MAX_PER_HOUR` | `100` | Plafond horaire propre aux codes. Indépendant de `WHATSAPP_MAX_SENDS_PER_DAY` et de l'arriéré. |
+| `WHATSAPP_OTP_SESSION_DAYS` | `30` | Durée de la session ouverte par code. |
+
+Les bornes de **sécurité** de l'OTP n'ont volontairement **aucune variable
+d'environnement** : validité 5 min, 3 essais, verrouillage 15 min, 3 demandes
+par 10 min. Une durée de validité ou un nombre d'essais relâchable depuis
+Railway serait une porte dérobée sur le portail autorité, ouvrable sans
+relecture et sans trace dans le dépôt. Elles vivent dans `config/whatsapp.php`,
+sous la clé `otp`.
+
 ### Modèle et lien
 
 | Variable | Défaut | Effet |
 |---|---|---|
-| `WHATSAPP_TEMPLATE_NAME` | `fiche_police_nouvelle` | Nom du modèle approuvé. |
-| `WHATSAPP_TEMPLATE_LANGUAGE` | `fr` | Code langue du modèle. |
+| `WHATSAPP_TEMPLATE_NAME` | `fiche_police_nouvelle` | Nom du modèle approuvé (fiche). |
+| `WHATSAPP_TEMPLATE_LANGUAGE` | `fr` | Code langue du modèle de fiche. |
+| `WHATSAPP_OTP_TEMPLATE_NAME` | `qayed_otp` | Nom du modèle d'authentification. Même règle : doit correspondre EXACTEMENT au modèle approuvé. |
+| `WHATSAPP_OTP_TEMPLATE_LANGUAGE` | `fr` | Code langue de ce modèle. |
+| `WHATSAPP_FICHE_LINK_MODE` | `portal` | `portal` : redirection vers la fiche. `info` : page statique sans donnée ni formulaire. |
 | `WHATSAPP_FICHE_URL_BASE` | `APP_URL` + `/f/` | Base du bouton. **Figée à l'approbation** : la changer impose un nouveau modèle. |
 | `WHATSAPP_WEBHOOK_CALLBACK_URL` | `APP_URL` + `/api/v1/webhooks/whatsapp` | URL déclarée à Meta. |
 | `WHATSAPP_API_VERSION` | `v21.0` | Version de l'API Graph. |
 | `WHATSAPP_API_BASE_URL` | `https://graph.facebook.com` | Hôte Graph. Rarement modifié. |
 | `WHATSAPP_API_TIMEOUT` | `30` | Délai d'appel, en secondes. |
 
-**Aucune variable nouvelle n'apparaît avec ce merge** : `WHATSAPP_API_BASE_URL`
-et `WHATSAPP_API_TIMEOUT` sont les anciennes `WHATSAPP_CLOUD_BASE_URL` et
-`_TIMEOUT` renommées, et les garde-fous anti-restriction ci-dessus existaient
-déjà sur `main`.
+`WHATSAPP_API_BASE_URL` et `WHATSAPP_API_TIMEOUT` sont les anciennes
+`WHATSAPP_CLOUD_BASE_URL` et `_TIMEOUT` renommées ; les garde-fous
+anti-restriction ci-dessus existaient déjà sur `main`. Les seules variables
+réellement nouvelles sont celles de la connexion par code —
+`WHATSAPP_OTP_TEMPLATE_NAME`, `WHATSAPP_OTP_TEMPLATE_LANGUAGE`,
+`WHATSAPP_OTP_MAX_PER_HOUR`, `WHATSAPP_OTP_SESSION_DAYS` — et
+`WHATSAPP_FICHE_LINK_MODE`. **Toutes ont un défaut sûr : ne rien poser
+fonctionne.**
 
 `FRONTEND_URL` et `APP_URL` doivent être justes : la première est la cible de
 la redirection du bouton, la seconde compose la base du lien et l'URL du
@@ -435,11 +626,18 @@ supprimer du code encore utile au diagnostic.
 Honnêtement :
 
 - **Il n'existe pas encore de page « fiche » consultable sans compte.**
-  `/f/{token}` redirige aujourd'hui vers le portail autorité, qui exige une
-  session. Les destinataires du repli global (numéro `WHATSAPP_RECIPIENT`)
-  reçoivent donc un bouton qu'ils ne peuvent pas ouvrir. Le jour où la page
-  existera, seule la destination de `FicheLinkController` change — **pas le
-  modèle**, c'est précisément ce que cette indirection achète.
+  `/f/{token}` redirige vers le portail autorité, qui exige une session. Les
+  agents enregistrés peuvent désormais l'ouvrir par code WhatsApp ; les
+  destinataires du **repli global** (numéro `WHATSAPP_RECIPIENT`, qui n'est pas
+  un profil autorité) reçoivent toujours un bouton qu'ils ne peuvent pas
+  franchir. Le jour où la page existera, seule la destination de
+  `FicheLinkController` change — **pas le modèle**, c'est précisément ce que
+  cette indirection achète.
+- **La connexion par code ne couvre que les agents rattachés à un
+  établissement.** C'est délibéré (règle 1 plus haut) : un profil créé avec un
+  numéro mais coché par aucun établissement ne reçoit aucune fiche, il ne doit
+  donc pas recevoir de code. Un agent qui « ne reçoit rien » a d'abord un
+  problème de rattachement, pas de connexion.
 - **Le jeton n'expire pas et ne se révoque pas.** Il ne donne accès à rien par
   lui-même, donc ce n'est pas urgent ; ce le deviendra si la page par jeton
   signé voit le jour.

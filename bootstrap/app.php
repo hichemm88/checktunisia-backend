@@ -4,6 +4,7 @@ use App\Http\Middleware\AuditRequestMiddleware;
 use App\Http\Middleware\EnsureActiveSubscription;
 use App\Http\Middleware\EnsureAuthorityCredentialValid;
 use App\Http\Middleware\EnsureOrgOwner;
+use App\Http\Middleware\EnsureOtpDeviceMatches;
 use App\Http\Middleware\EnsurePlatformAdmin2FA;
 use App\Http\Middleware\Require2FA;
 use App\Http\Middleware\ResolveTenant;
@@ -58,6 +59,18 @@ return Application::configure(basePath: dirname(__DIR__))
             'org.owner' => EnsureOrgOwner::class,
             'admin.2fa' => EnsurePlatformAdmin2FA::class,
             'require.2fa' => Require2FA::class,
+            /*
+             | Lie une session ouverte par code WhatsApp à l'appareil qui l'a
+             | ouverte. Inerte pour tous les autres jetons.
+             |
+             | Posé sur le groupe authentifié, et non sur le groupe « api » :
+             | le middleware a besoin du jeton porteur, que seul `auth:sanctum`
+             | résout. Placé plus haut, `$request->user()` interrogerait la
+             | garde par défaut (session web), ne trouverait personne, et le
+             | contrôle serait silencieusement inopérant — la pire forme
+             | d'échec pour une garde de sécurité.
+             */
+            'otp.device' => EnsureOtpDeviceMatches::class,
             'audit' => AuditRequestMiddleware::class,
             'role' => RoleMiddleware::class,
             'permission' => PermissionMiddleware::class,
