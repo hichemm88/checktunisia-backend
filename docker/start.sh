@@ -39,6 +39,33 @@ do
   php artisan db:seed --class="${seeder}" --force || echo "  ! ${seeder} a échoué (ignoré)"
 done
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Canal de transmission des fiches de police.
+#
+# AVERTISSEMENT, PAS ARRÊT — contrairement au contrôle d'APP_KEY plus haut.
+#
+# Une APP_KEY absente rend l'application dangereuse : elle en forgerait une
+# nouvelle et perdrait les données chiffrées. Refuser de démarrer est alors le
+# moindre mal.
+#
+# Une variable WhatsApp absente ne casse rien d'autre que WhatsApp. Refuser de
+# démarrer empêcherait aussi d'enregistrer les check-in, de consulter le
+# registre et de payer un abonnement : le remède serait pire que le mal.
+#
+# Ce qu'il faut éviter est le SILENCE — un canal légal qui accepte les fiches
+# sans jamais les transmettre, indiscernable d'un canal qui n'a rien à
+# envoyer. D'où ce cri dans les journaux à chaque démarrage.
+#
+# Le vrai verrou est ailleurs : la MÊME commande en Pre-Deploy Command sur
+# Railway, où son échec annule la mise en production sans interrompre la
+# version en cours. Voir docs/whatsapp-cloud-api.md.
+# ─────────────────────────────────────────────────────────────────────────────
+echo "→ Vérification du canal WhatsApp"
+if ! php artisan whatsapp:check-config; then
+  echo "ALERTE: canal WhatsApp mal configuré — les fiches de police ne partiront PAS." >&2
+  echo "        L'application démarre quand même : le reste du produit fonctionne." >&2
+fi
+
 echo "→ Mise en cache de la configuration"
 php artisan config:cache
 php artisan route:cache

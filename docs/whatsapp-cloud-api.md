@@ -203,29 +203,56 @@ arriéré de 715 fiches s'est constitué sans que personne ne le voie.
 
 Quatre endroits le disent désormais, du plus tôt au plus tard :
 
-| Où | Comportement |
-|---|---|
-| `php artisan whatsapp:check-config` | **Sort en erreur** avec la liste exacte des variables manquantes. À placer dans la commande de démarrage du conteneur. |
-| Démarrage de l'application | Entrée de journal **critique** (relayée à Sentry) si le canal est armé et incomplet. |
-| `whatsapp:dispatch`, `whatsapp:templates`, `whatsapp:configure-webhook` | Refusent de s'exécuter, avec la liste. |
-| `GET admin/whatsapp/health` | Champ `missing_config` : les noms des variables absentes, jamais leurs valeurs. |
+| Où | Comportement | Déjà branché ? |
+|---|---|---|
+| **Pre-Deploy Command Railway** | **Annule la mise en production.** L'ancienne version continue de tourner. | ❌ **à poser dans les réglages Railway** — voir ci-dessous |
+| `docker/start.sh` | Avertissement bruyant dans les journaux du conteneur, sans bloquer le démarrage. | ✅ dans le dépôt |
+| Démarrage de l'application | Entrée de journal **critique**, relayée à Sentry. | ✅ |
+| `whatsapp:dispatch`, `whatsapp:templates`, `whatsapp:configure-webhook` | Refusent de s'exécuter, avec la liste. | ✅ |
+| `GET admin/whatsapp/health` | Champ `missing_config` : les noms des variables absentes, jamais leurs valeurs. | ✅ |
 
-Dans la commande de démarrage Railway :
+### La seule action manuelle : le Pre-Deploy Command
+
+Ce dépôt n'a ni `railway.json`, ni `nixpacks.toml`, ni `Procfile` : la
+commande de pré-déploiement se règle dans l'interface Railway, elle ne peut
+pas être versionnée ici.
+
+**Service `backend` → Settings → Deploy → Pre-Deploy Command :**
 
 ```bash
-php artisan migrate --force && php artisan whatsapp:check-config && …
+php artisan whatsapp:check-config
 ```
+
+C'est le seul endroit où l'échec est à la fois *dur* et *sans danger* :
+Railway exécute cette commande avant de basculer le trafic, et un code de
+retour non nul **annule le déploiement** — la version précédente continue de
+servir. Rien ne tombe.
+
+La commande ne touche pas à la base : elle peut donc tourner avant les
+migrations, sans ordre à respecter.
+
+Pendant la mise en service, utiliser la variante stricte, qui exige en plus
+`WHATSAPP_WABA_ID` et `WHATSAPP_APP_ID` :
+
+```bash
+php artisan whatsapp:check-config --admin
+```
+
+Ne pas la laisser en Pre-Deploy permanent : ces deux variables ne servent
+qu'aux commandes d'administration, et un déploiement qui échouerait pour
+elles bloquerait une correction urgente sans que l'envoi soit en cause.
 
 ### Pourquoi l'application ne s'arrête pas d'elle-même
 
-Faire planter le conteneur pour une variable WhatsApp empêcherait aussi
-d'enregistrer les check-in, de consulter le registre et de payer un
-abonnement. Un hébergeur qui ne peut plus rien faire est un dommage plus grave
-que des fiches qui attendent en file.
+`docker/start.sh` refuse de démarrer sans `APP_KEY` — l'application forgerait
+sinon une nouvelle clé et perdrait les données chiffrées. Le canal WhatsApp
+n'appelle pas la même réponse : une variable absente ne casse rien d'autre que
+WhatsApp, alors que refuser de démarrer empêcherait aussi d'enregistrer les
+check-in, de consulter le registre et de payer un abonnement.
 
-Le **déploiement**, lui, peut échouer sans conséquence pour personne : c'est
-le bon endroit où être intransigeant, et c'est ce que fait
-`whatsapp:check-config`.
+Un hébergeur qui ne peut plus rien faire est un dommage plus grave que des
+fiches qui attendent en file. Le déploiement, lui, peut échouer sans
+conséquence pour personne : c'est là qu'on est intransigeant.
 
 ## Ordre de mise en service
 
