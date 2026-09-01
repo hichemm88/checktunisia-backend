@@ -14,9 +14,9 @@ use Illuminate\Database\Seeder;
 class LegalPagesSeeder extends Seeder
 {
     private const IDENTITY = [
-        'fr' => "Raison sociale : UW AGENCY SUARL\n\nForme juridique : SUARL (société unipersonnelle à responsabilité limitée)\n\nSiège social : 2 rue Abdallah el Mehdi – Carthage Byrsa 2016 – Tunisie\n\nMatricule fiscal : 1715656S\n\nReprésentant légal : Hichem Mathlouthi\n\nE-mail : hichemmathlouthi@gmail.com\n\nTéléphone : +216 93 116 000\n\nSite web : www.qayed.tn",
-        'en' => "Company name: UW AGENCY SUARL\n\nLegal form: SUARL (single-member limited liability company)\n\nRegistered office: 2 rue Abdallah el Mehdi – Carthage Byrsa 2016 – Tunisia\n\nTax ID: 1715656S\n\nLegal representative: Hichem Mathlouthi\n\nE-mail: hichemmathlouthi@gmail.com\n\nPhone: +216 93 116 000\n\nWebsite: www.qayed.tn",
-        'ar' => "الاسم الاجتماعي: UW AGENCY SUARL\n\nالشكل القانوني: شركة الشخص الواحد ذات المسؤولية المحدودة (SUARL)\n\nالمقر الاجتماعي: 2 نهج عبد الله المهدي – قرطاج بيرصا 2016 – تونس\n\nالمعرف الجبائي: 1715656S\n\nالممثل القانوني: هشام المثلوثي\n\nالبريد الإلكتروني: hichemmathlouthi@gmail.com\n\nالهاتف: 000 116 93 216+\n\nالموقع: www.qayed.tn",
+        'fr' => "Raison sociale : UW AGENCY SUARL\n\nForme juridique : SUARL (société unipersonnelle à responsabilité limitée)\n\nSiège social : 2 rue Abdallah el Mehdi – Carthage Byrsa 2016 – Tunisie\n\nMatricule fiscal : 1715656S\n\nReprésentant légal : Hichem Mathlouthi\n\nE-mail : contact@qayed.tn\n\nTéléphone : +216 93 116 000\n\nSite web : www.qayed.tn",
+        'en' => "Company name: UW AGENCY SUARL\n\nLegal form: SUARL (single-member limited liability company)\n\nRegistered office: 2 rue Abdallah el Mehdi – Carthage Byrsa 2016 – Tunisia\n\nTax ID: 1715656S\n\nLegal representative: Hichem Mathlouthi\n\nE-mail: contact@qayed.tn\n\nPhone: +216 93 116 000\n\nWebsite: www.qayed.tn",
+        'ar' => "الاسم الاجتماعي: UW AGENCY SUARL\n\nالشكل القانوني: شركة الشخص الواحد ذات المسؤولية المحدودة (SUARL)\n\nالمقر الاجتماعي: 2 نهج عبد الله المهدي – قرطاج بيرصا 2016 – تونس\n\nالمعرف الجبائي: 1715656S\n\nالممثل القانوني: هشام المثلوثي\n\nالبريد الإلكتروني: contact@qayed.tn\n\nالهاتف: 000 116 93 216+\n\nالموقع: www.qayed.tn",
     ];
 
     public function run(): void
@@ -188,17 +188,17 @@ class LegalPagesSeeder extends Seeder
             [
                 'title' => ['fr' => '9. Vos droits', 'en' => '9. Your rights', 'ar' => '9. حقوقكم'],
                 'text'  => [
-                    'fr' => "Conformément à la loi organique n° 2004-63, toute personne dispose d'un droit d'accès, de rectification et de suppression de ses données personnelles.\n\nCes droits s'exercent par e-mail à l'adresse : hichemmathlouthi@gmail.com.\n\nToute personne peut également adresser une réclamation à l'Instance Nationale de Protection des Données Personnelles (INPDP).",
-                    'en' => "In accordance with Organic Law No. 2004-63, any person has the right to access, rectify and delete their personal data.\n\nThese rights may be exercised by e-mail at: hichemmathlouthi@gmail.com.\n\nAny person may also lodge a complaint with the Tunisian National Authority for the Protection of Personal Data (INPDP).",
-                    'ar' => "وفقًا للقانون الأساسي عدد 63 لسنة 2004، لكل شخص حق النفاذ إلى معطياته الشخصية وتصحيحها وحذفها.\n\nتُمارَس هذه الحقوق عبر البريد الإلكتروني: hichemmathlouthi@gmail.com.\n\nكما يمكن لكل شخص تقديم شكاية إلى الهيئة الوطنية لحماية المعطيات الشخصية (INPDP).",
+                    'fr' => "Conformément à la loi organique n° 2004-63, toute personne dispose d'un droit d'accès, de rectification et de suppression de ses données personnelles.\n\nCes droits s'exercent par e-mail à l'adresse : contact@qayed.tn.\n\nToute personne peut également adresser une réclamation à l'Instance Nationale de Protection des Données Personnelles (INPDP).",
+                    'en' => "In accordance with Organic Law No. 2004-63, any person has the right to access, rectify and delete their personal data.\n\nThese rights may be exercised by e-mail at: contact@qayed.tn.\n\nAny person may also lodge a complaint with the Tunisian National Authority for the Protection of Personal Data (INPDP).",
+                    'ar' => "وفقًا للقانون الأساسي عدد 63 لسنة 2004، لكل شخص حق النفاذ إلى معطياته الشخصية وتصحيحها وحذفها.\n\nتُمارَس هذه الحقوق عبر البريد الإلكتروني: contact@qayed.tn.\n\nكما يمكن لكل شخص تقديم شكاية إلى الهيئة الوطنية لحماية المعطيات الشخصية (INPDP).",
                 ],
             ],
             [
                 'title' => ['fr' => '10. Modification de la présente politique', 'en' => '10. Changes to this policy', 'ar' => '10. تعديل هذه السياسة'],
                 'text'  => [
-                    'fr' => "La présente politique peut être mise à jour à tout moment, notamment en cas d'évolution du service ou de la réglementation. La version en vigueur est celle publiée sur le site.\n\nPour toute question relative à la présente politique : hichemmathlouthi@gmail.com.",
-                    'en' => "This policy may be updated at any time, in particular in the event of changes to the service or regulations. The version in force is the one published on the site.\n\nFor any question regarding this policy: hichemmathlouthi@gmail.com.",
-                    'ar' => "يمكن تحديث هذه السياسة في أي وقت، خاصة عند تطور الخدمة أو التشريع. والنسخة السارية هي المنشورة على الموقع.\n\nلكل سؤال متعلق بهذه السياسة: hichemmathlouthi@gmail.com.",
+                    'fr' => "La présente politique peut être mise à jour à tout moment, notamment en cas d'évolution du service ou de la réglementation. La version en vigueur est celle publiée sur le site.\n\nPour toute question relative à la présente politique : contact@qayed.tn.",
+                    'en' => "This policy may be updated at any time, in particular in the event of changes to the service or regulations. The version in force is the one published on the site.\n\nFor any question regarding this policy: contact@qayed.tn.",
+                    'ar' => "يمكن تحديث هذه السياسة في أي وقت، خاصة عند تطور الخدمة أو التشريع. والنسخة السارية هي المنشورة على الموقع.\n\nلكل سؤال متعلق بهذه السياسة: contact@qayed.tn.",
                 ],
             ],
         ];
@@ -293,9 +293,9 @@ class LegalPagesSeeder extends Seeder
             [
                 'title' => ['fr' => '10. Remboursement', 'en' => '10. Refunds', 'ar' => '10. الاسترجاع'],
                 'text'  => [
-                    'fr' => "L'essai gratuit de 7 jours permet au client de tester l'intégralité du service avant tout paiement.\n\nLes sommes versées au titre d'une période d'abonnement entamée ne sont pas remboursables, sauf dysfonctionnement majeur et prolongé du service imputable au Vendeur. Dans ce cas, le remboursement de la période concernée est effectué via le moyen de paiement initial dans un délai maximum de 14 jours après validation de la demande.\n\nToute demande s'effectue par e-mail à l'adresse : hichemmathlouthi@gmail.com.",
-                    'en' => "The 7-day free trial allows the client to test the entire service before any payment.\n\nAmounts paid for a subscription period that has begun are non-refundable, except in the event of a major and prolonged malfunction of the service attributable to the Seller. In that case, the refund for the period concerned is made via the original payment method within a maximum of 14 days after the request is validated.\n\nAll requests must be made by e-mail to: hichemmathlouthi@gmail.com.",
-                    'ar' => "تتيح التجربة المجانية لمدة 7 أيام للعميل اختبار كامل الخدمة قبل أي دفع.\n\nالمبالغ المدفوعة عن فترة اشتراك بدأت غير قابلة للاسترجاع، إلا في حال خلل جسيم ومطوّل في الخدمة يُعزى إلى البائع. وفي هذه الحالة يُسترجع مبلغ الفترة المعنية عبر وسيلة الدفع الأصلية في أجل أقصاه 14 يومًا بعد قبول الطلب.\n\nيُقدَّم كل طلب عبر البريد الإلكتروني: hichemmathlouthi@gmail.com.",
+                    'fr' => "L'essai gratuit de 7 jours permet au client de tester l'intégralité du service avant tout paiement.\n\nLes sommes versées au titre d'une période d'abonnement entamée ne sont pas remboursables, sauf dysfonctionnement majeur et prolongé du service imputable au Vendeur. Dans ce cas, le remboursement de la période concernée est effectué via le moyen de paiement initial dans un délai maximum de 14 jours après validation de la demande.\n\nToute demande s'effectue par e-mail à l'adresse : contact@qayed.tn.",
+                    'en' => "The 7-day free trial allows the client to test the entire service before any payment.\n\nAmounts paid for a subscription period that has begun are non-refundable, except in the event of a major and prolonged malfunction of the service attributable to the Seller. In that case, the refund for the period concerned is made via the original payment method within a maximum of 14 days after the request is validated.\n\nAll requests must be made by e-mail to: contact@qayed.tn.",
+                    'ar' => "تتيح التجربة المجانية لمدة 7 أيام للعميل اختبار كامل الخدمة قبل أي دفع.\n\nالمبالغ المدفوعة عن فترة اشتراك بدأت غير قابلة للاسترجاع، إلا في حال خلل جسيم ومطوّل في الخدمة يُعزى إلى البائع. وفي هذه الحالة يُسترجع مبلغ الفترة المعنية عبر وسيلة الدفع الأصلية في أجل أقصاه 14 يومًا بعد قبول الطلب.\n\nيُقدَّم كل طلب عبر البريد الإلكتروني: contact@qayed.tn.",
                 ],
             ],
             [
@@ -309,9 +309,9 @@ class LegalPagesSeeder extends Seeder
             [
                 'title' => ['fr' => '12. Protection des données personnelles', 'en' => '12. Personal data protection', 'ar' => '12. حماية المعطيات الشخصية'],
                 'text'  => [
-                    'fr' => "Les informations collectées sur le site sont nécessaires au traitement des souscriptions, à la fourniture du service et à la gestion de la relation client.\n\nLes données personnelles sont traitées conformément à la réglementation tunisienne applicable en matière de protection des données personnelles (loi organique n° 2004-63).\n\nLe client dispose d'un droit d'accès, de rectification et de suppression de ses données personnelles en contactant : hichemmathlouthi@gmail.com.",
-                    'en' => "The information collected on the site is necessary for processing subscriptions, providing the service and managing the client relationship.\n\nPersonal data is processed in accordance with the applicable Tunisian regulations on personal data protection (Organic Law No. 2004-63).\n\nThe client has the right to access, rectify and delete their personal data by contacting: hichemmathlouthi@gmail.com.",
-                    'ar' => "المعلومات المجمعة على الموقع ضرورية لمعالجة الاشتراكات وتقديم الخدمة وإدارة العلاقة مع العميل.\n\nتُعالج المعطيات الشخصية وفقًا للتشريع التونسي الساري في مجال حماية المعطيات الشخصية (القانون الأساسي عدد 63 لسنة 2004).\n\nللعميل حق النفاذ إلى معطياته الشخصية وتصحيحها وحذفها بالاتصال بـ: hichemmathlouthi@gmail.com.",
+                    'fr' => "Les informations collectées sur le site sont nécessaires au traitement des souscriptions, à la fourniture du service et à la gestion de la relation client.\n\nLes données personnelles sont traitées conformément à la réglementation tunisienne applicable en matière de protection des données personnelles (loi organique n° 2004-63).\n\nLe client dispose d'un droit d'accès, de rectification et de suppression de ses données personnelles en contactant : contact@qayed.tn.",
+                    'en' => "The information collected on the site is necessary for processing subscriptions, providing the service and managing the client relationship.\n\nPersonal data is processed in accordance with the applicable Tunisian regulations on personal data protection (Organic Law No. 2004-63).\n\nThe client has the right to access, rectify and delete their personal data by contacting: contact@qayed.tn.",
+                    'ar' => "المعلومات المجمعة على الموقع ضرورية لمعالجة الاشتراكات وتقديم الخدمة وإدارة العلاقة مع العميل.\n\nتُعالج المعطيات الشخصية وفقًا للتشريع التونسي الساري في مجال حماية المعطيات الشخصية (القانون الأساسي عدد 63 لسنة 2004).\n\nللعميل حق النفاذ إلى معطياته الشخصية وتصحيحها وحذفها بالاتصال بـ: contact@qayed.tn.",
                 ],
             ],
             [
@@ -325,9 +325,9 @@ class LegalPagesSeeder extends Seeder
             [
                 'title' => ['fr' => '14. Résolution des litiges', 'en' => '14. Dispute resolution', 'ar' => '14. فض النزاعات'],
                 'text'  => [
-                    'fr' => "En cas de litige, le client est invité à contacter le service client afin de rechercher une solution amiable.\n\nRéclamation par e-mail : hichemmathlouthi@gmail.com\n\nÀ défaut d'accord amiable, les juridictions tunisiennes seront seules compétentes.",
-                    'en' => "In the event of a dispute, the client is invited to contact customer service in order to seek an amicable solution.\n\nComplaints by e-mail: hichemmathlouthi@gmail.com\n\nFailing an amicable agreement, the Tunisian courts shall have exclusive jurisdiction.",
-                    'ar' => "في حال نزاع، يُدعى العميل إلى الاتصال بخدمة الحرفاء سعيًا لحل ودي.\n\nالشكاوى عبر البريد الإلكتروني: hichemmathlouthi@gmail.com\n\nوفي غياب اتفاق ودي، تختص المحاكم التونسية دون سواها.",
+                    'fr' => "En cas de litige, le client est invité à contacter le service client afin de rechercher une solution amiable.\n\nRéclamation par e-mail : contact@qayed.tn\n\nÀ défaut d'accord amiable, les juridictions tunisiennes seront seules compétentes.",
+                    'en' => "In the event of a dispute, the client is invited to contact customer service in order to seek an amicable solution.\n\nComplaints by e-mail: contact@qayed.tn\n\nFailing an amicable agreement, the Tunisian courts shall have exclusive jurisdiction.",
+                    'ar' => "في حال نزاع، يُدعى العميل إلى الاتصال بخدمة الحرفاء سعيًا لحل ودي.\n\nالشكاوى عبر البريد الإلكتروني: contact@qayed.tn\n\nوفي غياب اتفاق ودي، تختص المحاكم التونسية دون سواها.",
                 ],
             ],
             [
