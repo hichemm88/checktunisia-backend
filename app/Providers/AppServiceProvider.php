@@ -35,16 +35,19 @@ class AppServiceProvider extends ServiceProvider
         $this->warnOnIncompleteWhatsappConfig();
 
         /*
-         * Le logo des PDF de fiches.
+         * Le logo, partout où Qayed se présente à l'autorité.
          *
-         * Par un compositeur plutôt qu'en argument des trois appelants
-         * (relais WhatsApp, export par email, récapitulatif quotidien) :
-         * l'en-tête est une constante de marque, pas une donnée de la fiche.
-         * Le passer à la main trois fois, c'est trois occasions de l'oublier —
-         * et un PDF sans en-tête ne se remarque qu'une fois chez le
-         * destinataire.
+         * Deux vues : l'en-tête des PDF de fiches, et la page d'attente
+         * servie par /f/{token} quand le portail n'est pas encore ouvert.
+         *
+         * Par un compositeur plutôt qu'en argument des appelants (relais
+         * WhatsApp, export par email, récapitulatif quotidien, contrôleur du
+         * lien) : le logo est une constante de marque, pas une donnée de la
+         * fiche. Le passer à la main quatre fois, c'est quatre occasions de
+         * l'oublier — et une page sans identification ne se remarque qu'une
+         * fois chez le destinataire.
          */
-        View::composer('pdf.police-fiches', function ($view) {
+        View::composer(['pdf.police-fiches', 'fiche-link-info'], function ($view) {
             $view->with('brandLogo', BrandLogo::dataUri());
         });
     }

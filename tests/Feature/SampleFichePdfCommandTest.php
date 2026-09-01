@@ -7,6 +7,7 @@ use App\Models\DocumentScan;
 use App\Models\Hotel;
 use App\Models\User;
 use App\Models\WhatsappSendLog;
+use App\Support\BrandLogo;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Intervention\Image\ImageManager;
 use Tests\TestCase;
@@ -127,6 +128,41 @@ class SampleFichePdfCommandTest extends TestCase
         $this->artisan('whatsapp:sample-pdf', ['send_log_id' => $orphan->id])
             ->expectsOutputToContain('check-in ou voyageur absent')
             ->assertExitCode(1);
+    }
+
+    public function test_the_link_page_carries_the_logo_and_falls_back_without_it(): void
+    {
+        /*
+         * La page servie par /f/{token} en mode « info » est ce que voit un
+         * policier qui clique depuis WhatsApp. Elle ne doit jamais s'afficher
+         * sans identification : ni logo, ni lettre, ce serait une page blanche
+         * au nom de personne — exactement ce qu'on n'envoie pas à l'autorité.
+         *
+         * Les deux branches sont pilotées par la configuration, et non par la
+         * donnée passée à la vue : un compositeur alimente `brandLogo`, et sa
+         * valeur l'emporte sur celle que fournirait un appelant.
+         */
+        config(['whatsapp.fiche_link_mode' => 'info']);
+        $job = $this->job(withScan: false);
+
+        config(['fiche.logo_path' => '']);
+        BrandLogo::forget();
+
+        $this->get('/f/'.$job->public_token)
+            ->assertOk()
+            ->assertSee('data:image/png;base64,', false)
+            ->assertDontSee('>Q</div>', false);
+
+        config(['fiche.logo_path' => sys_get_temp_dir().'/qayed-absent-'.uniqid().'.png']);
+        BrandLogo::forget();
+
+        $this->get('/f/'.$job->public_token)
+            ->assertOk()
+            ->assertSee('>Q</div>', false)
+            ->assertDontSee('data:image/png;base64,', false);
+
+        config(['fiche.logo_path' => '']);
+        BrandLogo::forget();
     }
 
     public function test_the_pdf_stays_light_enough_for_a_phone(): void

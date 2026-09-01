@@ -35,6 +35,13 @@ return [
     | 1600x1067 conserve le rapport 3:2 des appareils photo, et porte le cas
     | portrait à ~220 dpi utiles sur les 79 mm que la vue accorde à la pièce.
     */
+    /*
+    | Logo repris dans l'en-tête des PDF et sur la page d'attente du lien
+    | /f/{token}. Vide = resources/images/qayed-logo.png. Un chemin absolu est
+    | pris tel quel.
+    */
+    'logo_path' => env('FICHE_LOGO_PATH', ''),
+
     'photo_long_edge' => (int) env('FICHE_PHOTO_LONG_EDGE', 1600),
     'photo_short_edge' => (int) env('FICHE_PHOTO_SHORT_EDGE', 1067),
 

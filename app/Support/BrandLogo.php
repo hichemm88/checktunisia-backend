@@ -25,7 +25,7 @@ use Illuminate\Support\Facades\Log;
  */
 final class BrandLogo
 {
-    /** Chemin relatif à resources/, unique endroit où déposer le fichier. */
+    /** Chemin par défaut, relatif à resources/. */
     private const PATH = 'images/qayed-logo.png';
 
     private static ?string $cached = null;
@@ -45,10 +45,10 @@ final class BrandLogo
         }
 
         self::$resolved = true;
-        $path = resource_path(self::PATH);
+        $path = self::path();
 
         if (! is_file($path) || ! is_readable($path)) {
-            Log::info('[fiche] logo absent ('.self::PATH.') — en-tête PDF en repli textuel.');
+            Log::info('[fiche] logo absent ('.$path.') — repli sur le mot-symbole.');
 
             return self::$cached = null;
         }
@@ -56,7 +56,7 @@ final class BrandLogo
         $bytes = @file_get_contents($path);
 
         if ($bytes === false || $bytes === '') {
-            Log::warning('[fiche] logo illisible ou vide ('.self::PATH.') — repli textuel.');
+            Log::warning('[fiche] logo illisible ou vide ('.$path.') — repli sur le mot-symbole.');
 
             return self::$cached = null;
         }
@@ -64,7 +64,32 @@ final class BrandLogo
         return self::$cached = 'data:image/png;base64,'.base64_encode($bytes);
     }
 
-    /** Remet le cache à zéro — pour les tests, qui déposent et retirent le fichier. */
+    /**
+     * Emplacement du fichier.
+     *
+     * Configurable — `fiche.logo_path`, absolu ou relatif à resources/ — pour
+     * une raison précise : sans cela, les deux comportements de cette classe
+     * ne sont pas tous deux exerçables. Le logo étant versionné, le cas
+     * « absent » ne pouvait plus être joué qu'en supprimant le vrai fichier,
+     * ce qu'un test n'a pas le droit de faire. Les tests se contentaient donc
+     * de se sauter — un garde-fou qui ne s'exécute jamais ne garde rien.
+     */
+    private static function path(): string
+    {
+        $configured = (string) config('fiche.logo_path', '');
+
+        if ($configured === '') {
+            return resource_path(self::PATH);
+        }
+
+        // Un chemin absolu est pris tel quel : c'est ce dont un test a besoin
+        // pour désigner un répertoire temporaire.
+        return str_starts_with($configured, '/') || preg_match('#^[A-Za-z]:[\\/]#', $configured)
+            ? $configured
+            : resource_path($configured);
+    }
+
+    /** Remet le cache à zéro — le chemin peut changer d'un test à l'autre. */
     public static function forget(): void
     {
         self::$cached = null;
