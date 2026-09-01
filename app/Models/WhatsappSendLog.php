@@ -94,12 +94,13 @@ class WhatsappSendLog extends Model
     }
 
     /**
-     * Toute ligne porte un jeton public, quelle qu'en soit l'origine.
+     * Commodité, pas garantie : la colonne est NOT NULL en base.
      *
-     * L'invariant est posé ici plutôt que dans le service qui enfile : le
-     * bouton du modèle WhatsApp ne fonctionne QUE si le jeton existe, et une
-     * ligne créée par un autre chemin (reprise de données, test, futur
-     * appelant) produirait sinon un lien mort chez un policier.
+     * Ce crochet évite à chaque appelant d'avoir à penser au jeton. Il ne
+     * porte PAS l'invariant — un invariant qui ne vit que dans le modèle
+     * tient tant que toutes les écritures passent par Eloquent, c'est-à-dire
+     * jusqu'à la première reprise de données en SQL. La garantie est dans la
+     * migration ; ici, on rend seulement le cas normal indolore.
      */
     protected static function booted(): void
     {
@@ -111,9 +112,13 @@ class WhatsappSendLog extends Model
     }
 
     /**
-     * Jeton public, créé à la volée pour les lignes antérieures à sa mise en
-     * place. Persisté immédiatement : un lien qui change d'un envoi à l'autre
-     * ne serait plus un lien stable.
+     * Jeton public de cet envoi.
+     *
+     * Le filet — générer et persister si le jeton manque — ne devrait plus
+     * jamais servir depuis que la colonne est NOT NULL et les anciennes
+     * lignes remplies. Il reste parce que son coût est nul et que son absence
+     * se paierait en lien mort dans un message déjà reçu par un policier, un
+     * échec que nous ne verrions pas.
      */
     public function publicToken(): string
     {
