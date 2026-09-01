@@ -3,10 +3,12 @@
 namespace App\Providers;
 
 use App\Services\Whatsapp\WhatsappCloudConfig;
+use App\Support\BrandLogo;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -31,6 +33,20 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->configureRateLimiters();
         $this->warnOnIncompleteWhatsappConfig();
+
+        /*
+         * Le logo des PDF de fiches.
+         *
+         * Par un compositeur plutôt qu'en argument des trois appelants
+         * (relais WhatsApp, export par email, récapitulatif quotidien) :
+         * l'en-tête est une constante de marque, pas une donnée de la fiche.
+         * Le passer à la main trois fois, c'est trois occasions de l'oublier —
+         * et un PDF sans en-tête ne se remarque qu'une fois chez le
+         * destinataire.
+         */
+        View::composer('pdf.police-fiches', function ($view) {
+            $view->with('brandLogo', BrandLogo::dataUri());
+        });
     }
 
     /**
