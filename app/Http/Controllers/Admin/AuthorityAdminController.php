@@ -120,6 +120,26 @@ class AuthorityAdminController extends Controller {
         return response()->json(['data'=>['email'=>$user->email,'email_sent'=>$sent]]);
     }
 
+    /**
+     * POST admin/authority-users/{id}/revoke-sessions — coupe toutes les
+     * sessions ouvertes de cet agent.
+     *
+     * Contrepartie indispensable des sessions de trente jours ouvertes par code
+     * WhatsApp. Un agent muté, un téléphone perdu, un numéro réattribué : sans
+     * ce bouton, l'accès au registre des voyageurs survivrait un mois à
+     * l'événement, et le seul recours serait de supprimer le compte.
+     *
+     * Toutes les sessions, sans distinction de facteur : au moment où l'on
+     * révoque, on ne sait pas laquelle est compromise.
+     */
+    public function revokeSessions(string $id): JsonResponse {
+        $user = User::role('authority_user')->findOrFail($id);
+        $count = $user->tokens()->count();
+        $user->tokens()->delete();
+        AuditLogger::log('authority_user.sessions_revoked', $user, newValues: ['sessions' => $count]);
+        return response()->json(['data' => ['revoked' => $count]]);
+    }
+
     public function destroy(string $id): JsonResponse {
         $user = User::role('authority_user')->findOrFail($id);
         $user->update(['status'=>'inactive']);

@@ -96,7 +96,13 @@ class AuthController extends Controller
         // en dur : un refresh ne doit jamais élargir le périmètre du token.
         $abilities = $old->abilities ?: ['*'];
 
-        $newToken = $user->createToken('api-token', $abilities, now()->addHours(8));
+        // Une session ouverte par code WhatsApp garde SA durée. Sans cette
+        // ligne, le premier rafraîchissement la ramènerait à huit heures — et
+        // un agent sans mot de passe ni adresse e-mail réelle se retrouverait
+        // dehors le lendemain, en ayant simplement gardé l'application ouverte.
+        $newToken = $user->createToken('api-token', $abilities, SessionIssuer::isWhatsappOtpSession($old)
+            ? now()->addDays((int) config('whatsapp.otp.session_days', 30))
+            : now()->addHours(8));
         $old->delete();
 
         return response()->json([

@@ -256,7 +256,101 @@ return [
                 'WHATSAPP_FICHE_URL_BASE',
                 rtrim((string) $envOr('APP_URL', 'https://api.qayed.tn'), '/').'/f/',
             ),
+
+            /*
+            | Modèle d'AUTHENTIFICATION (code à usage unique).
+            |
+            | Même règle que WHATSAPP_TEMPLATE_NAME : la valeur doit
+            | correspondre EXACTEMENT au modèle approuvé chez Meta, et le
+            | défaut est celui que soumet `php artisan whatsapp:templates
+            | --create`.
+            |
+            | Catégorie AUTHENTICATION : Meta impose le corps du message et ne
+            | laisse varier que le code. C'est aussi une catégorie à part en
+            | facturation comme en débit — d'où une file et un plafond
+            | distincts de ceux des fiches (voir 'otp' plus bas).
+            */
+            'otp_name' => $envOr('WHATSAPP_OTP_TEMPLATE_NAME', 'qayed_otp'),
+            'otp_language' => $envOr('WHATSAPP_OTP_TEMPLATE_LANGUAGE', 'fr'),
         ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Destination du lien « Consulter la fiche »
+    |--------------------------------------------------------------------------
+    |
+    | 'portal' — redirection vers la fiche, derrière la connexion du portail
+    |            autorité. Comportement normal, et défaut : depuis la connexion
+    |            par code WhatsApp, un agent peut réellement franchir cet écran.
+    |
+    | 'info'   — page statique, sans donnée de fiche ni formulaire. Utile
+    |            pendant la fenêtre où le modèle WhatsApp est approuvé (le bouton
+    |            est cliquable) mais le portail pas encore ouvert : envoyer un
+    |            policier vers une connexion qu'il ne peut pas franchir
+    |            n'apprend qu'une chose, c'est que le lien ne marche pas.
+    |
+    | Toute autre valeur vaut 'portal' : le mode dégradé se demande
+    | explicitement, une faute de frappe ne doit pas éteindre le lien.
+    */
+    'fiche_link_mode' => $envOr('WHATSAPP_FICHE_LINK_MODE', 'portal'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Connexion des agents par code WhatsApp (OTP)
+    |--------------------------------------------------------------------------
+    |
+    | Les agents autorité sont enregistrés par l'admin avec un nom et un numéro
+    | WhatsApp ; leurs adresses e-mail sont FICTIVES. Ils ne peuvent donc ni
+    | activer un mot de passe, ni recevoir un lien de connexion. Le code reçu
+    | sur le numéro qui a déjà reçu la fiche est le seul facteur dont ils
+    | disposent réellement.
+    |
+    | Les bornes de sécurité ci-dessous n'ont VOLONTAIREMENT pas de variable
+    | d'environnement. Une durée de validité ou un nombre d'essais qu'on peut
+    | relâcher depuis Railway serait une porte dérobée sur le portail autorité,
+    | ouvrable sans relecture et sans trace dans le dépôt. Elles restent en
+    | configuration pour que les tests puissent les SERRER, pas pour qu'on
+    | puisse les desserrer en production.
+    */
+    'otp' => [
+
+        // Durée de validité du code, en minutes. À garder alignée sur le
+        // `code_expiration_minutes` déclaré dans le modèle Meta : c'est cette
+        // valeur-là que WhatsApp affiche au destinataire.
+        'ttl_minutes' => 5,
+
+        // Essais autorisés sur UN code, puis verrouillage du numéro.
+        'max_attempts' => 3,
+        'lockout_minutes' => 15,
+
+        // Demandes de code autorisées par numéro ET par IP (deux limiteurs
+        // distincts) sur une fenêtre glissante.
+        'max_requests' => 3,
+        'request_window_minutes' => 10,
+
+        /*
+        | Plafond horaire propre à l'OTP.
+        |
+        | Un code de connexion n'emprunte AUCUN des garde-fous des fiches
+        | (seuil d'arriéré, plafond horaire, disjoncteur) : un agent qui se
+        | connecte ne doit pas attendre qu'un arriéré de fiches soit purgé, et
+        | un pic de fiches ne doit pas fermer la porte du portail. En échange,
+        | l'OTP porte son propre plafond — sans lui, la file OTP serait le seul
+        | chemin non borné vers Meta.
+        */
+        'max_per_hour' => (int) $envOr('WHATSAPP_OTP_MAX_PER_HOUR', 100),
+
+        /*
+        | Durée de la session ouverte par OTP, en jours.
+        |
+        | Longue à dessein : l'agent ouvre la fiche depuis WhatsApp, sur un
+        | téléphone, souvent en déplacement. Lui redemander un code à chaque
+        | consultation reviendrait à redemander un message à Meta à chaque
+        | consultation. La contrepartie est la révocation : l'admin invalide
+        | toutes les sessions d'un agent depuis sa fiche.
+        */
+        'session_days' => (int) $envOr('WHATSAPP_OTP_SESSION_DAYS', 30),
     ],
 
     /*

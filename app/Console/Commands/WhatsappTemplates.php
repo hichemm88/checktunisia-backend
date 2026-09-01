@@ -28,7 +28,7 @@ class WhatsappTemplates extends Command
         {waba? : Compte WhatsApp Business à interroger. Défaut : WHATSAPP_WABA_ID}
         {--create : Crée les modèles manquants au lieu de seulement les lister}';
 
-    protected $description = 'Crée / vérifie les modèles de message WhatsApp Cloud API (fiche de police).';
+    protected $description = 'Crée / vérifie les modèles de message WhatsApp Cloud API (fiche de police, code de connexion).';
 
     public function handle(WhatsappCloudApi $api): int
     {
@@ -68,7 +68,7 @@ class WhatsappTemplates extends Command
         $missing = 0;
         $headerHandle = null;
 
-        foreach ($definitions as $definition) {
+        foreach ($definitions as $index => $definition) {
             $key = $definition['name'].':'.$definition['language'];
             $found = $existing[$key] ?? null;
 
@@ -108,12 +108,22 @@ class WhatsappTemplates extends Command
             }
 
             try {
-                if ($headerHandle === null) {
+                /*
+                 * L'exemple de pièce jointe n'est téléversé que pour les
+                 * modèles qui portent un en-tête média — et une seule fois par
+                 * exécution.
+                 *
+                 * Le modèle d'authentification n'en a pas : lui faire payer un
+                 * appel d'écriture chez Meta pour un exemple qu'il n'utilise
+                 * pas ferait échouer sa création sur une variable
+                 * (WHATSAPP_APP_ID) dont il n'a aucun besoin.
+                 */
+                if ($this->needsHeaderHandle($definition) && $headerHandle === null) {
                     $this->line('  Téléversement de l\'exemple de pièce jointe…');
                     $headerHandle = $api->uploadTemplateSample(FichePdf::sample(), 'exemple-fiche-police.pdf');
                 }
 
-                $definition = $this->definitions($headerHandle)[0];
+                $definition = $this->definitions((string) $headerHandle)[$index];
                 $created = $api->createTemplate($definition);
                 $this->renderStatus($key, (string) ($created['status'] ?? 'PENDING'), $created);
                 $this->line('  Soumis à Meta. L\'approbation est asynchrone : relancer cette commande pour suivre.');
@@ -129,7 +139,7 @@ class WhatsappTemplates extends Command
         }
 
         $this->newLine();
-        $this->line('Rappel : tant qu\'un modèle n\'est pas APPROVED, aucune fiche ne peut partir hors fenêtre de 24 h.');
+        $this->line('Rappel : tant qu\'un modèle n\'est pas APPROVED, il ne transmet rien — ni fiche hors fenêtre de 24 h, ni code de connexion.');
 
         return self::SUCCESS;
     }
@@ -155,7 +165,23 @@ class WhatsappTemplates extends Command
     }
 
     /**
-     * Définition du modèle principal.
+     * Un modèle a-t-il un en-tête média, donc besoin d'un `header_handle` ?
+     *
+     * @param  array<string,mixed>  $definition
+     */
+    private function needsHeaderHandle(array $definition): bool
+    {
+        foreach ((array) ($definition['components'] ?? []) as $component) {
+            if (($component['type'] ?? null) === 'HEADER' && ($component['format'] ?? null) === 'DOCUMENT') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Définition des modèles.
      *
      * Les `example` ne sont pas décoratifs : Meta refuse un modèle sans
      * exemples, et les examine pour juger la conformité. Ils sont donc
@@ -220,6 +246,56 @@ class WhatsappTemplates extends Command
                         'text' => 'Consulter la fiche',
                         'url' => $base.'{{1}}',
                         'example' => [$base.'00000000-0000-0000-0000-000000000000'],
+                    ]],
+                ],
+            ],
+        ], [
+            /*
+             * Modèle d'AUTHENTIFICATION — code de connexion des agents.
+             *
+             * Catégorie à part, et règles à part. Meta ÉCRIT le corps du
+             * message lui-même : on ne fournit ni texte, ni exemple, seulement
+             * des interrupteurs. Toute tentative de personnaliser la
+             * formulation vaut un rejet — et c'est voulu de leur côté : un
+             * message de code est un message de sécurité, sa forme ne doit pas
+             * dépendre de l'expéditeur, sans quoi l'hameçonnage devient
+             * indiscernable du légitime.
+             */
+            'name' => (string) config('whatsapp.cloud.template.otp_name'),
+            'language' => (string) config('whatsapp.cloud.template.otp_language'),
+            'category' => 'AUTHENTICATION',
+            'components' => [
+                [
+                    // Le corps ne porte AUCUN texte de notre part : le code est
+                    // {{1}}, implicitement. Le seul réglage est l'ajout de
+                    // l'avertissement « Ne partagez pas ce code ».
+                    'type' => 'BODY',
+                    'add_security_recommendation' => true,
+                ],
+                [
+                    // « Ce code expire dans 5 minutes », affiché par WhatsApp.
+                    // Aligné sur whatsapp.otp.ttl_minutes : un message qui
+                    // annonce une durée que le serveur n'applique pas est pire
+                    // que pas de mention du tout.
+                    'type' => 'FOOTER',
+                    'code_expiration_minutes' => (int) config('whatsapp.otp.ttl_minutes', 5),
+                ],
+                [
+                    'type' => 'BUTTONS',
+                    'buttons' => [[
+                        // COPY_CODE plutôt qu'ONE_TAP : l'autoremplissage en un
+                        // tap exige une application mobile signée (empreinte du
+                        // certificat déclarée chez Meta). Le portail est un site
+                        // web ; « Copier le code » est le seul bouton qui
+                        // fonctionne réellement ici, et il place le code dans le
+                        // presse-papiers — d'où la gestion du collage côté
+                        // frontend.
+                        'type' => 'OTP',
+                        'otp_type' => 'COPY_CODE',
+                        // Pas de libellé : omis, Meta pose le sien, traduit dans
+                        // la langue du modèle. En imposer un ferait courir un
+                        // risque de rejet pour une formulation qui n'apporte
+                        // rien.
                     ]],
                 ],
             ],

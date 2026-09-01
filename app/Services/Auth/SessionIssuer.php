@@ -2,17 +2,18 @@
 
 namespace App\Services\Auth;
 
+use App\Http\Middleware\EnsureOtpDeviceMatches;
 use App\Models\User;
 use Laravel\Sanctum\PersonalAccessToken;
 
 /**
  * Émission des sessions applicatives, quel que soit le facteur présenté.
  *
- * Trois chemins mènent à une session complète — mot de passe seul, mot de passe
- * + TOTP (ou code de récupération), et passkey. Ils produisaient jusqu'ici trois
- * payloads légèrement différents, écrits à la main dans autant de contrôleurs.
- * Tout passe désormais par ici : ajouter un facteur ne peut plus faire diverger
- * ce que le frontend reçoit.
+ * Quatre chemins mènent à une session complète — mot de passe seul, mot de passe
+ * + TOTP (ou code de récupération), passkey, et code reçu sur WhatsApp. Ils
+ * produisaient jusqu'ici autant de payloads légèrement différents, écrits à la
+ * main dans autant de contrôleurs. Tout passe désormais par ici : ajouter un
+ * facteur ne peut plus faire diverger ce que le frontend reçoit.
  *
  * Le rôle n'entre nulle part dans cette décision : la sécurité est portée par
  * le COMPTE. Un établissement, un administrateur et un compte autorité suivent
@@ -31,21 +32,54 @@ class SessionIssuer
      */
     public const PASSKEY_ABILITY = 'passkey-session';
 
+    /**
+     * Capacité marquant une session ouverte par code WhatsApp.
+     *
+     * Même nature que la précédente : aucun droit supplémentaire, seulement la
+     * trace du facteur présenté. Elle vaut vérification forte pour les
+     * middlewares — la possession du numéro sur lequel les fiches arrivent est
+     * précisément ce que la 2FA vérifierait, et les agents concernés n'ont pas
+     * d'adresse e-mail réelle pour en configurer une.
+     */
+    public const WHATSAPP_OTP_ABILITY = 'whatsapp-otp-session';
+
     public const METHOD_PASSWORD      = 'password';
     public const METHOD_TOTP          = 'totp';
     public const METHOD_RECOVERY_CODE = 'recovery_code';
     public const METHOD_PASSKEY       = 'passkey';
+    public const METHOD_WHATSAPP_OTP  = 'whatsapp_otp';
 
     /**
      * Ouvre une session complète et renvoie le payload d'API.
+     *
+     * `$userAgent` ne sert qu'à l'OTP : c'est lui qui lie la session longue à
+     * l'appareil qui l'a ouverte (voir EnsureOtpDeviceMatches). Les autres
+     * facteurs l'ignorent — leurs sessions durent huit heures, la question ne
+     * se pose pas de la même façon.
      */
-    public static function issue(User $user, string $method): array
+    public static function issue(User $user, string $method, ?string $userAgent = null): array
     {
-        $abilities = $method === self::METHOD_PASSKEY
-            ? ['*', self::PASSKEY_ABILITY]
-            : ['*'];
+        $abilities = match ($method) {
+            self::METHOD_PASSKEY      => ['*', self::PASSKEY_ABILITY],
+            self::METHOD_WHATSAPP_OTP => ['*', self::WHATSAPP_OTP_ABILITY, EnsureOtpDeviceMatches::abilityFor($userAgent)],
+            default                   => ['*'],
+        };
 
-        $token = $user->createToken('api-token', $abilities, now()->addHours(8));
+        /*
+         * Huit heures partout, sauf pour l'OTP.
+         *
+         * Un agent ouvre la fiche depuis WhatsApp, sur un téléphone, souvent
+         * en déplacement : le reconnecter toutes les huit heures reviendrait à
+         * redemander un message à Meta plusieurs fois par semaine, pour une
+         * personne qui n'a ni mot de passe ni adresse e-mail de secours. La
+         * contrepartie est la révocation, immédiate et par compte, depuis la
+         * fiche de l'agent dans l'administration.
+         */
+        $expiresAt = $method === self::METHOD_WHATSAPP_OTP
+            ? now()->addDays((int) config('whatsapp.otp.session_days', 30))
+            : now()->addHours(8);
+
+        $token = $user->createToken('api-token', $abilities, $expiresAt);
 
         return [
             'token'      => $token->plainTextToken,
@@ -102,11 +136,26 @@ class SessionIssuer
      */
     public static function isPasskeySession(mixed $token): bool
     {
-        if (! $token instanceof PersonalAccessToken) {
-            return false;
-        }
+        return self::hasAbility($token, self::PASSKEY_ABILITY);
+    }
 
-        return in_array(self::PASSKEY_ABILITY, (array) ($token->abilities ?? []), true);
+    /** Session ouverte par code WhatsApp ? Même lecture brute des capacités. */
+    public static function isWhatsappOtpSession(mixed $token): bool
+    {
+        return self::hasAbility($token, self::WHATSAPP_OTP_ABILITY);
+    }
+
+    /**
+     * Une vérification forte a-t-elle déjà eu lieu à l'ouverture de session ?
+     *
+     * Le seul point où l'on décide qu'un facteur « en tient lieu ». Les
+     * middlewares posent la question ici plutôt que d'énumérer les capacités
+     * chacun de leur côté : un quatrième facteur, demain, ne devra être ajouté
+     * qu'à un seul endroit.
+     */
+    public static function isStrongSession(mixed $token): bool
+    {
+        return self::isPasskeySession($token) || self::isWhatsappOtpSession($token);
     }
 
     public static function authMethodOf(mixed $token): ?string
@@ -115,7 +164,20 @@ class SessionIssuer
             return null;
         }
 
-        return self::isPasskeySession($token) ? self::METHOD_PASSKEY : null;
+        return match (true) {
+            self::isPasskeySession($token)     => self::METHOD_PASSKEY,
+            self::isWhatsappOtpSession($token) => self::METHOD_WHATSAPP_OTP,
+            default                            => null,
+        };
+    }
+
+    private static function hasAbility(mixed $token, string $ability): bool
+    {
+        if (! $token instanceof PersonalAccessToken) {
+            return false;
+        }
+
+        return in_array($ability, (array) ($token->abilities ?? []), true);
     }
 
     private static function authorityProfile(User $user): ?array

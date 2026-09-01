@@ -20,6 +20,7 @@ use App\Http\Controllers\Admin\QuotaAdminController;
 use App\Http\Controllers\Admin\SubscriptionAdminController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\PasskeyAuthController;
+use App\Http\Controllers\Auth\WhatsappOtpController;
 use App\Http\Controllers\Auth\PasskeyController;
 use App\Http\Controllers\Auth\RecoveryCodeController;
 use App\Http\Controllers\Auth\TwoFactorController;
@@ -77,6 +78,25 @@ Route::prefix('auth')->middleware('throttle:5,1')->group(function () {
 Route::prefix('auth/passkey')->middleware('throttle:webauthn')->group(function () {
     Route::post('options', [PasskeyAuthController::class, 'options']);
     Route::post('verify', [PasskeyAuthController::class, 'verify']);
+});
+
+/*
+| Connexion des agents autorité par code reçu sur WhatsApp.
+|
+| Publique par nature, comme les passkeys : l'agent n'est pas encore
+| authentifié, et il n'a ni mot de passe ni adresse e-mail réelle à présenter.
+| Son seul facteur est le téléphone sur lequel les fiches arrivent déjà.
+|
+| Limiteur dédié, et non le `throttle:5,1` du groupe d'authentification :
+| l'écran de saisie du code envoie une requête par tentative, et un agent qui
+| se trompe deux fois puis colle le bon code en aurait consommé trois. Les
+| vraies bornes — trois demandes par fenêtre, trois essais par code, puis
+| verrouillage — sont dans WhatsappOtpService ; ce limiteur-ci n'est que le
+| garde-barrière qui empêche de marteler la route.
+*/
+Route::prefix('auth/otp')->middleware('throttle:whatsapp-otp')->group(function () {
+    Route::post('request', [WhatsappOtpController::class, 'request']);
+    Route::post('verify', [WhatsappOtpController::class, 'verify']);
 });
 
 Route::get('referential/countries', [ReferentialController::class, 'countries']);
@@ -164,7 +184,7 @@ Route::post('internal/ai-usage', [AiUsageIngestController::class, 'store'])
 | Authenticated Routes (all roles)
 |--------------------------------------------------------------------------
 */
-Route::middleware(['auth:sanctum', 'audit'])->group(function () {
+Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
 
     // Seul logout reste joignable avec un token partiel : annuler une connexion
     // en cours doit toujours être possible sans avoir passé le TOTP.
@@ -554,6 +574,10 @@ Route::middleware(['auth:sanctum', 'audit'])->group(function () {
             Route::post('authority-users', [AuthorityAdminController::class, 'store']);
             Route::patch('authority-users/{id}', [AuthorityAdminController::class, 'update']);
             Route::post('authority-users/{id}/invite', [AuthorityAdminController::class, 'invite']);
+            // Coupe toutes les sessions de l'agent — contrepartie des sessions
+            // de 30 jours ouvertes par code WhatsApp (téléphone perdu, mutation,
+            // numéro réattribué).
+            Route::post('authority-users/{id}/revoke-sessions', [AuthorityAdminController::class, 'revokeSessions']);
             Route::delete('authority-users/{id}', [AuthorityAdminController::class, 'destroy']);
 
             // Authority organizations (police / immigration / ministère...)

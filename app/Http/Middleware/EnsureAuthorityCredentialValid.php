@@ -27,12 +27,18 @@ class EnsureAuthorityCredentialValid
             ], 403);
         }
 
-        // Deux facteurs obligatoires : TOTP configurée, OU session ouverte par
-        // passkey (possession de l'appareil + biométrie/code déjà vérifiées).
+        // Deux facteurs obligatoires : TOTP configurée, OU session déjà ouverte
+        // par un facteur fort — passkey (possession de l'appareil +
+        // biométrie/code) ou code reçu sur WhatsApp (possession du numéro sur
+        // lequel les fiches arrivent).
+        //
         // Sans la seconde branche, un agent connecté par Face ID se verrait
-        // renvoyer vers la configuration TOTP alors qu'il vient de présenter
-        // un facteur plus fort.
-        if (!\App\Services\Auth\SessionIssuer::isPasskeySession($user->currentAccessToken())
+        // renvoyer vers la configuration TOTP alors qu'il vient de présenter un
+        // facteur plus fort ; et un agent connecté par code WhatsApp se verrait
+        // exiger une TOTP qu'il ne peut PAS configurer — son adresse e-mail est
+        // fictive, il n'a jamais eu de mot de passe, et la page de configuration
+        // lui serait inaccessible. Le renvoyer là serait le renvoyer nulle part.
+        if (!\App\Services\Auth\SessionIssuer::isStrongSession($user->currentAccessToken())
             && !$user->two_factor_confirmed_at) {
             return response()->json([
                 'data'   => null,
