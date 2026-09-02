@@ -43,7 +43,10 @@ class WhatsappOutboxService
      */
     public const PRE_CUTOVER_REASON = 'pre_cutover_backlog';
 
-    public function __construct(private WhatsappAlertService $alerts) {}
+    public function __construct(
+        private WhatsappAlertService $alerts,
+        private WhatsappCostRecorder $costs,
+    ) {}
 
     /**
      * Canal de transmission actif (STRAT-07). Résolu à l'appel plutôt
@@ -453,6 +456,15 @@ class WhatsappOutboxService
             'last_error' => null,
             'error_code' => null,
         ]);
+
+        /*
+         * Registre de facturation. Aucun coût n'est compté ici : Meta ne
+         * facture qu'à la LIVRAISON. Cette ligne existe pour que le
+         * `delivered` qui arrivera par webhook — dans quelques secondes ou
+         * quelques heures — sache à quel établissement et à quelle catégorie
+         * l'imputer. Sans elle, la comptabilité aurait un montant sans client.
+         */
+        $this->costs->registerFicheSend($job, $messageId);
     }
 
     /**
@@ -805,6 +817,21 @@ class WhatsappOutboxService
         }
 
         $job->update($updates);
+
+        /*
+         * Facturation. `delivered` est le SEUL événement que Meta facture ;
+         * `sent` est un accusé d'acceptation et ne coûte rien.
+         *
+         * `read` compte aussi, et ce n'est pas une largesse : Meta ne
+         * garantit pas l'ordre des accusés, un `read` peut arriver seul, et
+         * un message lu a nécessairement été livré. Le double comptage est
+         * écarté en aval — le registre ne se laisse compter qu'une fois par
+         * wamid.
+         */
+        if (in_array($status, [WhatsappSendLog::DELIVERY_DELIVERED, WhatsappSendLog::DELIVERY_READ], true)
+            && filled($job->message_id_whatsapp)) {
+            $this->costs->recordDelivered((string) $job->message_id_whatsapp, $job);
+        }
     }
 
     /**

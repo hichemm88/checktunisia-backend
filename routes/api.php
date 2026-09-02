@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Admin\AiCostController;
 use App\Http\Controllers\Admin\AiPricingController;
+use App\Http\Controllers\Admin\MetaCostController;
 use App\Http\Controllers\Admin\AuditLogController;
 use App\Http\Controllers\Admin\AuthorityAdminController;
 use App\Http\Controllers\Admin\CouponController;
@@ -520,6 +521,12 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
             Route::get('ai-costs/scan-comparison', [AiCostController::class, 'scanComparison']);
             Route::get('ai-pricing', [AiPricingController::class, 'index']);
             Route::put('ai-pricing/{id}', [AiPricingController::class, 'update']);
+
+            // Couts Meta / WhatsApp (messages template livres : fiches en
+            // utility, codes de connexion en authentication)
+            Route::get('meta-costs/summary', [MetaCostController::class, 'summary']);
+            Route::get('meta-costs/by-establishment', [MetaCostController::class, 'byEstablishment']);
+            Route::get('meta-costs/daily', [MetaCostController::class, 'daily']);
 
             // Hébergeurs (Organization — société/particulier)
             Route::get('hosts', [OrganizationAdminController::class, 'index']);

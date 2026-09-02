@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Whatsapp;
 use App\Http\Controllers\Controller;
 use App\Models\WhatsappSendLog;
 use App\Services\Whatsapp\WhatsappCloudErrors;
+use App\Services\Whatsapp\WhatsappCostRecorder;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -34,7 +35,10 @@ use Illuminate\Support\Facades\Log;
  */
 class WhatsappWebhookController extends Controller
 {
-    public function __construct(private WhatsappOutboxService $outbox) {}
+    public function __construct(
+        private WhatsappOutboxService $outbox,
+        private WhatsappCostRecorder $costs,
+    ) {}
 
     /**
      * GET — défi de vérification de Meta, joué une fois à l'enregistrement de
@@ -155,6 +159,19 @@ class WhatsappWebhookController extends Controller
         $job = WhatsappSendLog::where('message_id_whatsapp', $wamid)->first();
 
         if ($job === null) {
+            /*
+             * Pas de ligne d'outbox — et ce n'est PAS forcément un message
+             * étranger : les codes de connexion partent hors file et n'en ont
+             * jamais eu. C'est pourtant le seul endroit où leur livraison est
+             * observable, donc le seul où leur coût peut être compté.
+             *
+             * Le registre de facturation tranche : s'il connaît ce wamid, on
+             * compte ; sinon le message vient d'ailleurs et on n'invente rien.
+             */
+            if (in_array($state, [WhatsappSendLog::DELIVERY_DELIVERED, WhatsappSendLog::DELIVERY_READ], true)) {
+                $this->costs->recordDelivered($wamid);
+            }
+
             // Cas normal et non alarmant : messages envoyés par un autre
             // système sur le même numéro, ou lignes purgées du journal.
             Log::info('[whatsapp-webhook] statut sans correspondance', ['status' => $state]);

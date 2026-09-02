@@ -7,6 +7,7 @@ use App\Models\Organization;
 use App\Models\Subscription;
 use App\Services\Subscription\CommercialMetrics;
 use App\Services\Subscription\PlanPricing;
+use App\Services\Whatsapp\WhatsappCostRecorder;
 use Illuminate\Http\JsonResponse;
 
 /**
@@ -110,9 +111,18 @@ class KpiController extends Controller
             ? round($convertedTrials / $orgsWithTrial->count() * 100, 1)
             : null;
 
+        // ─── Couts Meta / WhatsApp du mois ────────────────────────────────
+        // Source unique, partagee avec /admin/meta-costs : la grille tarifaire
+        // et le choix de source (reel Meta vs estimation locale) n'existent
+        // qu'a un seul endroit. En USD, comme la facture Meta et comme les
+        // couts IA — le reste de ce payload est en TND, d'ou le champ
+        // `currency` explicite sur ce bloc et sur lui seul.
+        $metaCosts = app(WhatsappCostRecorder::class)->currentMonthTotals();
+
         return response()->json([
             'data' => [
                 'currency' => self::CURRENCY,
+                'meta_costs' => $metaCosts,
                 'mrr' => [
                     'current'            => $mrrCurrent,
                     'new_this_month'     => $mrrNew,

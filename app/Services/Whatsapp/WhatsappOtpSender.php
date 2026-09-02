@@ -40,7 +40,10 @@ use Illuminate\Support\Facades\Log;
  */
 class WhatsappOtpSender
 {
-    public function __construct(private WhatsappCloudApi $api) {}
+    public function __construct(
+        private WhatsappCloudApi $api,
+        private WhatsappCostRecorder $costs,
+    ) {}
 
     /**
      * Envoie un code. Le code en clair ne sort d'ici que vers Meta : il n'est
@@ -75,6 +78,17 @@ class WhatsappOtpSender
 
         if ($result->success) {
             $this->recordSend();
+
+            /*
+             * Registre de facturation, catégorie AUTHENTICATION.
+             *
+             * Les codes n'ont pas de ligne d'outbox — ils partent hors file —
+             * donc rien d'autre ne saurait relier le wamid que rendra le
+             * webhook à une catégorie de prix. Sans cet appel, les connexions
+             * seraient le seul poste de dépense Meta invisible, et il monte
+             * avec le nombre d'agents.
+             */
+            $this->costs->registerOtpSend($result->messageId);
         }
 
         return $result;
