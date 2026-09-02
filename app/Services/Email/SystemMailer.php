@@ -166,9 +166,19 @@ class SystemMailer
         return preg_replace('/\{\{\w+\}\}/', '', $text);
     }
 
+    /**
+     * Base publique du frontend + chemin.
+     *
+     * `config()` et NON `env()` : la production met la configuration en cache
+     * (`docker/start.sh`), et un `env()` appelé depuis le code applicatif rend
+     * alors sa valeur par défaut quoi qu'il arrive. Ces URL-ci portent les
+     * liens de PREMIÈRE CONNEXION et de réinitialisation de mot de passe :
+     * pointées sur le mauvais hôte, elles laissent des comptes impossibles à
+     * ouvrir, sans le moindre message d'erreur pour le signaler.
+     */
     public static function frontendUrl(string $path = ''): string
     {
-        return rtrim(env('FRONTEND_URL', 'https://qayed.tn'), '/').$path;
+        return rtrim((string) config('frontend.url'), '/').$path;
     }
 
     public static function loginUrl(): string
