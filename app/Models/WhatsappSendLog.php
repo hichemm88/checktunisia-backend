@@ -60,6 +60,8 @@ class WhatsappSendLog extends Model
         'read_at',
         'error_code',
         'public_token',
+        // Fil de discussion du destinataire (boîte de réception des autorités).
+        'conversation_id',
     ];
 
     /*
@@ -147,6 +149,11 @@ class WhatsappSendLog extends Model
     public function scan(): BelongsTo
     {
         return $this->belongsTo(DocumentScan::class, 'scan_id');
+    }
+
+    public function conversation(): BelongsTo
+    {
+        return $this->belongsTo(WhatsappConversation::class, 'conversation_id');
     }
 
     public function isPending(): bool

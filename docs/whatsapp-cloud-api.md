@@ -49,6 +49,7 @@ fiche est intacte, seule la tentative est perdue.
 | `WhatsappWebhookController` | Accusés de réception signés (`GET`/`POST /api/v1/webhooks/whatsapp`). |
 | `FichePdf` | Rend la fiche en PDF (même vue Blade que l'export par email) et un exemplaire factice. |
 | `FicheLinkController` | `GET /f/{token}` — cible stable du bouton, redirige (302). |
+| `WhatsappConversationService` | Fils de discussion : entrants conservés, réponses admin, fenêtre de 24 h. |
 | `whatsapp:dispatch` | Vide la file — la Cloud API est en **push**, plus rien ne vient chercher les fiches. |
 
 ## Destinataires
@@ -66,6 +67,111 @@ donc son propre `wamid`, son propre statut, ses propres retries. Un
 destinataire injoignable n'empêche pas les autres de recevoir la fiche.
 
 Cette liste n'a jamais été en dur dans le code : rien à migrer.
+
+## Réponses des autorités (boîte de réception)
+
+Un agent qui répond à une fiche écrivait jusqu'ici dans le vide : le webhook
+journalisait « message entrant », son type et un numéro tronqué, puis jetait le
+reste. C'est la **seule information de retour** que le canal produise, et
+c'était la seule qu'on ne gardait pas.
+
+`Admin > Réponses autorités` (`/admin/whatsapp/inbox`) montre, par
+interlocuteur : les fiches transmises avec leurs accusés, les réponses reçues,
+et les réponses envoyées depuis l'administration.
+
+### Deux tables, une chronologie
+
+Les fiches **restent** dans `whatsapp_send_log`, avec leur file, leurs
+tentatives, leur PDF et leurs statuts de livraison. Rien n'est recopié : ce
+serait deux vérités pour un même envoi, et la copie finirait par diverger.
+
+| Table | Contenu |
+|---|---|
+| `whatsapp_conversations` | Un fil **par numéro normalisé**, l'agent résolu quand il en existe un, les non-lus, et `last_inbound_at` — qui porte la fenêtre de service. |
+| `whatsapp_conversation_messages` | Les messages qui n'ont pas d'autre foyer : réponses entrantes, réponses envoyées depuis l'admin. |
+| `whatsapp_send_log.conversation_id` | Le rattachement des fiches, posé à l'**enfilage** (une fiche bloquée doit se voir) et repris en SQL pour les lignes existantes. |
+
+La chronologie affichée est une **fusion faite à la lecture**, bornée à 200
+entrées par source.
+
+### Le fil est identifié par le NUMÉRO, pas par l'agent
+
+Le numéro est ce que Meta nous donne, et lui seul est toujours présent. Le
+rattachement à un profil autorité est une résolution locale qui échoue
+légitimement — numéro global, agent supprimé, tiers qui écrit sur notre numéro.
+Un fil sans agent l'affiche explicitement plutôt que de laisser croire à un
+correspondant identifié.
+
+La normalisation est la **même règle** qu'à l'envoi (`formatRecipient`) et qu'à
+la connexion (`WhatsappOtpService::normalize`) : chiffres seuls, international,
+sans `+`. Un écart entre ces trois endroits, et le même policier aurait deux
+fils, un compteur de non-lus faux dans les deux, et des fiches rattachées au
+mauvais.
+
+### Ce qui est chiffré, et ce qui ne l'est pas
+
+Le **corps des messages** et l'**aperçu** du fil portent le cast `encrypted` :
+un échange avec un poste de police peut contenir un nom de voyageur, un numéro
+de document, une consigne d'enquête. Une copie de base volée reste illisible
+sans `APP_KEY`.
+
+Conséquence assumée : **aucune recherche SQL dans le contenu**. La recherche de
+l'écran porte sur l'interlocuteur — nom d'agent, numéro (avec ou sans
+espaces), matricule, service.
+
+Le **journal applicatif** ne change pas : type, numéro tronqué, wamid, jamais le
+contenu. Un journal se copie, se réexpédie et s'archive ailleurs ; rien de tout
+cela n'est vrai d'une colonne chiffrée.
+
+L'**aperçu d'une fiche** est le texte fixe « Fiche de police transmise » : la
+liste des fils est un écran de supervision du canal, pas un registre des
+personnes contrôlées. Les identités n'apparaissent qu'à l'ouverture du fil.
+
+### La fenêtre de service de 24 h
+
+Meta n'autorise le **texte libre** que dans les 24 h qui suivent un message
+entrant. Hors de cette fenêtre, seul un modèle approuvé passe — et nos deux
+modèles (fiche, code de connexion) ne sont pas des réponses.
+
+Le refus est prononcé **avant** l'appel à Meta (`ServiceWindowClosed`), pas
+laissé à l'erreur 131047 : l'écran peut alors désactiver le champ de saisie et
+dire pourquoi, au lieu d'accueillir un message par un échec. Deux motifs
+distincts, parce qu'ils n'appellent pas la même action :
+
+| `reason` | Sens |
+|---|---|
+| `NEVER_REPLIED` | Cette autorité n'a jamais écrit. Aucune fenêtre ne s'est jamais ouverte. |
+| `WINDOW_EXPIRED` | Elle a écrit, il y a plus de 24 h. |
+
+Une réponse envoyée est comptée en catégorie **`service`** dans le suivi des
+coûts Meta — gratuite jusqu'au 30/09/2026, puis au tarif `utility`. La compter
+dès maintenant fait de la bascule un changement de variable, pas la découverte
+d'un poste de dépense.
+
+### Ce qui n'est PAS fait, et pourquoi
+
+- **Aucun accusé de lecture renvoyé à Meta.** Les non-lus sont un compteur
+  côté administration. Poser un `read` sur WhatsApp dirait à l'agent qu'un
+  humain a lu son message ; l'ouverture d'un écran ne le prouve pas.
+- **Les médias ne sont pas rapatriés.** On garde l'identifiant Meta (valable
+  30 jours) et le type. Télécharger des pièces jointes de police sur notre
+  stockage est une décision de conservation à prendre à part, pas un effet de
+  bord d'une boîte de réception.
+- **Les codes de connexion n'apparaissent pas dans les fils.** Ils partent hors
+  file, sans ligne d'outbox ; leur coût est suivi, leur contenu ne doit pas
+  l'être.
+
+### Endpoints
+
+| Route | Contenu |
+|---|---|
+| `GET /admin/whatsapp/inbox` | Liste des fils. `search`, `filter=all\|unread\|awaiting\|replied`, `unread_total` global. |
+| `GET /admin/whatsapp/inbox/{id}` | Fil fusionné + capacité de réponse. **Marque lu** côté admin. |
+| `POST /admin/whatsapp/inbox/{id}/reply` | Réponse libre. 422 `SERVICE_WINDOW_CLOSED` hors fenêtre, `throttle:10,1`. |
+
+Tous sous `role:platform_admin` + `admin.2fa`, comme le reste de
+l'administration WhatsApp. Chaque réponse est tracée au journal d'audit
+(`whatsapp.inbox.reply`) — sans son contenu, qui reste dans le fil, chiffré.
 
 ## Le bouton « Consulter la fiche »
 

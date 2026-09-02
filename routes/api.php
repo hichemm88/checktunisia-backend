@@ -56,6 +56,7 @@ use App\Http\Controllers\Public\PublicPlatformController;
 use App\Http\Controllers\Public\PublicRegistrationController;
 use App\Http\Controllers\Referential\ReferentialController;
 use App\Http\Controllers\Whatsapp\WhatsappAdminController;
+use App\Http\Controllers\Whatsapp\WhatsappInboxController;
 use App\Http\Controllers\Whatsapp\WhatsappWebhookController;
 use App\Http\Controllers\Whatsapp\WhatsappWorkerController;
 use Illuminate\Support\Facades\Route;
@@ -651,6 +652,21 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
 
             // MODULE PROVISOIRE — Relais WhatsApp (à retirer après homologation MI).
             // Voir PROMPT-CLAUDE-CODE-QAYED-AUTORITE.md
+            /*
+             | Boîte de réception des autorités : ce que les agents RÉPONDENT
+             | aux fiches. Sous le même préfixe et les mêmes gardes que le reste
+             | de l'administration WhatsApp (platform_admin + 2FA).
+             |
+             | L'envoi d'une réponse est limité plus sévèrement que la lecture :
+             | chaque message part vers un poste de police et coûte un message
+             | Meta. Un doigt qui reste appuyé sur « Envoyer » ne doit pas
+             | pouvoir inonder un agent.
+             */
+            Route::get('whatsapp/inbox', [WhatsappInboxController::class, 'index']);
+            Route::get('whatsapp/inbox/{id}', [WhatsappInboxController::class, 'show']);
+            Route::post('whatsapp/inbox/{id}/reply', [WhatsappInboxController::class, 'reply'])
+                ->middleware('throttle:10,1');
+
             Route::get('whatsapp/health', [WhatsappAdminController::class, 'health']);
             Route::get('whatsapp/logs', [WhatsappAdminController::class, 'logs']);
             Route::post('whatsapp/logs/resend-all', [WhatsappAdminController::class, 'resendAll']);
