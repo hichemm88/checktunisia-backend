@@ -14,6 +14,7 @@ use App\Services\Whatsapp\WhatsappCloudConfig;
 use App\Services\Whatsapp\WhatsappCloudErrors;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use App\Services\Whatsapp\WhatsappSendingGuard;
+use App\Services\Whatsapp\WhatsappTemplateStatus;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -79,6 +80,20 @@ class WhatsappCloudApiTest extends TestCase
             'whatsapp.min_interval_seconds' => 0,
             'whatsapp.interval_jitter_ratio' => 0,
         ]);
+
+        /*
+         * Précondition, désormais explicite : le modèle est approuvé chez Meta.
+         *
+         * Elle était implicite — et c'est précisément l'implicite qui a coûté
+         * l'incident. Depuis la garde d'approbation, le dispatcher ne tente
+         * plus rien tant que le statut n'est pas APPROVED ; le déclarer ici
+         * évite que chaque test de ce fichier n'aille interroger Graph, et dit
+         * ce que ces tests supposent réellement.
+         *
+         * Le cas contraire — modèle PENDING, rejeté, illisible — est éprouvé
+         * dans WhatsappTemplateApprovalTest.
+         */
+        app(WhatsappTemplateStatus::class)->remember('APPROVED');
     }
 
     // ── Construction du message ──────────────────────────────────────────────

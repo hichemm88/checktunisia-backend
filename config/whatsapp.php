@@ -413,6 +413,23 @@ return [
         // qualité côté Meta (131049, 80007).
         'quality_pause_minutes' => (int) $envOr('WHATSAPP_QUALITY_PAUSE_MINUTES', 15),
 
+        /*
+        | Durée de la pause globale déclenchée par une erreur de CONFIGURATION
+        | du modèle (132001).
+        |
+        | Plus longue que la pause de qualité, et pour une raison précise : une
+        | limitation de débit se dissipe en quelques minutes, une approbation
+        | Meta se compte en heures ou en jours. Reprendre au bout d'un quart
+        | d'heure ne ferait que rejouer le même refus — c'est cette boucle-là
+        | qui a consommé les tentatives de toutes les fiches en file.
+        |
+        | La pause n'est de toute façon pas le vrai frein : le garde-fou
+        | d'approbation (voir WhatsappTemplateStatus) reprend la main dès la
+        | passe suivante et ne laissera plus rien partir tant que le modèle
+        | n'est pas APPROVED.
+        */
+        'config_pause_minutes' => (int) $envOr('WHATSAPP_CONFIG_PAUSE_MINUTES', 60),
+
         // Destination du rapport CSV des fiches annulées par la commande
         // whatsapp:cancel-backlog. Hors du dépôt : storage/ est ignoré par git.
         'backlog_report_path' => env('WHATSAPP_BACKLOG_REPORT_PATH'),

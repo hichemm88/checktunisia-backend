@@ -10,6 +10,7 @@ use App\Services\Whatsapp\FicheTemplate;
 use App\Services\Whatsapp\WhatsappCloudApi;
 use App\Services\Whatsapp\WhatsappCloudErrors;
 use App\Services\Whatsapp\WhatsappSendingGuard;
+use App\Services\Whatsapp\WhatsappTemplateStatus;
 
 /**
  * Canal WhatsApp Cloud API (officiel, Meta Graph). CANAL ACTIF PAR DÉFAUT.
@@ -36,6 +37,7 @@ class WhatsAppCloudChannel implements DeliveryChannel
     public function __construct(
         private WhatsappCloudApi $api,
         private WhatsappSendingGuard $guard,
+        private WhatsappTemplateStatus $templates,
     ) {}
 
     public function name(): string
@@ -195,9 +197,35 @@ class WhatsAppCloudChannel implements DeliveryChannel
             return $result;
         }
 
-        if (WhatsappCloudErrors::triggersGlobalPause(
-            is_numeric($result->errorCode) ? (int) $result->errorCode : null
-        )) {
+        $code = is_numeric($result->errorCode) ? (int) $result->errorCode : null;
+
+        if (WhatsappCloudErrors::isConfiguration($code)) {
+            /*
+             * Meta nous contredit sur le modèle : celui que nous croyions
+             * utilisable ne l'est pas. Deux gestes, dans cet ordre.
+             *
+             * D'abord OUBLIER le statut mémorisé — c'est maintenant la donnée
+             * la moins fiable dont nous disposions, et la garder quinze minutes
+             * de plus, c'est réessayer quinze minutes de plus dans le vide.
+             * La passe suivante ira redemander le vrai statut à Meta, et le
+             * garde-fou d'approbation prendra le relais : plus une seule
+             * tentative tant que le modèle n'est pas APPROVED.
+             *
+             * Ensuite SUSPENDRE le canal, plus longuement qu'une limitation de
+             * débit : une approbation Meta se compte en heures, pas en quarts
+             * d'heure, et rien ne changera d'ici là.
+             */
+            $this->templates->forget();
+
+            $this->guard->pauseGlobally(
+                (int) config('whatsapp.guard.config_pause_minutes', 60),
+                'configuration du modèle — code Meta '.$result->errorCode,
+            );
+
+            return $result;
+        }
+
+        if (WhatsappCloudErrors::triggersGlobalPause($code)) {
             // Meta vient de dire « trop ». Insister est ce qui transforme une
             // limitation passagère en bannissement — on se tait un moment.
             $this->guard->pauseGlobally(null, 'code Meta '.$result->errorCode);

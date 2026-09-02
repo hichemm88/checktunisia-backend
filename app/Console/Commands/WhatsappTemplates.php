@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Services\Delivery\FichePdf;
 use App\Services\Whatsapp\WhatsappCloudApi;
 use App\Services\Whatsapp\WhatsappCloudConfig;
+use App\Services\Whatsapp\WhatsappTemplateStatus;
 use Illuminate\Console\Command;
 
 /**
@@ -149,6 +150,17 @@ class WhatsappTemplates extends Command
      */
     private function renderStatus(string $key, string $status, array $template): void
     {
+        /*
+         * Ce que la commande vient de lire vaut pour la boucle d'envoi.
+         *
+         * Sans ce report, l'exploitant qui voit « APPROVED » à l'écran doit
+         * quand même attendre l'expiration du cache pour que les fiches
+         * repartent — et attend sans savoir qu'il attend.
+         */
+        if ($key === $this->ficheTemplateKey()) {
+            app(WhatsappTemplateStatus::class)->remember($status, $template['rejected_reason'] ?? null);
+        }
+
         $line = "{$key} : {$status}";
 
         if ($status === 'REJECTED' && filled($template['rejected_reason'] ?? null)) {
@@ -162,6 +174,12 @@ class WhatsappTemplates extends Command
             'REJECTED', 'DISABLED', 'PAUSED' => $this->error($line),
             default => $this->warn($line),
         };
+    }
+
+    /** Clé « nom:langue » du modèle des fiches, le seul qui bloque la file. */
+    private function ficheTemplateKey(): string
+    {
+        return config('whatsapp.cloud.template.name').':'.config('whatsapp.cloud.template.language');
     }
 
     /**

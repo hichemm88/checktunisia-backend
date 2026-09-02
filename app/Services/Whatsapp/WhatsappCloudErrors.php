@@ -52,7 +52,6 @@ final class WhatsappCloudErrors
         131049 => 'Message retenu par Meta pour préserver la qualité de l\'écosystème — l\'émetteur envoie trop, ou trop de messages non sollicités.',
         131051 => 'Type de message non pris en charge.',
         132000 => 'Nombre de variables du modèle différent de celui approuvé.',
-        132001 => 'Modèle inexistant dans cette langue — vérifier nom et code langue.',
         132005 => 'Texte rendu trop long pour le modèle approuvé.',
         132007 => 'Contenu refusé par la politique des modèles.',
         132012 => 'Format de variable refusé par le modèle.',
@@ -60,6 +59,26 @@ final class WhatsappCloudErrors
         132016 => 'Modèle désactivé définitivement.',
         132068 => 'Flux du modèle en pause.',
         132069 => 'Flux du modèle bloqué.',
+    ];
+
+    /**
+     * ERREURS DE CONFIGURATION : ce n'est pas la fiche qui est fautive, c'est
+     * le réglage du canal.
+     *
+     * La distinction n'est pas académique, elle est la leçon de l'incident.
+     * 132001 était classé « définitif » : chaque fiche présentée pendant que
+     * le modèle attendait son approbation a donc été marquée « échec
+     * définitif », avec une alerte par fiche — alors qu'une seule chose était
+     * cassée, la même pour toutes, et qu'elle se réparait en une fois.
+     *
+     * Le bon traitement tient en trois gestes : garder l'entrée EN FILE (elle
+     * partira quand le réglage sera juste), suspendre le canal (insister ne
+     * répare rien), alerter UNE fois (c'est une panne, pas N échecs).
+     *
+     * @var array<int,string>
+     */
+    private const CONFIGURATION = [
+        132001 => 'Modèle inexistant dans cette langue — vérifier nom et code langue, ou attendre l\'approbation Meta.',
     ];
 
     /**
@@ -88,7 +107,12 @@ final class WhatsappCloudErrors
      */
     public static function isRetryable(?int $code, int $httpStatus): bool
     {
-        if ($code !== null && isset(self::RETRYABLE[$code])) {
+        // Une erreur de configuration se répare, et l'entrée n'y est pour
+        // rien : elle reste en file. Ce n'est pas un « réessayer plus tard »
+        // ordinaire — la boucle d'envoi la remet en file SANS consommer de
+        // tentative (voir WhatsappOutboxService::returnToQueue) —, mais tout
+        // autre appelant doit au minimum la garder vivante.
+        if ($code !== null && (isset(self::RETRYABLE[$code]) || isset(self::CONFIGURATION[$code]))) {
             return true;
         }
 
@@ -97,6 +121,17 @@ final class WhatsappCloudErrors
         }
 
         return $httpStatus === 429 || $httpStatus >= 500;
+    }
+
+    /**
+     * Le canal est-il mal réglé (par opposition à : cette fiche est fautive) ?
+     *
+     * Trois conséquences, et pas une de moins : entrée conservée en file,
+     * canal suspendu, alerte unique.
+     */
+    public static function isConfiguration(?int $code): bool
+    {
+        return $code !== null && isset(self::CONFIGURATION[$code]);
     }
 
     /**
@@ -135,7 +170,11 @@ final class WhatsappCloudErrors
             return null;
         }
 
-        return self::RETRYABLE[$code] ?? self::PERMANENT[$code] ?? self::CRITICAL[$code] ?? null;
+        return self::RETRYABLE[$code]
+            ?? self::CONFIGURATION[$code]
+            ?? self::PERMANENT[$code]
+            ?? self::CRITICAL[$code]
+            ?? null;
     }
 
     /**
