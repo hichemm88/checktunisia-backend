@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Whatsapp;
 use App\Http\Controllers\Controller;
 use App\Models\WhatsappSendLog;
 use App\Services\Whatsapp\WhatsappCloudErrors;
+use App\Services\Whatsapp\WhatsappConversationService;
 use App\Services\Whatsapp\WhatsappCostRecorder;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Http\JsonResponse;
@@ -38,6 +39,7 @@ class WhatsappWebhookController extends Controller
     public function __construct(
         private WhatsappOutboxService $outbox,
         private WhatsappCostRecorder $costs,
+        private WhatsappConversationService $conversations,
     ) {}
 
     /**
@@ -96,7 +98,7 @@ class WhatsappWebhookController extends Controller
                     }
 
                     foreach ((array) ($value['messages'] ?? []) as $message) {
-                        $this->acknowledgeInbound($message);
+                        $this->acknowledgeInbound($message, (array) ($value['contacts'] ?? []));
                     }
                 }
             }
@@ -156,25 +158,46 @@ class WhatsappWebhookController extends Controller
             return;
         }
 
+        // Meta empile les erreurs ; la première porte la cause. Lue avant le
+        // routage : les deux destinations possibles (fiche, réponse admin) en
+        // ont besoin, et la relire deux fois ferait diverger les deux lectures.
+        $error = ($status['errors'][0] ?? []);
+        $rawCode = $error['code'] ?? null;
+        $code = is_numeric($rawCode) ? (int) $rawCode : null;
+        $title = $error['title'] ?? ($error['message'] ?? null);
+
         $job = WhatsappSendLog::where('message_id_whatsapp', $wamid)->first();
 
         if ($job === null) {
             /*
              * Pas de ligne d'outbox — et ce n'est PAS forcément un message
              * étranger : les codes de connexion partent hors file et n'en ont
-             * jamais eu. C'est pourtant le seul endroit où leur livraison est
-             * observable, donc le seul où leur coût peut être compté.
-             *
-             * Le registre de facturation tranche : s'il connaît ce wamid, on
-             * compte ; sinon le message vient d'ailleurs et on n'invente rien.
+             * jamais eu, et les réponses envoyées depuis la boîte de réception
+             * vivent dans le fil, pas dans la file des fiches.
+             */
+            $isReply = $this->conversations->applyOutboundStatus(
+                $wamid,
+                $state,
+                $code !== null ? (string) $code : null,
+                WhatsappCloudErrors::describe($code, is_string($title) ? $title : null),
+            );
+
+            /*
+             * Facturation. C'est le seul endroit où la livraison des codes de
+             * connexion — et des réponses — est observable, donc le seul où
+             * leur coût peut être compté. Le registre tranche : s'il connaît ce
+             * wamid, on compte ; sinon le message vient d'ailleurs et on
+             * n'invente rien.
              */
             if (in_array($state, [WhatsappSendLog::DELIVERY_DELIVERED, WhatsappSendLog::DELIVERY_READ], true)) {
                 $this->costs->recordDelivered($wamid);
             }
 
-            // Cas normal et non alarmant : messages envoyés par un autre
-            // système sur le même numéro, ou lignes purgées du journal.
-            Log::info('[whatsapp-webhook] statut sans correspondance', ['status' => $state]);
+            if (! $isReply) {
+                // Cas normal et non alarmant : messages envoyés par un autre
+                // système sur le même numéro, ou lignes purgées du journal.
+                Log::info('[whatsapp-webhook] statut sans correspondance', ['status' => $state]);
+            }
 
             return;
         }
@@ -184,12 +207,6 @@ class WhatsappWebhookController extends Controller
 
             return;
         }
-
-        // Meta empile les erreurs ; la première porte la cause.
-        $error = ($status['errors'][0] ?? []);
-        $rawCode = $error['code'] ?? null;
-        $code = is_numeric($rawCode) ? (int) $rawCode : null;
-        $title = $error['title'] ?? ($error['message'] ?? null);
 
         $this->outbox->recordDeliveryUpdate(
             $job,
@@ -204,17 +221,25 @@ class WhatsappWebhookController extends Controller
     }
 
     /**
-     * Message entrant.
+     * Message entrant — la réponse d'une autorité.
      *
-     * Aucune logique conversationnelle pour l'instant : on trace la réception
-     * — un message entrant ouvre une fenêtre de 24 h, information utile au
-     * diagnostic — sans jamais journaliser son contenu, qui appartient à son
-     * auteur.
+     * Elle est désormais CONSERVÉE, dans le fil du numéro, et lisible depuis la
+     * boîte de réception de l'administration. C'est la seule information de
+     * retour que le canal produise : la jeter revenait à faire écrire les
+     * agents dans le vide.
+     *
+     * Le JOURNAL, lui, ne change pas : type, numéro tronqué, wamid. Le contenu
+     * va en base (chiffré), jamais dans les logs — un journal se copie, se
+     * réexpédie et s'archive ailleurs, et rien de tout cela n'est vrai d'une
+     * colonne chiffrée.
      *
      * @param  array<string,mixed>  $message
+     * @param  array<int,array<string,mixed>>  $contacts
      */
-    private function acknowledgeInbound(array $message): void
+    private function acknowledgeInbound(array $message, array $contacts = []): void
     {
+        $this->conversations->recordInbound($message, $contacts);
+
         Log::info('[whatsapp-webhook] message entrant', [
             'type' => $message['type'] ?? null,
             'from' => $this->maskNumber($message['from'] ?? null),

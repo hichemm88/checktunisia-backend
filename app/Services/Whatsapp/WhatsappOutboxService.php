@@ -197,7 +197,7 @@ class WhatsappOutboxService
         // d'envoyer une fiche « — » inutilisable.
         $hasIdentity = trim((string) $guest->first_name.(string) $guest->last_name) !== '';
 
-        WhatsappSendLog::create([
+        $job = WhatsappSendLog::create([
             'hotel_id' => $checkIn->hotel_id,
             'check_in_id' => $checkIn->id,
             'guest_id' => $guest->id,
@@ -217,6 +217,16 @@ class WhatsappOutboxService
             'next_attempt_at' => $hasIdentity ? now() : null,
             'queued_at' => now(),
         ]);
+
+        /*
+         * Rattachement au fil de discussion, dès l'enfilage et non à l'envoi :
+         * une fiche bloquée ou en attente doit déjà être visible dans la boîte
+         * de réception du destinataire. C'est précisément quand rien ne part
+         * qu'on a besoin de voir ce qui aurait dû partir.
+         *
+         * Jamais bloquant, comme le reste de ce service.
+         */
+        app(WhatsappConversationService::class)->attachSendLog($job);
 
         return $hasIdentity;
     }
@@ -269,7 +279,7 @@ class WhatsappOutboxService
 
         $ficheToken = (string) Str::ulid();
 
-        return WhatsappSendLog::create([
+        $job = WhatsappSendLog::create([
             'hotel_id' => null,
             'recipient' => $recipient,
             'caption' => FicheFormatter::testFiche($propertyName),
@@ -283,6 +293,10 @@ class WhatsappOutboxService
             'next_attempt_at' => now(),
             'queued_at' => now(),
         ]);
+
+        app(WhatsappConversationService::class)->attachSendLog($job);
+
+        return $job;
     }
 
     /**
@@ -465,6 +479,11 @@ class WhatsappOutboxService
          * l'imputer. Sans elle, la comptabilité aurait un montant sans client.
          */
         $this->costs->registerFicheSend($job, $messageId);
+
+        // Le fil remonte en haut de la boîte de réception. L'aperçu ne porte
+        // pas le nom du voyageur : la liste des fils est un écran de
+        // supervision, pas une liste de personnes contrôlées.
+        app(WhatsappConversationService::class)->touchOutbound($job);
     }
 
     /**
