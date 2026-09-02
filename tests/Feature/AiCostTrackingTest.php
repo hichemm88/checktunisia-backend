@@ -182,6 +182,61 @@ class AiCostTrackingTest extends TestCase
         $this->assertFalse($data['pricing_configured']);
     }
 
+    public function test_summary_names_the_models_that_were_called_without_a_tariff(): void
+    {
+        $this->tariff();
+        $hotel = Hotel::factory()->create();
+        $admin = User::factory()->platformAdmin()->create();
+
+        // Le scanner appelle un modèle plus récent que la grille. Le tarif est
+        // introuvable, AiUsageRecorder fige le coût à 0, et le total BAISSE —
+        // silencieusement, dans le sens où personne ne va vérifier. Un total
+        // qui diminue après une montée de version ressemble à une bonne
+        // nouvelle : c'est ce qui rend cette panne dangereuse.
+        AiUsageEvent::create([
+            'hotel_id' => $hotel->id, 'feature' => 'cin_scan', 'model' => 'claude-opus-9',
+            'input_tokens' => 900, 'output_tokens' => 120, 'cost_usd' => 0,
+            'status' => 'success', 'latency_ms' => 800, 'created_at' => now(),
+        ]);
+
+        // Une erreur d'API coûte légitimement 0 et ne consomme aucun jeton :
+        // elle ne doit PAS être signalée, sinon l'alerte est toujours allumée
+        // et ne veut plus rien dire.
+        AiUsageEvent::create([
+            'hotel_id' => $hotel->id, 'feature' => 'cin_scan', 'model' => 'claude-sonnet-5',
+            'input_tokens' => 0, 'output_tokens' => 0, 'cost_usd' => 0,
+            'status' => 'api_error', 'latency_ms' => 200, 'created_at' => now(),
+        ]);
+
+        $data = $this->actingAs($admin)->getJson('/api/v1/admin/ai-costs/summary')->assertOk()->json('data');
+
+        // La grille est complète et non nulle : le drapeau historique ne voit
+        // rien, et c'est bien pour ça que celui-ci existe.
+        $this->assertTrue($data['pricing_configured']);
+
+        $this->assertCount(1, $data['unpriced_models']);
+        $this->assertSame('claude-opus-9', $data['unpriced_models'][0]['model']);
+        $this->assertSame(1, $data['unpriced_models'][0]['events']);
+        $this->assertSame(900, $data['unpriced_models'][0]['input_tokens']);
+    }
+
+    public function test_summary_reports_no_unpriced_model_when_every_call_is_covered(): void
+    {
+        $this->tariff();
+        $hotel = Hotel::factory()->create();
+        $admin = User::factory()->platformAdmin()->create();
+
+        AiUsageEvent::create([
+            'hotel_id' => $hotel->id, 'feature' => 'cin_scan', 'model' => 'claude-sonnet-5',
+            'input_tokens' => 1000, 'output_tokens' => 200, 'cost_usd' => 0.006,
+            'status' => 'success', 'latency_ms' => 800, 'created_at' => now(),
+        ]);
+
+        $data = $this->actingAs($admin)->getJson('/api/v1/admin/ai-costs/summary')->assertOk()->json('data');
+
+        $this->assertSame([], $data['unpriced_models']);
+    }
+
     public function test_admin_cost_endpoints_require_platform_admin(): void
     {
         $hotel = Hotel::factory()->create();

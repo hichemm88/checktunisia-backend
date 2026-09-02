@@ -67,8 +67,54 @@ class AiCostController extends Controller
                 'total_cost_usd' => number_format($totalCost, 6, '.', ''),
                 'features' => $features,
                 'pricing_configured' => $this->pricingConfigured(),
+                /*
+                | Modeles APPELES sur la periode dont aucun tarif n'a ete
+                | trouve. C'est le seul mode de panne que `pricing_configured`
+                | ne voit pas, et c'est le plus probable : la grille peut etre
+                | complete et juste, et ne rien couvrir du modele que le
+                | scanner appelle depuis qu'on l'a fait evoluer.
+                |
+                | Le cout tombe alors a 0 par evenement (AiUsageRecorder), donc
+                | le total baisse — vers le bas, silencieusement, dans le sens
+                | ou personne ne va verifier. Un total qui diminue apres une
+                | montee de version ressemble a une bonne nouvelle.
+                */
+                'unpriced_models' => $this->unpricedModels($from, $to),
             ],
         ]);
+    }
+
+    /**
+     * Modeles factures a 0 alors qu'ils ont consomme des jetons.
+     *
+     * Le critere porte sur l'EVENEMENT et non sur la table des tarifs : un
+     * tarif peut exister sous un nom qui ne correspond a rien de ce qui est
+     * reellement appele, et la table serait alors parfaitement « configuree »
+     * pour un modele qui n'existe plus.
+     *
+     * @return array<int,array{model:string,events:int,input_tokens:int,output_tokens:int}>
+     */
+    private function unpricedModels(Carbon $from, Carbon $to): array
+    {
+        return AiUsageEvent::query()
+            ->whereBetween('created_at', [$from, $to])
+            ->whereIn('feature', self::FEATURES)
+            ->where('cost_usd', '<=', 0)
+            ->whereRaw('COALESCE(input_tokens,0) + COALESCE(output_tokens,0) > 0')
+            ->selectRaw('model,
+                COUNT(*) as n,
+                COALESCE(SUM(input_tokens),0)  as in_tok,
+                COALESCE(SUM(output_tokens),0) as out_tok')
+            ->groupBy('model')
+            ->orderByDesc('n')
+            ->get()
+            ->map(fn ($r) => [
+                'model' => (string) $r->model,
+                'events' => (int) $r->n,
+                'input_tokens' => (int) $r->in_tok,
+                'output_tokens' => (int) $r->out_tok,
+            ])
+            ->all();
     }
 
     /** GET /admin/ai-costs/by-establishment?period=...&feature=all|cin_scan|passport_scan */
