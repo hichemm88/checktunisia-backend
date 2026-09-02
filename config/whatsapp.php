@@ -474,4 +474,83 @@ return [
         'max_bytes' => (int) env('WHATSAPP_SESSION_VAULT_MAX_BYTES', 64 * 1024 * 1024),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Tarification Meta (coût des messages sortants)
+    |--------------------------------------------------------------------------
+    |
+    | Depuis juillet 2025, Meta ne facture plus à la conversation mais AU
+    | MESSAGE TEMPLATE LIVRÉ : un message n'est facturé que lorsque le webhook
+    | remonte `delivered`. Un `sent` ne coûte rien — Meta a accepté le message,
+    | il n'est pas encore arrivé chez le destinataire. Un `failed` non plus.
+    |
+    | Le prix dépend de deux choses : la CATÉGORIE du modèle (utility,
+    | authentication, marketing) et le MARCHÉ du destinataire. Nos deux flux :
+    |
+    |   fiche_police (utility)        → agents du poste de police
+    |   qayed_otp    (authentication) → connexion des agents au portail
+    |
+    | Les valeurs ci-dessous sont celles du marché « Tunisie / Rest of Africa ».
+    | Elles sont un DÉFAUT RAISONNABLE, pas une vérité : la grille Meta bouge,
+    | et les paliers de volume (utility et authentication seulement) font
+    | baisser le prix réel au-delà de 750 k messages/mois. C'est précisément
+    | pourquoi `whatsapp:sync-costs` existe — quand Meta répond, ses montants
+    | REMPLACENT ce calcul (source `meta` contre source `estimate`).
+    |
+    | Les messages entrants et les réponses dans la fenêtre de service ne
+    | coûtent rien AUJOURD'HUI. La catégorie 'service' est déjà présente, à 0 :
+    | elle devient payante au tarif utility le 01/10/2026, et il suffira alors
+    | de poser WHATSAPP_PRICE_SERVICE_USD pour que le calcul local suive, sans
+    | redéploiement ni migration.
+    |
+    */
+    'pricing' => [
+
+        // Prix USD par message LIVRÉ, par catégorie de modèle.
+        'rates' => [
+            'utility' => (float) $envOr('WHATSAPP_PRICE_UTILITY_USD', 0.0080),
+            'authentication' => (float) $envOr('WHATSAPP_PRICE_AUTHENTICATION_USD', 0.0077),
+            'marketing' => (float) $envOr('WHATSAPP_PRICE_MARKETING_USD', 0.0448),
+
+            /*
+            | Conversations de service : gratuites jusqu'au 30/09/2026, puis
+            | facturées au tarif utility. Laissée à 0 tant que la bascule n'a
+            | pas eu lieu — compter dès aujourd'hui un coût qui n'existe pas
+            | fausserait la marge par client dans le sens le plus trompeur.
+            */
+            'service' => (float) $envOr('WHATSAPP_PRICE_SERVICE_USD', 0.0),
+        ],
+
+        /*
+        | Catégorie de facturation par modèle, pour les cas que les noms
+        | configurés ne couvrent pas (modèle de test, campagne ponctuelle).
+        | La clé est le NOM du modèle chez Meta. Voir
+        | WhatsappCostRecorder::categoryForTemplate pour l'ordre de résolution.
+        */
+        'template_categories' => [],
+
+        /*
+        | Taux de change d'AFFICHAGE, uniquement.
+        |
+        | Meta facture en USD et le stockage reste en USD : convertir à
+        | l'écriture reviendrait à figer un taux dans l'historique, et donc à
+        | faire varier le passé à chaque révision du taux. La conversion est
+        | faite à la lecture, et la valeur affichée porte un « ≈ » qui dit
+        | exactement ce qu'elle vaut.
+        */
+        'usd_to_tnd' => (float) $envOr('WHATSAPP_USD_TO_TND', 3.05),
+
+        /*
+        | Synchronisation avec les analytics Meta (source autoritaire).
+        |
+        | `days` : profondeur de la fenêtre relue à chaque passage. Meta
+        | consolide ses montants pendant plusieurs jours ; ne relire que la
+        | veille figerait des chiffres provisoires.
+        */
+        'sync' => [
+            'enabled' => (bool) $envOr('WHATSAPP_COST_SYNC_ENABLED', true),
+            'days' => (int) $envOr('WHATSAPP_COST_SYNC_DAYS', 7),
+        ],
+    ],
+
 ];

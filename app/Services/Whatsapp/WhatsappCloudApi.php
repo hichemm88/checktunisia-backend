@@ -264,6 +264,52 @@ class WhatsappCloudApi
         return (array) $response->json();
     }
 
+    /**
+     * Analytics de facturation du WABA — les montants RÉELS de Meta.
+     *
+     * Forme Graph (champ imbriqué, paramètres passés en appel de méthode et
+     * non en query string) :
+     *
+     *   GET /{waba_id}?fields=pricing_analytics
+     *       .start(<unix>).end(<unix>)
+     *       .granularity(DAILY)
+     *       .dimensions(['PRICING_CATEGORY'])
+     *       .metric_types(['COST','VOLUME'])
+     *
+     * Chaque `data_point` porte `start`, `end`, `volume` (messages livrés),
+     * `cost` (charges approximatives, devise du WABA) et la dimension
+     * demandée — ici `pricing_category` : AUTHENTICATION, MARKETING, SERVICE,
+     * UTILITY.
+     *
+     * Ce champ n'est pas garanti : il dépend de la version de l'API, des
+     * permissions du jeton système et du type de compte. La méthode rend donc
+     * un tableau VIDE plutôt que de lever quand Meta ne sait pas répondre —
+     * l'absence d'analytics n'est pas une panne, c'est le cas nominal du
+     * calcul local.
+     *
+     * @return array<int,array<string,mixed>> data_points, éventuellement vide
+     *
+     * @throws \RuntimeException si Meta répond une erreur explicite
+     */
+    public function pricingAnalytics(\DateTimeInterface $start, \DateTimeInterface $end): array
+    {
+        $field = sprintf(
+            "pricing_analytics.start(%d).end(%d).granularity(DAILY).dimensions(['PRICING_CATEGORY']).metric_types(['COST','VOLUME'])",
+            $start->getTimestamp(),
+            $end->getTimestamp(),
+        );
+
+        $response = $this->client()->get($this->graph((string) config('whatsapp.cloud.waba_id')), [
+            'fields' => $field,
+        ]);
+
+        if (! $response->successful()) {
+            throw new \RuntimeException($this->describeFailure($response));
+        }
+
+        return (array) $response->json('pricing_analytics.data_points', []);
+    }
+
     // ── Interne ──────────────────────────────────────────────────────────────
 
     /**

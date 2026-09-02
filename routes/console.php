@@ -78,6 +78,18 @@ Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
 // 24 h. La commande est inerte quand le canal actif est en pull.
 Schedule::command('whatsapp:dispatch')->everyMinute()->withoutOverlapping(15);
 
+// Coûts Meta : rapatriement quotidien des montants réels facturés par Meta
+// (analytics du WABA), qui remplacent l'estimation locale sur la période.
+//
+// 05:00 et pas minuit : Meta consolide ses analytics avec plusieurs heures de
+// retard, et la commande relit de toute façon une fenêtre de plusieurs jours
+// (WHATSAPP_COST_SYNC_DAYS) — un montant provisoire lu trop tôt sera corrigé
+// au passage suivant, pas figé.
+//
+// Sans elle, rien n'est perdu : le webhook alimente l'estimation locale en
+// continu et la page l'affiche, marquée « estimation ».
+Schedule::command('whatsapp:sync-costs')->dailyAt('05:00')->withoutOverlapping();
+
 // Challenges WebAuthn périmés. Ils sont déjà inutilisables passé leur
 // expiration (et purgés au fil de l'eau à chaque émission) : ce passage
 // quotidien évite simplement que la table enfle sur une longue période creuse.
