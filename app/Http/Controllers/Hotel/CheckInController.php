@@ -151,10 +151,25 @@ class CheckInController extends Controller
 
         $validated = $request->validate([
             'room_id'                 => ['nullable', 'uuid', Rule::exists('rooms', 'id')->where('hotel_id', $checkIn->hotel_id)],
-            'expected_check_out_date' => ['sometimes', 'date'],
+            /*
+             | Les trois bornes ci-dessous existent à la création et avaient
+             | disparu ici. Une règle de validation ne doit jamais s'affaiblir
+             | entre la création et la modification — le formulaire n'envoie
+             | pas ces valeurs, mais rien d'autre ne les empêchait.
+             |
+             | `after:` porte sur la date d'arrivée DÉJÀ ENREGISTRÉE, et non
+             | sur un champ de la requête : l'arrivée ne se modifie pas ici.
+             | Une durée négative n'est pas une donnée bizarre — c'est une
+             | occupation fausse, un quota faux et une facture fausse.
+             |
+             | Les plafonds ne sont pas cosmétiques non plus : les colonnes
+             | sont des `smallint`, et une valeur au-delà remontait en erreur
+             | SQL brute (500), pas en 422.
+             */
+            'expected_check_out_date' => ['sometimes', 'date', 'after:'.$checkIn->check_in_date->toDateString()],
             'notes'                   => ['nullable', 'string', 'max:1000'],
-            'adults_count'            => ['sometimes', 'integer', 'min:1'],
-            'children_count'          => ['sometimes', 'integer', 'min:0'],
+            'adults_count'            => ['sometimes', 'integer', 'min:1', 'max:50'],
+            'children_count'          => ['sometimes', 'integer', 'min:0', 'max:20'],
         ]);
 
         // Même verrou qu'à la création : changer de chambre passe par le même
