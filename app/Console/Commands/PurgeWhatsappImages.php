@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\DocumentScan;
+use App\Models\WhatsappChannelOutage;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 
@@ -42,6 +43,21 @@ class PurgeWhatsappImages extends Command
         }
 
         $this->info("[whatsapp] purge images : {$scans->count()} scan(s), {$files} fichier(s) supprimé(s) (> {$hours} h).");
+
+        /*
+         * Registre d'incapacité du canal : élagué au même passage.
+         *
+         * La borne est volontairement large — bien au-delà des 24 h d'abandon
+         * — parce qu'une entrée dont l'horloge a été suspendue vit plus
+         * longtemps que 24 h au mur, et que supprimer une période encore
+         * chevauchée par une fiche vivante la ferait vieillir d'un coup de
+         * tout le temps où elle n'a rien pu tenter.
+         */
+        $outages = WhatsappChannelOutage::purgeBefore(now()->subDays(30));
+
+        if ($outages > 0) {
+            $this->line("[whatsapp] registre d'incapacité : {$outages} période(s) closes supprimées (> 30 j).");
+        }
 
         return self::SUCCESS;
     }

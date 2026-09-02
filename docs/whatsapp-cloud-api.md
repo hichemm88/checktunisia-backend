@@ -288,10 +288,12 @@ des comptes qui ne lui ont jamais écrit est le profil exact que Meta bannit.
 |---|---|---|
 | Coupe-circuit | `WHATSAPP_SENDING_ENABLED` | `false` → plus rien ne part. Relu à **chaque** envoi. |
 | Bascule | `WHATSAPP_CLOUD_API_CUTOVER_AT` | Aucune fiche créée avant cet instant ne part. **Non définie = rien ne part du tout.** |
+| Approbation du modèle | — (état lu chez Meta) | Tant que le modèle des fiches n'est pas `APPROVED`, **aucune tentative** n'est faite. Statut en cache, rafraîchi toutes les 15 min. |
 | Débit | `WHATSAPP_MAX_SENDS_PER_MINUTE` (20) | La file attend le créneau suivant. |
 | Plafond | `WHATSAPP_MAX_SENDS_PER_DAY` (500) | Reprise le lendemain + alerte. |
 | Arriéré | `WHATSAPP_BACKLOG_ALERT_THRESHOLD` (50) | Au-delà, **l'envoi automatique s'arrête** et réclame une décision humaine. |
 | Qualité | codes Meta 131049 / 80007 | Pause globale de 15 min. |
+| Configuration | code Meta 132001 | Pause globale de 60 min (`WHATSAPP_CONFIG_PAUSE_MINUTES`) + **une** alerte admin. L'entrée reste en file, sans tentative décomptée. |
 | Débit horaire | `WHATSAPP_MAX_PER_HOUR` (30) | Fenêtre glissante, mesurée sur le journal — un worker qui redémarre ne remet pas le compteur à zéro. |
 | Montée en charge | `WHATSAPP_WARMUP_*` (24 h, 6/h, 120 s) | Un numéro fraîchement appairé émet lentement : c'est le profil du compte jetable qui déclenche les sanctions. |
 | Cadence | `WHATSAPP_MIN_INTERVAL_SECONDS` (45) + `WHATSAPP_INTERVAL_JITTER_RATIO` (0,4) | Un intervalle constant est une signature d'automate aussi lisible qu'une rafale. |
@@ -314,6 +316,62 @@ est donc manuel, explicite et temporaire :
 ```bash
 php artisan whatsapp:allow-backlog --minutes=60
 ```
+
+### L'approbation du modèle est un garde-fou, pas une formalité
+
+**L'incident du 02/09/2026.** `WHATSAPP_SENDING_ENABLED` est passé à `true`
+alors que le modèle des fiches était encore `PENDING` chez Meta. Le dispatcher
+a présenté les fiches en file, Meta les a toutes refusées en `132001`
+(« modèle inexistant dans cette langue » — le même code que pour un modèle
+réellement absent), chaque refus a consommé une tentative, et l'abandon à 24 h
+les a marquées « échec définitif » avec une alerte email par fiche.
+
+Des fiches de police déclarées perdues, alors qu'aucune n'avait jamais eu la
+moindre chance de partir.
+
+Trois défauts distincts s'étaient additionnés, et chacun est corrigé
+séparément :
+
+1. **Le coupe-circuit et l'approbation étaient confondus.** Ouvrir l'envoi ne
+   rend pas le modèle utilisable. `WhatsappTemplateStatus` lit désormais le
+   statut chez Meta (en cache, rafraîchi toutes les 15 min) et le dispatcher
+   ne tente **rien** tant qu'il ne vaut pas `APPROVED`. Statut illisible —
+   jeton refusé, `WHATSAPP_WABA_ID` absent, Graph injoignable — vaut « pas
+   approuvé » : à défaut d'information, on n'essaie pas.
+2. **`132001` était classé « échec définitif ».** C'est une erreur de
+   *configuration du canal*, pas de la fiche. L'entrée reste en file, sans
+   tentative décomptée ; le canal est suspendu ; les administrateurs sont
+   alertés **une** fois.
+3. **L'horloge des 24 h tournait pendant l'attente.** Les 24 h sont un budget
+   de *tentatives*, pas un délai de péremption. La table
+   `whatsapp_channel_outages` enregistre les périodes où le canal ne pouvait
+   rien émettre, et ce temps-là est retranché de l'âge d'une fiche avant tout
+   abandon.
+
+L'OTP (`qayed_otp`) n'est concerné par aucun de ces freins : il est approuvé,
+il emprunte un autre chemin, et fermer le portail des agents pour un modèle de
+fiche en attente serait doubler la panne.
+
+**Suivre l'approbation :**
+
+```bash
+php artisan whatsapp:templates
+```
+
+La commande reporte ce qu'elle lit à la boucle d'envoi : dès qu'elle affiche
+`APPROVED`, les fiches repartent sans attendre l'expiration du cache.
+
+**Rejouer les fiches perdues par l'incident** — dry-run par défaut :
+
+```bash
+php artisan whatsapp:requeue-failed --reason=132001
+```
+
+Elle ne vise que les entrées **postérieures à la bascule** : l'arriéré du
+bannissement ne doit jamais repartir. `--apply` écrit. Les tentatives sont
+remises à zéro et `queued_at` est relancé — les 24 h consommées l'ont été sur
+une panne de canal, pas sur la fiche. `created_at` n'est pas touché : c'est lui
+que la borne de bascule regarde.
 
 ## Variables d'environnement — référence complète
 
@@ -374,6 +432,7 @@ aucune n'apparaît dans les journaux.
 | `WHATSAPP_MAX_SENDS_PER_DAY` | `500` | Atteint : reprise le lendemain + alerte admin. |
 | `WHATSAPP_BACKLOG_ALERT_THRESHOLD` | `50` | Au-delà, **l'envoi automatique s'arrête** et réclame une décision humaine. |
 | `WHATSAPP_QUALITY_PAUSE_MINUTES` | `15` | Pause globale après un code Meta de débit ou de qualité. |
+| `WHATSAPP_CONFIG_PAUSE_MINUTES` | `60` | Pause globale après un code Meta de configuration (132001). Plus longue : une approbation Meta se compte en heures, pas en quarts d'heure. |
 | `WHATSAPP_MAX_PER_HOUR` | `30` | Plafond sur une heure glissante. |
 | `WHATSAPP_MIN_INTERVAL_SECONDS` | `45` | Cadence plancher entre deux envois. |
 | `WHATSAPP_INTERVAL_JITTER_RATIO` | `0.4` | Part d'aléa sur cette cadence. |

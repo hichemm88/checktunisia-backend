@@ -9,6 +9,7 @@ use App\Models\WhatsappSessionState;
 use App\Services\Delivery\DeliveryChannelManager;
 use App\Services\Delivery\WhatsAppCloudChannel;
 use App\Services\Delivery\WhatsAppWebChannel;
+use App\Services\Whatsapp\WhatsappTemplateStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -106,6 +107,12 @@ class DeliveryChannelTest extends TestCase
             'whatsapp.guard.cutover_at' => '2000-01-01T00:00:00+00:00',
             'whatsapp.guard.sending_enabled' => true,
         ]);
+
+        // Le modèle est approuvé chez Meta. Précondition posée explicitement
+        // depuis la garde d'approbation : sans elle, le garde-fou irait
+        // interroger Graph et refuserait tout envoi, faute d'information.
+        // Le cas non approuvé est éprouvé par WhatsappTemplateApprovalTest.
+        app(WhatsappTemplateStatus::class)->remember('APPROVED');
     }
 
     /** Job minimal, postérieur à la bascule, avec ses variables de modèle. */
@@ -271,6 +278,10 @@ class DeliveryChannelTest extends TestCase
     {
         $this->configureCloud();
         config(['whatsapp.cloud.template.name' => 'fiche_police', 'whatsapp.cloud.template.language' => 'fr']);
+        // Le modèle est déclaré approuvé SOUS CE NOM-LÀ : la mémoire du statut
+        // est indexée par nom et langue, pour qu'un changement de modèle ne
+        // puisse pas hériter de l'approbation du précédent.
+        app(WhatsappTemplateStatus::class)->remember('APPROVED');
 
         Http::fake([
             '*/media' => Http::response(['id' => 'media-1'], 200),
@@ -305,6 +316,10 @@ class DeliveryChannelTest extends TestCase
          */
         $this->configureCloud();
         config(['whatsapp.cloud.template.name' => 'fiche_police']);
+        // Le modèle est déclaré approuvé SOUS CE NOM-LÀ : la mémoire du statut
+        // est indexée par nom et langue, pour qu'un changement de modèle ne
+        // puisse pas hériter de l'approbation du précédent.
+        app(WhatsappTemplateStatus::class)->remember('APPROVED');
 
         Http::fake([
             '*/media' => Http::response(['id' => 'media-1'], 200),
@@ -341,6 +356,10 @@ class DeliveryChannelTest extends TestCase
         // repartir au tour suivant, pas être abandonnée.
         $this->configureCloud();
         config(['whatsapp.cloud.template.name' => 'fiche_police']);
+        // Le modèle est déclaré approuvé SOUS CE NOM-LÀ : la mémoire du statut
+        // est indexée par nom et langue, pour qu'un changement de modèle ne
+        // puisse pas hériter de l'approbation du précédent.
+        app(WhatsappTemplateStatus::class)->remember('APPROVED');
 
         Http::fake([
             '*/media' => Http::response(['error' => ['message' => 'Service indisponible']], 503),
@@ -375,6 +394,10 @@ class DeliveryChannelTest extends TestCase
         // ramène au passage la photo de la pièce d'identité.
         $this->configureCloud();
         config(['whatsapp.cloud.template.name' => 'fiche_police']);
+        // Le modèle est déclaré approuvé SOUS CE NOM-LÀ : la mémoire du statut
+        // est indexée par nom et langue, pour qu'un changement de modèle ne
+        // puisse pas hériter de l'approbation du précédent.
+        app(WhatsappTemplateStatus::class)->remember('APPROVED');
 
         Http::fake([
             '*/media' => Http::response(['id' => 'MEDIA-42'], 200),
@@ -415,6 +438,10 @@ class DeliveryChannelTest extends TestCase
         // pas être le seul à ne pas pouvoir l'emprunter, faute de PDF.
         $this->configureCloud();
         config(['whatsapp.cloud.template.name' => 'fiche_police']);
+        // Le modèle est déclaré approuvé SOUS CE NOM-LÀ : la mémoire du statut
+        // est indexée par nom et langue, pour qu'un changement de modèle ne
+        // puisse pas hériter de l'approbation du précédent.
+        app(WhatsappTemplateStatus::class)->remember('APPROVED');
 
         Http::fake([
             '*/media' => Http::response(['id' => 'media-1'], 200),

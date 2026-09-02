@@ -467,7 +467,20 @@ class WhatsappOutboxService
      */
     public function markFailed(WhatsappSendLog $job, ?string $error, bool $retryable = true, ?string $errorCode = null): void
     {
-        $ageMinutes = Carbon::parse($job->queued_at)->diffInMinutes(now());
+        /*
+         * Âge EFFECTIF, et non âge au mur.
+         *
+         * Les 24 h sont un budget de tentatives : elles supposent que pendant
+         * ces 24 h, la fiche a réellement été présentée à Meta. Le temps où le
+         * canal ne pouvait rien émettre — modèle en attente d'approbation,
+         * coupe-circuit tiré, pause imposée par Meta — n'est pas du temps de
+         * tentative, et le compter revient à abandonner une fiche pour une
+         * raison qui ne lui appartient pas. C'est exactement ce qui a produit
+         * les « échecs définitifs » de l'incident.
+         */
+        $ageMinutes = app(WhatsappSendingGuard::class)
+            ->effectiveAgeMinutes(Carbon::parse($job->queued_at));
+
         $maxAge = (int) config('whatsapp.max_age_minutes', 1440);
 
         if (! $retryable || $ageMinutes >= $maxAge) {
@@ -489,6 +502,32 @@ class WhatsappOutboxService
             'error_code' => $errorCode,
             'claimed_at' => null,
             'next_attempt_at' => $this->nextAttemptAt($job->attempts),
+        ]);
+    }
+
+    /**
+     * Rend l'entrée à la file SANS lui décompter la tentative.
+     *
+     * Réservé aux pannes de configuration du canal (132001) : la tentative n'a
+     * rien éprouvé de cette fiche-là, elle a éprouvé le réglage. La compter
+     * serait rapprocher de l'abandon une entrée qui n'a jamais été présentée
+     * dans des conditions où elle pouvait aboutir — c'est ce mécanisme précis
+     * qui a consommé les retries pendant que le modèle attendait Meta.
+     *
+     * L'erreur est tout de même consignée : le journal admin doit dire
+     * pourquoi la fiche n'est pas partie, même quand ce n'est pas sa faute.
+     */
+    public function returnToQueue(WhatsappSendLog $job, ?string $error, ?string $errorCode = null): void
+    {
+        $job->update([
+            'status' => WhatsappSendLog::STATUS_PENDING,
+            'last_error' => $error,
+            'error_code' => $errorCode,
+            'claimed_at' => null,
+            // Pas de backoff : ce n'est pas l'entrée qu'il faut faire patienter,
+            // c'est le canal — et il l'est déjà, par la pause globale.
+            'next_attempt_at' => null,
+            'attempts' => max(0, (int) $job->attempts - 1),
         ]);
     }
 
@@ -518,7 +557,19 @@ class WhatsappOutboxService
         // Un seul contrôle complet en tête de boucle : inutile de recompter
         // l'arriéré à chaque fiche, et un refus doit se lire une fois, pas
         // cinquante.
-        if ($blocked = $guard->blockingReason()) {
+        $blocked = $guard->blockingReason();
+
+        /*
+         * Le constat de capacité est consigné AVANT toute décision.
+         *
+         * C'est lui qui suspend l'horloge des 24 h : une file immobile parce
+         * que le modèle n'est pas approuvé ne doit pas voir ses fiches vieillir
+         * vers l'abandon. La ligne se ferme d'elle-même à la première passe qui
+         * peut de nouveau émettre.
+         */
+        $guard->noteCapability($blocked);
+
+        if ($blocked !== null) {
             Log::info('[whatsapp] envoi suspendu — '.$blocked);
 
             return ['sent' => 0, 'failed' => 0, 'cancelled' => 0, 'blocked' => $blocked];
@@ -599,6 +650,32 @@ class WhatsappOutboxService
                 $refusals = 0;
 
                 continue;
+            }
+
+            $code = is_numeric($result->errorCode) ? (int) $result->errorCode : null;
+
+            if (WhatsappCloudErrors::isConfiguration($code)) {
+                /*
+                 * Le canal est mal réglé — modèle pas (ou plus) approuvé, nom
+                 * ou langue divergents. Ce n'est PAS l'échec de cette fiche :
+                 * elle rentre en file intacte, sans tentative décomptée et
+                 * sans horloge d'abandon qui tourne (le canal vient d'être mis
+                 * en pause, donc consigné comme incapable).
+                 *
+                 * Une seule alerte, et on rend la main : présenter les fiches
+                 * suivantes ne ferait que répéter la même panne.
+                 */
+                $this->returnToQueue($job, $result->error, $result->errorCode);
+                $this->alerts->templateMisconfigured(
+                    $code,
+                    $result->error,
+                    $job->template_name ?: (string) config('whatsapp.cloud.template.name'),
+                    $job->template_language ?: (string) config('whatsapp.cloud.template.language'),
+                );
+
+                $guard->noteCapability($result->error ?? 'Modèle de message refusé par Meta.');
+
+                break;
             }
 
             $this->markFailed($job, $result->error, $result->retryable, $result->errorCode);

@@ -2,6 +2,7 @@
 
 namespace App\Services\Whatsapp;
 
+use App\Models\WhatsappChannelOutage;
 use App\Models\WhatsappSendLog;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -16,20 +17,32 @@ use Illuminate\Support\Facades\Log;
  * profil exact que Meta bannit. Cette classe est le seul endroit qui a le
  * droit de dire « pas maintenant ».
  *
- * Quatre freins, du plus grossier au plus fin :
+ * Cinq freins, du plus grossier au plus fin :
  *
  *  1. COUPE-CIRCUIT (`sending_enabled`) — relu à chaque envoi, donc
  *     actionnable en quelques secondes sans redéploiement.
  *  2. BASCULE (`cutover_at`) — rien de ce qui a été enfilé avant la migration
  *     ne part, jamais. Non définie, la Cloud API n'envoie rien du tout : une
  *     bascule ne doit pas s'armer toute seule au déploiement.
- *  3. DÉBIT (par minute, par jour) — la file attend, elle n'est jamais vidée.
- *  4. ARRIÉRÉ (`backlog_alert_threshold`) — un arriéré n'est pas du travail en
+ *  3. APPROBATION DU MODÈLE — tant que Meta n'a pas approuvé le modèle des
+ *     fiches, AUCUNE tentative n'est faite. Le coupe-circuit et l'approbation
+ *     sont deux conditions indépendantes, et c'est de les avoir confondues
+ *     que vient l'incident : WHATSAPP_SENDING_ENABLED est passé à true alors
+ *     que le modèle était encore PENDING, chaque fiche a brûlé ses tentatives
+ *     sur des 132001, et l'abandon à 24 h les a déclarées définitivement
+ *     échouées — alors qu'aucune n'avait jamais eu de chance d'aboutir.
+ *  4. DÉBIT (par minute, par jour) — la file attend, elle n'est jamais vidée.
+ *  5. ARRIÉRÉ (`backlog_alert_threshold`) — un arriéré n'est pas du travail en
  *     retard, c'est le symptôme d'une panne. Le vider automatiquement, c'est
  *     transformer une panne silencieuse en rafale vers des officiels : c'est
  *     très exactement ce qui vient de coûter le numéro précédent.
  *
  * Aucun de ces freins ne perd de fiche : tout reste en attente.
+ *
+ * Et parce qu'aucun ne perd de fiche, tous doivent SUSPENDRE L'HORLOGE : le
+ * temps passé sous un de ces freins n'est pas du temps de tentative, il ne
+ * peut donc pas compter dans les 24 h d'abandon. C'est le rôle du registre
+ * `whatsapp_channel_outages`, alimenté par `noteCapability()`.
  */
 class WhatsappSendingGuard
 {
@@ -41,7 +54,10 @@ class WhatsappSendingGuard
 
     private const TZ = 'Africa/Tunis';
 
-    public function __construct(private WhatsappAlertService $alerts) {}
+    public function __construct(
+        private WhatsappAlertService $alerts,
+        private WhatsappTemplateStatus $templates,
+    ) {}
 
     /**
      * Pourquoi l'émission est-elle interdite en ce moment ?
@@ -60,6 +76,10 @@ class WhatsappSendingGuard
                 .'Tant qu\'elle est absente, la Cloud API n\'émet rien — c\'est volontaire.';
         }
 
+        if ($reason = $this->templateBlock()) {
+            return $reason;
+        }
+
         if ($until = $this->pausedUntil()) {
             return 'Pause globale jusqu\'à '.$until->toDateTimeString().' (limite de débit ou de qualité côté Meta).';
         }
@@ -73,6 +93,27 @@ class WhatsappSendingGuard
         }
 
         return null;
+    }
+
+    /**
+     * Le modèle des fiches interdit-il d'émettre ?
+     *
+     * Ne s'applique qu'au canal Cloud API : le relais WhatsApp Web n'a pas de
+     * modèle, et lui opposer une approbation Meta le bloquerait pour une règle
+     * qui ne le concerne pas.
+     *
+     * L'OTP (qayed_otp) n'est pas concerné non plus — il est approuvé et
+     * emprunte un tout autre chemin (WhatsappOtpSender). Refuser une connexion
+     * d'agent parce qu'un modèle de FICHE attend sa validation reviendrait à
+     * fermer le portail pour un problème qui n'est pas le sien.
+     */
+    public function templateBlock(): ?string
+    {
+        if (config('whatsapp.channel') !== 'cloud') {
+            return null;
+        }
+
+        return $this->templates->blockingReason();
     }
 
     /** Instant de bascule, ou null si la variable est absente ou illisible. */
@@ -224,6 +265,54 @@ class WhatsappSendingGuard
         return "Arriéré de {$pending} fiches en attente (seuil : {$threshold}). "
             .'Envoi automatique suspendu — vérifier la cause, puis débloquer avec '
             .'« php artisan whatsapp:allow-backlog ».';
+    }
+
+    /**
+     * Consigne, à chaque passe d'envoi, si le canal était capable d'émettre.
+     *
+     * C'est le seul endroit qui alimente le registre d'incapacité, et il est
+     * appelé par la boucle d'envoi — pas par l'écran d'administration. Une
+     * sonde de supervision qui ouvre et referme des périodes d'arrêt écrirait
+     * un registre qui décrit l'observateur, pas le canal.
+     *
+     * Conséquence assumée : si le planificateur lui-même est arrêté, aucune
+     * incapacité n'est consignée et l'horloge des 24 h continue de tourner.
+     * C'est le bon sens de l'erreur — on ne prolonge la vie d'une fiche que
+     * sur la foi d'un constat, jamais sur une absence de constat.
+     */
+    public function noteCapability(?string $blockingReason): void
+    {
+        if ($blockingReason === null) {
+            WhatsappChannelOutage::end();
+
+            return;
+        }
+
+        WhatsappChannelOutage::begin($blockingReason);
+    }
+
+    /**
+     * Minutes, depuis $from, pendant lesquelles le canal ne pouvait rien
+     * émettre — à retrancher de l'âge d'une fiche avant de l'abandonner.
+     */
+    public function unavailableMinutesSince(Carbon $from): int
+    {
+        return WhatsappChannelOutage::minutesOverlapping($from);
+    }
+
+    /**
+     * Âge d'un envoi, décompté du seul temps où il POUVAIT partir.
+     *
+     * Les 24 h d'abandon sont un budget de tentatives, pas un délai de
+     * péremption. Compter dedans une attente d'approbation de modèle revient à
+     * jeter une fiche pour une raison qui ne lui appartient pas — c'est
+     * littéralement ce qui a produit les « échecs définitifs » de l'incident.
+     */
+    public function effectiveAgeMinutes(Carbon $queuedAt): int
+    {
+        $wall = (int) abs(now()->getTimestamp() - $queuedAt->getTimestamp());
+
+        return max(0, intdiv($wall, 60) - $this->unavailableMinutesSince($queuedAt));
     }
 
     private function dailyCap(): int

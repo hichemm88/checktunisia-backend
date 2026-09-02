@@ -10,6 +10,7 @@ use App\Services\Delivery\DeliveryChannelManager;
 use App\Services\Whatsapp\WhatsappCloudConfig;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use App\Services\Whatsapp\WhatsappSendingGuard;
+use App\Services\Whatsapp\WhatsappTemplateStatus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -62,8 +63,11 @@ class WhatsappAdminController extends Controller
      * destinataire, ni jeton public de fiche. Des compteurs, un état de
      * session, et la raison pour laquelle rien ne part.
      */
-    public function health(DeliveryChannelManager $channels, WhatsappSendingGuard $guard): JsonResponse
-    {
+    public function health(
+        DeliveryChannelManager $channels,
+        WhatsappSendingGuard $guard,
+        WhatsappTemplateStatus $templates,
+    ): JsonResponse {
         $state = WhatsappSessionState::current();
         $counts = WhatsappSendLog::query()
             ->selectRaw('status, count(*) as c')
@@ -112,6 +116,16 @@ class WhatsappAdminController extends Controller
             'channel' => $channels->active()->name(),
             'sending_blocked' => $this->blockingReason($channels, $guard) !== null,
             'blocked_reason' => $this->blockingReason($channels, $guard),
+            /*
+             | État du modèle chez Meta.
+             |
+             | La pièce que l'écran ne montrait pas, et sans laquelle
+             | « 40 en attente, rien ne part » n'avait aucune explication
+             | lisible : le modèle attendait son approbation. Ce n'est pas la
+             | même chose qu'une panne, et cela ne se corrige pas de la même
+             | façon — cela ne se corrige même pas du tout, cela s'attend.
+             */
+            'template' => $templates->snapshot(),
             // Noms de variables absentes, jamais leurs valeurs : de quoi
             // corriger sans avoir à deviner, et sans rien divulguer.
             'missing_config' => WhatsappCloudConfig::missingForAdmin(),

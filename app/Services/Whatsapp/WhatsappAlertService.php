@@ -212,6 +212,42 @@ class WhatsappAlertService
     }
 
     /**
+     * Le modèle configuré ne correspond pas à ce qui est approuvé chez Meta.
+     *
+     * UNE alerte, pas une par fiche. C'est la correction directe de
+     * l'incident : le canal a été ouvert alors que le modèle était encore en
+     * attente d'approbation, et chaque fiche de la file a produit son propre
+     * « échec définitif » avec son propre email — des dizaines de messages
+     * décrivant tous la même panne, unique et réparable en une fois.
+     *
+     * Déduplication à la journée, et non à l'heure : une approbation Meta se
+     * compte en heures ou en jours, et un rappel horaire pendant tout ce temps
+     * n'apprendrait rien qui ne soit déjà su.
+     */
+    public function templateMisconfigured(?int $code, ?string $reason, string $templateName, string $language): void
+    {
+        if (! Cache::add('whatsapp_template_config:'.$templateName.':'.$language, true, now()->addDay())) {
+            return;
+        }
+
+        $this->dispatch(
+            'WhatsApp Qayed — modèle de message non utilisable, envois suspendus',
+            "Meta refuse le modèle « {$templateName} » en « {$language} »".
+            ($code !== null ? " (code {$code})" : '').".\n\n"
+            .'Cause : '.($reason ?? '—')."\n\n"
+            ."C'est une erreur de CONFIGURATION du canal, pas l'échec d'une fiche : les fiches "
+            ."concernées restent EN FILE, aucune n'est marquée en échec, et aucune tentative "
+            ."ne leur est décomptée.\n\n"
+            ."À vérifier, dans cet ordre :\n"
+            ."  1. le modèle est-il APPROVED chez Meta ? « php artisan whatsapp:templates »\n"
+            ."  2. WHATSAPP_TEMPLATE_NAME et WHATSAPP_TEMPLATE_LANGUAGE correspondent-ils EXACTEMENT "
+            ."au modèle approuvé ? Un écart d'une lettre produit ce code.\n\n"
+            .'Les envois reprendront d\'eux-mêmes dès que le modèle sera approuvé : rien à relancer.',
+            SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
+        );
+    }
+
+    /**
      * Un arriéré s'est constitué et n'a PAS été envoyé.
      *
      * L'alerte porte sur la retenue, pas sur l'accumulation : c'est le fait
