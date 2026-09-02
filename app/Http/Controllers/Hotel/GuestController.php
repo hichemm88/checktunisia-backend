@@ -77,7 +77,11 @@ class GuestController extends Controller
         $validated = $request->validate([
             'first_name' => ['sometimes', 'string', 'max:100'],
             'last_name' => ['sometimes', 'string', 'max:100'],
-            'date_of_birth' => ['sometimes', 'date'],
+            // `before:today` comme à la création. Sans lui, la modification
+            // acceptait une naissance dans le futur — et la fiche transmise au
+            // poste de police partait avec. Une règle de validation ne doit
+            // jamais s'affaiblir entre la création et la correction.
+            'date_of_birth' => ['sometimes', 'date', 'before:today'],
             'sex' => ['sometimes', 'in:M,F,X'],
             'nationality_code' => ['sometimes', 'string', 'size:3'],
             'place_of_birth' => ['nullable', 'string', 'max:150'],
