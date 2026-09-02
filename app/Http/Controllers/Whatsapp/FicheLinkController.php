@@ -68,7 +68,10 @@ class FicheLinkController extends Controller
                 ->header('Cache-Control', 'no-store');
         }
 
-        $frontend = rtrim((string) env('FRONTEND_URL', 'https://qayed.tn'), '/');
+        // `config()` et NON `env()` : la production met la configuration en
+        // cache, et un `env()` appelé depuis le code applicatif rend alors sa
+        // valeur par défaut quelle que soit la variable posée sur le serveur.
+        $frontend = rtrim((string) config('frontend.url'), '/');
 
         // Sans voyageur rattaché (fiche de test, ou voyageur supprimé depuis
         // l'envoi), le lien reste valide mais retombe sur le tableau de bord :
