@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Authority;
 use App\Http\Controllers\Controller;
 use App\Models\CheckIn;
 use App\Models\Guest;
+use App\Support\LikePattern;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
@@ -25,9 +26,12 @@ class ExportController extends Controller
         // Same scoping as AuthoritySearchController::show() — without it, any
         // authority account could export the full passport/CIN profile of any
         // guest nationwide as a PDF by guessing IDs.
+        // Jokers neutralises, comme dans AuthoritySearchController::show() :
+        // l'export est un SECOND chemin vers les memes donnees, et un
+        // correctif qui n'en couvrirait qu'un ne couvrirait rien.
         if ($orgType === 'police' && $governorate) {
             $query->whereHas('checkIns.hotel.address', fn($a) =>
-                $a->where('governorate', 'ilike', "%{$governorate}%")
+                $a->where('governorate', 'ilike', LikePattern::contains($governorate))
             );
         }
 

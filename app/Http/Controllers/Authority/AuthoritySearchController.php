@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\CheckIn;
 use App\Models\CheckInGuest;
 use App\Models\Guest;
+use App\Support\LikePattern;
 use App\Models\Hotel;
 use App\Services\Audit\AuditLogger;
 use App\Services\Watchlist\WatchlistService;
@@ -226,9 +227,12 @@ class AuthoritySearchController extends Controller
         // Police may only view guests with at least one stay in their own
         // governorate — without this, any authority account could pull the
         // full passport/CIN profile of any guest nationwide by guessing IDs.
+        // Jokers NEUTRALISES : la valeur vient de la base (validee en
+        // `string|max:100`), et un « % » y transformait ce filtre en « tous
+        // les gouvernorats » — donc ce poste de police en compte national.
         if (($profile['org_type'] ?? null) === 'police' && $profile['governorate']) {
             $query->whereHas('checkIns.hotel.address', fn($a) =>
-                $a->where('governorate', 'ilike', "%{$profile['governorate']}%")
+                $a->where('governorate', 'ilike', LikePattern::contains($profile['governorate']))
             );
         }
 
@@ -285,12 +289,15 @@ class AuthoritySearchController extends Controller
 
         $query = Hotel::with('address');
 
+        // Filtres SAISIS par l'agent : les jokers y sont neutralises aussi.
+        // Ils n'ouvrent rien hors perimetre — le scoping est applique ailleurs —
+        // mais « % » y rendait la recherche silencieusement inutile.
         if ($request->filled('search')) {
-            $query->where('name', 'ilike', "%{$request->search}%");
+            $query->where('name', 'ilike', LikePattern::contains($request->search));
         }
         if ($request->filled('governorate')) {
             $query->whereHas('address', fn($a) =>
-                $a->where('governorate', 'ilike', "%{$request->governorate}%")
+                $a->where('governorate', 'ilike', LikePattern::contains($request->governorate))
             );
         }
 
