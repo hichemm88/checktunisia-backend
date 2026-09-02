@@ -274,6 +274,24 @@ class WhatsappConversationService
             throw new \InvalidArgumentException('Le message est vide.');
         }
 
+        /*
+         * Coupe-circuit global, AVANT la fenêtre de service.
+         *
+         * C'est le geste d'exploitation qui arrête tout quand Meta signale la
+         * qualité du numéro émetteur — il a déjà coûté un numéro à ce produit.
+         * La boîte de réception ouvre un chemin d'émission de plus : sans ce
+         * contrôle, un administrateur continuerait d'écrire à des postes de
+         * police pendant la période où l'on cherche justement à ne plus rien
+         * envoyer.
+         *
+         * Testé en premier parce qu'il prime : dire « la fenêtre est fermée »
+         * alors que c'est le coupe-circuit qui bloque enverrait l'exploitant
+         * chercher le problème du mauvais côté.
+         */
+        if (! config('whatsapp.guard.sending_enabled', true)) {
+            throw new WhatsappSendingDisabled;
+        }
+
         if (! $conversation->serviceWindowIsOpen()) {
             throw new ServiceWindowClosed($conversation);
         }

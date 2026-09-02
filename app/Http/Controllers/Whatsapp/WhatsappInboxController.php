@@ -9,6 +9,7 @@ use App\Models\WhatsappSendLog;
 use App\Services\Audit\AuditLogger;
 use App\Services\Whatsapp\ServiceWindowClosed;
 use App\Services\Whatsapp\WhatsappConversationService;
+use App\Services\Whatsapp\WhatsappSendingDisabled;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -171,6 +172,18 @@ class WhatsappInboxController extends Controller
 
         try {
             $message = $this->conversations->reply($conversation, $data['message'], $request->user());
+        } catch (WhatsappSendingDisabled $e) {
+            // 503 et non 422 : la demande est valide, c'est le service qui est
+            // volontairement coupé. Un 422 ferait chercher l'erreur dans le
+            // message saisi.
+            return response()->json([
+                'data' => null,
+                'errors' => [[
+                    'code' => 'WHATSAPP_SENDING_DISABLED',
+                    'message' => $e->getMessage(),
+                    'field' => null,
+                ]],
+            ], 503);
         } catch (ServiceWindowClosed $e) {
             return response()->json([
                 'data' => null,

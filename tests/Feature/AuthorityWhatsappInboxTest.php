@@ -267,6 +267,30 @@ class AuthorityWhatsappInboxTest extends TestCase
         $this->assertNull($billable->hotel_id);
     }
 
+    public function test_the_global_kill_switch_stops_replies_too(): void
+    {
+        Http::fake();
+
+        $this->postSigned($this->inboundPayload('wamid.KILL', '21620123456', 'Question ?'))->assertOk();
+        $conversation = WhatsappConversation::sole();
+        $admin = User::factory()->platformAdmin()->create();
+
+        // Le coupe-circuit est le geste qui arrête TOUT quand Meta signale la
+        // qualité du numéro — il a déjà coûté un numéro à ce produit. La boîte
+        // de réception ouvre un chemin d'émission de plus : il devait être
+        // couvert, sinon on continue d'écrire à des postes de police pendant
+        // la période où l'on cherche à ne plus rien envoyer.
+        config(['whatsapp.guard.sending_enabled' => false]);
+
+        $this->actingAs($admin)
+            ->postJson("/api/v1/admin/whatsapp/inbox/{$conversation->id}/reply", ['message' => 'Réponse'])
+            ->assertStatus(503)
+            ->assertJsonPath('errors.0.code', 'WHATSAPP_SENDING_DISABLED');
+
+        Http::assertNothingSent();
+        $this->assertSame(0, WhatsappConversationMessage::where('direction', 'outbound')->count());
+    }
+
     public function test_a_reply_refused_by_meta_is_still_recorded(): void
     {
         Http::fake([
