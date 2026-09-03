@@ -61,9 +61,16 @@ class DashboardController extends Controller
             ->count();
 
         // ── Month total ───────────────────────────────────────────────────────
+        // whereBetween sur les bornes du mois plutôt que whereMonth/whereYear :
+        // ces deux derniers appliquent une fonction à `created_at`, ce qu'un
+        // index b-tree ordinaire ne peut pas satisfaire par une recherche —
+        // Postgres devait alors relire tout l'historique de check-ins de
+        // l'établissement à chaque chargement du dashboard, un coût qui grandit
+        // avec le volume total (et non avec les ~30 jours affichés). Avec
+        // whereBetween + idx_check_ins_hotel_created, la lecture se borne au
+        // mois courant. Voir la migration idx_check_ins_hotel_created.
         $monthTotal = CheckIn::where('hotel_id', $hotel->id)
-            ->whereMonth('created_at', now()->month)
-            ->whereYear('created_at', now()->year)
+            ->whereBetween('created_at', [$today->copy()->startOfMonth(), $today->copy()->endOfMonth()->endOfDay()])
             ->count();
 
         // ── Occupancy rate ────────────────────────────────────────────────────
