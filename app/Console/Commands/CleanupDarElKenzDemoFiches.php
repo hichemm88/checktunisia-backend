@@ -7,6 +7,7 @@ use App\Models\CheckInGuest;
 use App\Models\Guest;
 use App\Models\Hotel;
 use App\Models\TravelDocument;
+use App\Models\WatchlistHit;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -103,6 +104,33 @@ class CleanupDarElKenzDemoFiches extends Command
                 ['Réf', 'Statut', 'Arrivée', 'Notes'],
                 $checkIns->map(fn ($c) => [$c->reference, $c->status, $c->check_in_date?->toDateString(), $c->notes])->toArray(),
             );
+
+            /*
+             * Alertes de watchlist de CES fiches, supprimees d'abord.
+             *
+             * Les enfants de `check_ins` n'ont pas tous la meme regle :
+             * `check_in_guests`, `document_scans` et `checkin_usage_events`
+             * cascadent, `app_notifications` et `whatsapp_send_log` passent a
+             * NULL, mais `watchlist_hits` est en NO ACTION — il REFUSE la
+             * suppression du parent.
+             *
+             * Une fiche de demonstration qui a declenche une alerte portait
+             * donc un enfant bloquant. La transaction faisait son travail — la
+             * base restait intacte — mais la commande ne pouvait plus jamais
+             * aboutir : la purge etait bloquee par une donnee qu'elle avait
+             * elle-meme produite, avec un message parlant de clef etrangere et
+             * non de ce qu'il fallait faire.
+             *
+             * Une alerte nee d'une fiche de demonstration est elle aussi de la
+             * demonstration : elle part avec. Le filtre porte sur les
+             * identifiants DEJA restreints au marqueur et a l'etablissement —
+             * jamais sur les alertes reelles, que le test de non-regression
+             * verifie explicitement.
+             */
+            $hitsDeleted = WatchlistHit::whereIn('check_in_id', $checkInIds)->delete();
+            if ($hitsDeleted > 0) {
+                $this->line(sprintf('  %d alerte(s) de watchlist issues de ces fiches supprimees.', $hitsDeleted));
+            }
 
             // Suppression physique : check_in_guests + document_scans cascadent
             // sur le forceDelete des check_ins ; travel_documents cascadent sur
