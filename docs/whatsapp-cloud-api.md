@@ -68,6 +68,48 @@ destinataire injoignable n'empêche pas les autres de recevoir la fiche.
 
 Cette liste n'a jamais été en dur dans le code : rien à migrer.
 
+## Garantie de livraison : AU MOINS UNE FOIS, pas exactement une fois
+
+C'est une propriété de l'architecture, pas un défaut à corriger. Elle est
+écrite ici pour qu'on cesse de la redécouvrir.
+
+### Le scénario
+
+Le compteur de tentatives est incrémenté **à la réclamation**, avant l'appel à
+Meta. Une réclamation abandonnée est reprise après `CLAIM_LOCK_SECONDS`
+(120 s). Donc :
+
+1. le worker réclame la fiche, `attempts++`, `claimed_at` posé ;
+2. il appelle Meta, qui **accepte** (200 + `wamid`) ;
+3. le worker meurt **avant** d'écrire `markSent()` ;
+4. 120 s plus tard, la fiche est reprise et **repart**.
+
+Le poste de police reçoit la fiche **deux fois**.
+
+### Pourquoi on ne peut pas faire mieux
+
+La Cloud API n'offre **aucune clef d'idempotence** sur `/messages` : rien ne
+permet de dire à Meta « si tu as déjà vu cet envoi-ci, ne le refais pas ». Sans
+appui côté fournisseur, aucune astuce locale ne transforme du at-least-once en
+exactly-once — elle ne ferait que déplacer la fenêtre.
+
+### Pourquoi le compromis est le bon
+
+Le choix est entre risquer un doublon et risquer une perte. Sur un canal qui
+porte une **obligation légale de déclaration**, une fiche reçue deux fois est
+un désagrément ; une fiche jamais reçue est un manquement. On préfère donc
+répéter.
+
+### Ce qui borne le risque
+
+- La fenêtre est de 120 s, et seulement en cas de mort du processus **entre**
+  la réponse de Meta et l'écriture en base.
+- `attempts` est incrémenté à la réclamation : un worker qui meurt en boucle
+  consomme son budget et finit par abandonner. Pas de boucle infinie.
+- L'enfilage, lui, est bien dédoublonné : un couple (voyageur, destinataire)
+  n'a **jamais** deux lignes d'outbox. Le doublon décrit ici est un double
+  ENVOI d'une même ligne, pas deux fiches enfilées.
+
 ## Réponses des autorités (boîte de réception)
 
 Un agent qui répond à une fiche écrivait jusqu'ici dans le vide : le webhook
