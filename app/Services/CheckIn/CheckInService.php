@@ -6,6 +6,7 @@ use App\Models\CheckIn;
 use App\Models\CheckInGuest;
 use App\Models\DocumentScan;
 use App\Models\Guest;
+use App\Models\Room;
 use App\Models\Hotel;
 use App\Models\TravelDocument;
 use App\Models\User;
@@ -370,6 +371,36 @@ class CheckInService
 
             if ($checkIn->status !== 'completed') {
                 throw new \DomainException('Only a completed (checked-out) check-in can be reverted to active.');
+            }
+
+            /*
+             * La chambre a pu être REPRISE entre le départ et son annulation.
+             *
+             * « Une chambre ne porte qu'un seul séjour ouvert » est imposé à la
+             * création et au changement de chambre — ce chemin-ci l'ignorait.
+             * Le scénario est celui d'un comptoir ordinaire : le client part,
+             * on installe le suivant dans la chambre libérée, puis on s'aperçoit
+             * que le départ était une erreur de saisie. Le séjour ressuscité
+             * redevenait « actif » dans une chambre déjà occupée, et l'invariant
+             * que tout le reste suppose — occupation, disponibilité, création
+             * d'un séjour suivant — était rompu sans que rien ne le signale.
+             *
+             * Verrou sur la chambre PUIS test, dans la même transaction : c'est
+             * la même discipline qu'à la création, et pour la même raison —
+             * deux annulations de départ simultanées verraient sinon toutes
+             * les deux une chambre libre.
+             */
+            if ($checkIn->room_id !== null) {
+                Room::whereKey($checkIn->room_id)->lockForUpdate()->first();
+
+                $taken = CheckIn::where('room_id', $checkIn->room_id)
+                    ->where('id', '!=', $checkIn->id)
+                    ->whereIn('status', ['draft', 'active'])
+                    ->exists();
+
+                if ($taken) {
+                    throw new RoomOccupied;
+                }
             }
 
             $old = ['status' => $checkIn->status, 'actual_check_out_date' => $checkIn->actual_check_out_date];
