@@ -171,7 +171,29 @@ HTML;
         if ($request->filled('from')) $query->whereDate('check_in_date', '>=', $request->from);
         if ($request->filled('to'))   $query->whereDate('check_in_date', '<=', $request->to);
 
-        $rows = $query->limit(5000)->get();
+        /*
+         * La borne de 5000 est saine — mesuré à 92 Mo et 0,7 s pour 5000
+         * lignes, très loin de la limite du worker. Ce qui ne l'était pas,
+         * c'est son SILENCE.
+         *
+         * Un export tronqué était en tout point identique à un export complet :
+         * même nom de fichier, aucune mention nulle part. Un officier qui
+         * exporte une année et reçoit exactement 5000 lignes n'a aucun moyen de
+         * savoir qu'il en manque — et peut en tirer une conclusion sur le
+         * nombre de séjours d'un gouvernorat qui est simplement fausse.
+         *
+         * Le CSV lui-même n'est pas modifié : y ajouter une ligne d'avis
+         * casserait les tableurs et les scripts qui le consomment. Le signal
+         * passe par le NOM DU FICHIER, que l'officier voit forcément, et par un
+         * en-tête pour les appels programmatiques.
+         */
+        $limit = 5000;
+        $rows = $query->limit($limit + 1)->get();
+        $truncated = $rows->count() > $limit;
+
+        if ($truncated) {
+            $rows = $rows->take($limit);
+        }
 
         $csv  = "\xEF\xBB\xBF"; // UTF-8 BOM for Excel
         $csv .= "ID Check-in,Hôtel,Ville,Gouvernorat,Arrivée,Départ prévu,Départ réel,Statut,";
@@ -205,11 +227,14 @@ HTML;
             )) . "\n";
         }
 
-        $filename = 'sejours-' . now()->format('Y-m-d') . '.csv';
+        $filename = 'sejours-' . now()->format('Y-m-d')
+            . ($truncated ? "-tronque-{$limit}-lignes" : '') . '.csv';
 
         return response($csv, 200, [
             'Content-Type'        => 'text/csv; charset=UTF-8',
             'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+            'X-Result-Truncated'  => $truncated ? 'true' : 'false',
+            'X-Result-Limit'      => (string) $limit,
         ]);
     }
 }

@@ -66,6 +66,40 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Nombre maximal de fiches par export PDF
+    |--------------------------------------------------------------------------
+    |
+    | Au-delà, la génération du PDF dépasse la mémoire du worker et meurt sur
+    | une erreur FATALE de PHP — non rattrapable, donc invisible : le manager
+    | attend un email qui n'arrivera jamais.
+    |
+    | Mesuré (dompdf, worker à 512 Mo, pièce d'identité de 570 Ko en data URI,
+    | qui est le haut de la fourchette réelle) :
+    |
+    |      50 fiches   168 Mo    4,5 s
+    |     100 fiches   268 Mo    8,7 s
+    |     150 fiches   455 Mo   13,0 s
+    |     200 fiches   ÉCHEC — « Allowed memory size of 536870912 bytes exhausted »
+    |
+    | 120 laisse une marge réelle sous la barre, y compris pour des pièces plus
+    | lourdes que celles du banc. La contrainte est la MÉMOIRE, pas la durée :
+    | `$timeout = 300` laisserait passer bien davantage.
+    |
+    | Ce plafond est bas au regard de l'usage visé — un mois dans un
+    | établissement de taille moyenne dépasse largement 120 fiches. Il ne
+    | prétend pas régler cela : il rend la limite VISIBLE et actionnable plutôt
+    | que silencieuse. Le vrai levier est ailleurs, et il est chiffré dans le
+    | rapport d'audit : les pièces sont embarquées en 1600x1067 alors que la vue
+    | les affiche dans un cadre de 300x200 (`.scan img`). Les redimensionner
+    | pour cet usage relèverait le plafond d'environ 2,8x — mais c'est un
+    | arbitrage sur la lisibilité d'un document transmis à l'autorité, qui
+    | n'appartient pas à une correction technique.
+    |
+    */
+    'export_max_fiches' => (int) env('FICHE_EXPORT_MAX_FICHES', 120),
+
+    /*
+    |--------------------------------------------------------------------------
     | Détection du document par modèle de vision
     |--------------------------------------------------------------------------
     |

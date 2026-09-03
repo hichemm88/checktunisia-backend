@@ -39,19 +39,29 @@ class EnsureActiveSubscription
             $org = Organization::find($hotel->organization_id);
         }
 
-        // Determine which entity holds the subscription
-        if ($org) {
-            $cacheKey = "org_subscription_active:{$org->id}";
-            $isActive = Cache::remember($cacheKey, 60, fn() => $org->hasActiveSubscription());
-            $sub      = $org->activeSubscription ?? $org->subscriptions()->latest()->first();
-        } else {
-            // True legacy: hotel not in any org — check hotel-level subscription
-            $cacheKey = "hotel_subscription_active:{$hotel->id}";
-            $isActive = Cache::remember($cacheKey, 60, fn() => $hotel->hasActiveSubscription());
-            $sub      = $hotel->activeSubscription ?? $hotel->subscriptions()->latest()->first();
-        }
+        // Determine which entity holds the subscription. Legacy hotels not
+        // attached to any org carry their own.
+        $holder   = $org ?? $hotel;
+        $cacheKey = ($org ? 'org' : 'hotel')."_subscription_active:{$holder->id}";
+        $isActive = Cache::remember($cacheKey, 60, fn () => $holder->hasActiveSubscription());
 
         if (!$isActive) {
+            /*
+             * L'abonnement n'est chargé QUE sur le chemin d'échec.
+             *
+             * Il l'était auparavant à chaque passage, alors qu'il ne sert
+             * qu'à choisir le libellé du refus ci-dessous. Ce middleware
+             * s'exécute sur toutes les requêtes authentifiées d'un
+             * établissement : c'était donc une requête SQL par appel d'API,
+             * payée sur le cas nominal pour préparer un message que l'on
+             * n'affiche presque jamais.
+             *
+             * Cela vidait aussi le cache de son intérêt : `$isActive` était mis
+             * en cache 60 s, mais la requête qu'il évitait repartait juste en
+             * dessous.
+             */
+            $sub = $holder->activeSubscription ?? $holder->subscriptions()->latest()->first();
+
             $code = match (true) {
                 $sub?->isSuspended()    => 'SUBSCRIPTION_SUSPENDED',
                 $sub?->isTrialExpired() => 'TRIAL_EXPIRED',

@@ -14,6 +14,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
@@ -50,10 +51,66 @@ class ExportPoliceFichesJob implements ShouldQueue
         public readonly string $email,
     ) {}
 
+    /**
+     * Nombre de fiches que produirait une plage — une par voyageur.
+     *
+     * Partagé avec HotelExportController pour que le refus affiché au manager
+     * et la garde du job comptent EXACTEMENT la même chose. Deux comptages
+     * approchants finiraient par diverger, et le job accepterait alors une
+     * plage que l'écran venait de refuser (ou l'inverse).
+     *
+     * Un COUNT, pas un chargement : la question est « combien », et la réponse
+     * ne doit pas coûter ce qu'on cherche à éviter.
+     */
+    public static function ficheCount(string $hotelId, string $dateFrom, string $dateTo): int
+    {
+        return DB::table('check_in_guests')
+            ->join('check_ins', 'check_ins.id', '=', 'check_in_guests.check_in_id')
+            ->join('guests', 'guests.id', '=', 'check_in_guests.guest_id')
+            ->where('check_ins.hotel_id', $hotelId)
+            ->whereIn('check_ins.status', ['active', 'completed'])
+            ->whereBetween('check_ins.check_in_date', [$dateFrom, $dateTo])
+            ->whereNull('check_ins.deleted_at')
+            ->whereNull('guests.deleted_at')
+            ->count();
+    }
+
     public function handle(): void
     {
         $hotel = Hotel::with('address')->find($this->hotelId);
         if (!$hotel) {
+            return;
+        }
+
+        /*
+         * Seconde barrière, après celle de HotelExportController.
+         *
+         * Elle n'est pas redondante : le job s'exécute plus tard que la
+         * demande, et la plage peut s'être remplie entre-temps — une plage qui
+         * inclut aujourd'hui continue de recevoir des check-ins pendant que le
+         * job attend son tour dans la file.
+         *
+         * Sans elle, le dépassement se manifeste par une erreur FATALE de PHP
+         * (« Allowed memory size exhausted »), qui n'est pas rattrapable : le
+         * `catch` plus bas ne la voit pas, le worker meurt, et la file relance
+         * le job qui meurt à nouveau. Ici on s'arrête proprement, en disant
+         * pourquoi.
+         */
+        $count = self::ficheCount($this->hotelId, $this->dateFrom, $this->dateTo);
+        $max = (int) config('fiche.export_max_fiches', 120);
+
+        if ($count > $max) {
+            Log::error('[export-fiches] plage trop volumineuse, export abandonné', [
+                'hotel_id' => $this->hotelId,
+                'date_from' => $this->dateFrom,
+                'date_to' => $this->dateTo,
+                'fiches' => $count,
+                'max' => $max,
+            ]);
+
+            // Pas de `throw` : la plage ne se réduira pas d'elle-même, et
+            // retenter trois fois ne ferait que reproduire le même abandon en
+            // occupant un worker à chaque tour.
             return;
         }
 

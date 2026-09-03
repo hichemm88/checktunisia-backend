@@ -33,6 +33,34 @@ class HotelExportController extends Controller
         $hotel = app('tenant');
         $email = $request->user()->email;
 
+        /*
+         * Volume refusé ICI, pendant que le manager est devant son écran.
+         *
+         * Le plafond de 366 jours au-dessus borne la DURÉE, pas la quantité :
+         * un mois dans un établissement bien rempli produit déjà plusieurs
+         * centaines de fiches. Au-delà d'environ 150, la génération du PDF
+         * épuise la mémoire du worker et meurt sur une erreur fatale de PHP —
+         * que rien ne rattrape, et dont le manager n'entend jamais parler : il
+         * a reçu un « 202, envoi en cours » et attend un email qui n'arrivera
+         * pas.
+         *
+         * Refuser tout de suite, en disant combien de fiches la plage contient,
+         * transforme cette panne muette en une consigne applicable : réduire la
+         * plage. Voir config/fiche.php pour les mesures qui fixent le plafond.
+         */
+        $count = ExportPoliceFichesJob::ficheCount($hotel->id, $v['date_from'], $v['date_to']);
+        $max = (int) config('fiche.export_max_fiches', 120);
+
+        if ($count > $max) {
+            return response()->json([
+                'errors' => [[
+                    'code' => 'TOO_MANY_FICHES',
+                    'message' => "Cette plage contient {$count} fiches, au-delà de la limite de {$max} par export. Choisissez une plage plus courte.",
+                    'field' => 'date_to',
+                ]],
+            ], 422);
+        }
+
         ExportPoliceFichesJob::dispatch($hotel->id, $v['date_from'], $v['date_to'], $email);
 
         AuditLogger::log('hotel.police_fiches_exported', $hotel, [], [

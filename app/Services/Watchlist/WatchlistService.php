@@ -8,6 +8,7 @@ use App\Models\Guest;
 use App\Models\User;
 use App\Models\WatchlistEntry;
 use App\Models\WatchlistHit;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Mail;
 
@@ -67,6 +68,30 @@ class WatchlistService
         if ($guests->isEmpty()) {
             return [];
         }
+
+        /*
+         * Le criblage lit le document de CHAQUE voyageur. Sans cette ligne, la
+         * lecture se fait relation par relation — une requete par resultat.
+         *
+         * La requete de watchlist ci-dessous est bien unique, comme annonce ;
+         * c'est la CONSTITUTION DE SON ENTREE qui coutait N requetes. Le N+1
+         * que cette methode a ete ecrite pour supprimer s'etait donc reforme
+         * juste a cote, sur les donnees qu'elle rassemble.
+         *
+         * Le chargement est fait ici et non dans l'appelant, pour deux raisons :
+         * la methode se sert de `documents`, donc c'est a elle de garantir
+         * qu'elle est chargee ; et un futur appelant en herite sans avoir a
+         * connaitre ce detail. `loadMissing` ne fait rien si l'appelant a deja
+         * charge la relation : aucun cout ajoute au chemin deja correct.
+         *
+         * Le passage par une collection Eloquent n'est pas cosmetique :
+         * `loadMissing` n'existe que sur celle-ci, et la signature de cette
+         * methode accepte une `Support\Collection` — ce dont plusieurs
+         * appelants se servent. Charger dans une collection reconstruite
+         * fonctionne malgre tout : ce sont les MEMES instances de modeles, et
+         * la relation se pose dessus.
+         */
+        EloquentCollection::make($guests->all())->loadMissing('documents');
 
         // Collect all doc numbers and last names from the guest set
         $allDocNumbers = $guests
