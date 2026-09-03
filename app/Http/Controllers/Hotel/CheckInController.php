@@ -281,6 +281,15 @@ class CheckInController extends Controller
 
         try {
             $result = $this->service->revertCheckout($checkIn, $request->user());
+        } catch (\App\Services\CheckIn\RoomOccupied $e) {
+            // 422 et non 409 : la demande est coherente, c'est l'etat de la
+            // CHAMBRE qui s'y oppose. La reception doit deplacer le client
+            // suivant, pas reessayer — d'ou le meme code que le conflit de
+            // chambre a la creation, que l'ecran sait deja presenter.
+            return response()->json([
+                'data' => null,
+                'errors' => [['code' => 'ROOM_OCCUPIED', 'message' => $e->getMessage(), 'field' => 'room_id']],
+            ], 422);
         } catch (\DomainException $e) {
             return response()->json([
                 'data' => null,

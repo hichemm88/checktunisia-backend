@@ -155,6 +155,35 @@ class RoomController extends Controller
     {
         $hotel = app('tenant');
         $room  = Room::where('hotel_id', $hotel->id)->findOrFail($id);
+
+        /*
+         * Une chambre qui porte un sejour OUVERT ne se supprime pas.
+         *
+         * `Room` est en suppression logique et la cle etrangere des sejours est
+         * `nullOnDelete` — qui ne se declenche donc jamais. Sans ce controle, la
+         * chambre passait en `deleted_at`, le sejour gardait son `room_id`, et
+         * la relation rendait `null` : un client actif se retrouvait sans
+         * chambre a l'ecran, dans le tableau de bord et sur sa fiche, sans
+         * qu'aucune erreur ne soit levee.
+         *
+         * Elle restait par ailleurs « occupee » pour le controle de conflit, qui
+         * interroge les sejours et non les chambres : invisible ET bloquante.
+         *
+         * Un historique de sejours TERMINES n'est pas une occupation : la
+         * chambre reste supprimable, et les fiches closes gardent leur
+         * reference — c'est un document declare, il ne se reecrit pas.
+         */
+        $occupied = CheckIn::where('room_id', $room->id)
+            ->whereIn('status', ['draft', 'active'])
+            ->exists();
+
+        if ($occupied) {
+            return response()->json([
+                'data'   => null,
+                'errors' => [['code' => 'ROOM_OCCUPIED', 'message' => 'Cette chambre porte un sejour en cours : cloturez-le avant de la supprimer.', 'field' => null]],
+            ], 422);
+        }
+
         $old   = $room->toArray();
         $room->delete();
         AuditLogger::log('room.deleted', $room, $old, [], hotelId: $hotel->id);
