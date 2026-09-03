@@ -165,26 +165,45 @@ class WhatsappConversationService
             $type = (string) ($message['type'] ?? 'unsupported');
             $occurredAt = $this->timestamp($message['timestamp'] ?? null);
 
-            $stored = WhatsappConversationMessage::create([
-                'conversation_id' => $conversation->id,
-                'direction' => WhatsappConversationMessage::DIRECTION_INBOUND,
-                'wamid' => $wamid,
-                'type' => $type,
-                'body' => $this->inboundBody($message, $type),
-                'media_id' => $this->mediaField($message, $type, 'id'),
-                'media_mime' => $this->mediaField($message, $type, 'mime_type'),
-                'media_filename' => $this->mediaField($message, $type, 'filename'),
-                'context_wamid' => $message['context']['id'] ?? null,
-                'occurred_at' => $occurredAt,
-            ]);
+            /*
+             * Deux écritures pour un seul événement — enregistrer le message,
+             * et faire avancer `last_inbound_at` sur la conversation — doivent
+             * réussir ou échouer ENSEMBLE.
+             *
+             * Sans transaction, un redémarrage du conteneur (déploiement,
+             * OOM) entre les deux laisse un message INBOUND en base dont la
+             * conversation ne sait rien : `last_inbound_at` reste à sa valeur
+             * précédente, et la fenêtre de service de 24 h — qui s'appuie
+             * dessus — se calcule sur un message plus ancien, ou se referme
+             * carrément (« NEVER_REPLIED ») si aucun inbound n'avait encore
+             * été enregistré. L'agent voit alors « cette autorité n'a jamais
+             * écrit » alors qu'elle vient de le faire, et la réponse reste
+             * bloquée jusqu'à son PROCHAIN message.
+             */
+            $stored = DB::transaction(function () use ($conversation, $wamid, $type, $message, $occurredAt) {
+                $stored = WhatsappConversationMessage::create([
+                    'conversation_id' => $conversation->id,
+                    'direction' => WhatsappConversationMessage::DIRECTION_INBOUND,
+                    'wamid' => $wamid,
+                    'type' => $type,
+                    'body' => $this->inboundBody($message, $type),
+                    'media_id' => $this->mediaField($message, $type, 'id'),
+                    'media_mime' => $this->mediaField($message, $type, 'mime_type'),
+                    'media_filename' => $this->mediaField($message, $type, 'filename'),
+                    'context_wamid' => $message['context']['id'] ?? null,
+                    'occurred_at' => $occurredAt,
+                ]);
 
-            $conversation->forceFill([
-                'last_inbound_at' => $occurredAt,
-                'last_message_at' => $occurredAt,
-                'last_message_direction' => WhatsappConversation::DIRECTION_INBOUND,
-                'last_message_preview' => $this->preview($stored),
-                'unread_count' => $conversation->unread_count + 1,
-            ])->save();
+                $conversation->forceFill([
+                    'last_inbound_at' => $occurredAt,
+                    'last_message_at' => $occurredAt,
+                    'last_message_direction' => WhatsappConversation::DIRECTION_INBOUND,
+                    'last_message_preview' => $this->preview($stored),
+                    'unread_count' => $conversation->unread_count + 1,
+                ])->save();
+
+                return $stored;
+            });
 
             return $stored;
         } catch (\Throwable $e) {

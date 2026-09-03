@@ -98,6 +98,54 @@ class AuthorityWhatsappInboxTest extends TestCase
         $this->assertSame(1, WhatsappConversation::sole()->unread_count);
     }
 
+    public function test_a_crash_between_the_two_writes_leaves_no_orphan_message(): void
+    {
+        /*
+         * `recordInbound` fait deux écritures pour un seul événement :
+         * enregistrer le message, puis avancer `last_inbound_at` sur la
+         * conversation — c'est cette seconde valeur que la fenêtre de service
+         * de 24 h utilise pour savoir si une réponse est possible.
+         *
+         * Reproduit ici en interrompant le save() de la conversation via un
+         * évènement Eloquent, ce qui simule fidèlement un redémarrage du
+         * conteneur entre les deux écritures (déploiement, OOM) — le point de
+         * défaillance, pas sa cause, est ce qui compte pour ce test.
+         *
+         * Sans transaction : le message reste enregistré (webhook déjà
+         * répondu 200 à Meta, qui ne le renverra plus), mais
+         * `last_inbound_at` ne bouge jamais. La fenêtre de réponse se calcule
+         * alors sur une valeur périmée — ou reste fermée avec « jamais
+         * répondu » si aucun inbound n'avait encore été enregistré — et
+         * l'agent voit « cette autorité n'a jamais écrit » alors qu'elle
+         * vient de le faire.
+         */
+        // `forPhone()` ouvre d'abord le fil (une création, donc un premier
+        // save() légitime) : ne faire échouer que la mise à jour qui suit,
+        // celle qui porte `last_inbound_at`, sous peine de ne rien prouver.
+        WhatsappConversation::saving(function (WhatsappConversation $model) {
+            if ($model->exists && $model->isDirty('last_inbound_at')) {
+                throw new \RuntimeException('panne simulée entre les deux écritures');
+            }
+        });
+
+        try {
+            $this->postSigned($this->inboundPayload('wamid.CRASH', '21620123456', 'Bonjour'));
+        } finally {
+            \Illuminate\Support\Facades\Event::forget('eloquent.saving: '.WhatsappConversation::class);
+        }
+
+        // Le fil existe (ouvert par forPhone(), avant la panne simulée), mais
+        // n'a jamais reçu son inbound : la panne a bien empêché la SECONDE
+        // écriture, pas seulement laissé une trace en erreur.
+        $conversation = WhatsappConversation::sole();
+        $this->assertNull($conversation->last_inbound_at);
+        $this->assertSame(
+            0,
+            WhatsappConversationMessage::count(),
+            "Le message entrant n'aurait pas dû survivre à l'échec de la mise à jour de la conversation.",
+        );
+    }
+
     public function test_the_same_number_written_differently_shares_one_thread(): void
     {
         // La fiche est enfilée vers « +216 20 123 456 », l'agent répond depuis
