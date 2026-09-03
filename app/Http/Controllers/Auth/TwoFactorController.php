@@ -78,7 +78,7 @@ class TwoFactorController extends Controller
 
         if (!$user->two_factor_secret) {
             return response()->json([
-                'errors' => [['code' => '2FA_NOT_INITIALIZED', 'message' => 'Call GET /auth/2fa/setup first.']],
+                'errors' => [['code' => '2FA_NOT_INITIALIZED', 'message' => "Lancez d'abord la configuration (GET /auth/2fa/setup)."]],
             ], 422);
         }
 
@@ -86,7 +86,7 @@ class TwoFactorController extends Controller
 
         if (!$this->totp->verifyKey($secret, $request->code)) {
             return response()->json([
-                'errors' => [['code' => '2FA_INVALID_CODE', 'message' => 'Invalid TOTP code. Please try again.']],
+                'errors' => [['code' => '2FA_INVALID_CODE', 'message' => 'Code incorrect. Réessayez.']],
             ], 422);
         }
 
@@ -112,13 +112,13 @@ class TwoFactorController extends Controller
         // Guard: this route is only callable with a 2fa-pending token
         if (!$partialToken->can('2fa-pending') || $partialToken->can('*')) {
             return response()->json([
-                'errors' => [['code' => '2FA_NOT_REQUIRED', 'message' => 'Full token already issued.']],
+                'errors' => [['code' => '2FA_NOT_REQUIRED', 'message' => 'La session est déjà pleinement ouverte.']],
             ], 422);
         }
 
         if (!$user->two_factor_secret || !$user->two_factor_confirmed_at) {
             return response()->json([
-                'errors' => [['code' => '2FA_NOT_SETUP', 'message' => '2FA is not configured for this account.']],
+                'errors' => [['code' => '2FA_NOT_SETUP', 'message' => "La double authentification n'est pas configurée sur ce compte."]],
             ], 422);
         }
 
@@ -127,7 +127,7 @@ class TwoFactorController extends Controller
         if (!$this->totp->verifyKey($secret, $request->code)) {
             AuditLogger::log('auth.2fa_failed', $user, actor: $user);
             return response()->json([
-                'errors' => [['code' => '2FA_INVALID_CODE', 'message' => 'Invalid TOTP code.']],
+                'errors' => [['code' => '2FA_INVALID_CODE', 'message' => 'Code incorrect. Réessayez.']],
             ], 422);
         }
 
@@ -155,7 +155,7 @@ class TwoFactorController extends Controller
 
         if (!$user->two_factor_confirmed_at) {
             return response()->json([
-                'errors' => [['code' => '2FA_NOT_ENABLED', 'message' => '2FA is not enabled.']],
+                'errors' => [['code' => '2FA_NOT_ENABLED', 'message' => "La double authentification n'est pas activée."]],
             ], 422);
         }
 
@@ -163,7 +163,7 @@ class TwoFactorController extends Controller
 
         if (!$this->totp->verifyKey($secret, $request->code)) {
             return response()->json([
-                'errors' => [['code' => '2FA_INVALID_CODE', 'message' => 'Invalid TOTP code.']],
+                'errors' => [['code' => '2FA_INVALID_CODE', 'message' => 'Code incorrect. Réessayez.']],
             ], 422);
         }
 
