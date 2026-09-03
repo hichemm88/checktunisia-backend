@@ -284,6 +284,38 @@ class WhatsappAlertService
     }
 
     /** Job abandonné après épuisement des retries (24 h). */
+    /**
+     * Des fiches ont ete ACCEPTEES par Meta sans jamais etre livrees.
+     *
+     * Distincte de `jobPermanentlyFailed()` : la, l'envoi a echoue et le
+     * systeme le sait. Ici il croit avoir reussi. C'est justement pour cela que
+     * l'alerte est necessaire — sans elle, l'ecran affiche un succes et le
+     * poste de police n'a rien recu.
+     *
+     * Le message ne porte AUCUNE identite de voyageur : un email d'exploitation
+     * n'a pas a transporter les personnes qu'il denombre.
+     */
+    public function fichesUndelivered(int $count, int $minutes): void
+    {
+        $this->dispatch(
+            'WhatsApp Qayed — fiches acceptees mais jamais livrees',
+            "{$count} fiche(s) ont ete acceptees par Meta il y a plus de {$minutes} min "
+            ."sans accuse de livraison.
+
+"
+            ."Meta accuse reception a l'ACCEPTATION, pas a la livraison : ces fiches "
+            ."apparaissent comme envoyees alors que le destinataire n'a peut-etre rien recu.
+
+"
+            .'Causes usuelles : numero sans compte WhatsApp, appareil eteint, numero '
+            ."bloque, ou accuse de livraison perdu.
+
+"
+            .'A verifier dans le journal WhatsApp, puis renvoyer si necessaire.',
+            SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
+        );
+    }
+
     public function jobPermanentlyFailed(WhatsappSendLog $job, ?string $error): void
     {
         $this->dispatch(

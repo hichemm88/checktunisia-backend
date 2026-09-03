@@ -104,6 +104,11 @@ class WhatsappAdminController extends Controller
                 // attente d'un backoff (jusqu'à 4 h). Sans ce compteur, le bouton
                 // restait caché alors que la file était figée.
                 'stuck' => $this->outbox->stuckCount(),
+                // Fiches ACCEPTEES par Meta dont la livraison n'est jamais
+                // venue. Elles etaient rangees sous « envoyees », donc parmi
+                // les succes : le poste de police n'avait rien recu et rien ne
+                // le disait.
+                'undelivered' => $this->outbox->undeliveredCount(),
             ],
             /*
              | Pourquoi rien ne part.

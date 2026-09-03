@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\WhatsappSessionState;
 use App\Services\Whatsapp\WhatsappAlertService;
+use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 
@@ -35,11 +36,19 @@ class CheckWhatsappHealth extends Command
 
     private const NOT_READY_FLAG = 'whatsapp:session-not-ready-alerted';
 
+    /** Porte le NOMBRE de fiches non livrees deja signalees, pas un booleen. */
+    private const UNDELIVERED_FLAG = 'whatsapp:undelivered-alerted';
+
     public function handle(WhatsappAlertService $alerts): void
     {
         if (! config('whatsapp.enabled')) {
             return;
         }
+
+        // Fiches acceptees par Meta et jamais livrees. Verifie AVANT l'etat de
+        // session : ce trou-la existe meme quand tout va bien par ailleurs —
+        // c'est meme sa caracteristique, le canal a l'air en parfaite sante.
+        $this->reportUndelivered($alerts);
 
         $state = WhatsappSessionState::current();
         $heartbeat = $state->heartbeat_at;
@@ -93,5 +102,35 @@ class CheckWhatsappHealth extends Command
         );
         Cache::put(self::NOT_READY_FLAG, true, now()->addDay());
         $this->warn("Session « {$state->status} » depuis {$downMinutes} min — alerte envoyée.");
+    }
+
+    /**
+     * Signale les fiches acceptees mais jamais livrees.
+     *
+     * Le drapeau de cache evite une alerte toutes les dix minutes pendant des
+     * jours : repetee, elle apprendrait aux administrateurs a l'ignorer, ce qui
+     * reviendrait a ne pas alerter du tout. Il porte le NOMBRE : si la
+     * situation s'aggrave, une nouvelle alerte part.
+     */
+    private function reportUndelivered(WhatsappAlertService $alerts): void
+    {
+        $minutes = (int) config('whatsapp.undelivered_alert_minutes', 60);
+        $count = app(WhatsappOutboxService::class)->undeliveredCount($minutes);
+
+        if ($count === 0) {
+            Cache::forget(self::UNDELIVERED_FLAG);
+
+            return;
+        }
+
+        if ((int) Cache::get(self::UNDELIVERED_FLAG, 0) >= $count) {
+            $this->info("{$count} fiche(s) non livrees — alerte deja envoyee.");
+
+            return;
+        }
+
+        $alerts->fichesUndelivered($count, $minutes);
+        Cache::put(self::UNDELIVERED_FLAG, $count, now()->addDay());
+        $this->warn("{$count} fiche(s) acceptees mais jamais livrees — alerte envoyee.");
     }
 }

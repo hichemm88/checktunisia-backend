@@ -504,6 +504,14 @@ return [
     | redéploiement ni migration.
     |
     */
+    /*
+    | Delai au-dela duquel une fiche ACCEPTEE par Meta mais jamais livree est
+    | signalee. La livraison arrive normalement en quelques secondes ; une
+    | heure laisse largement la place aux appareils eteints et aux retards de
+    | webhook, sans laisser une fiche non recue dormir une journee.
+    */
+    'undelivered_alert_minutes' => (int) $envOr('WHATSAPP_UNDELIVERED_ALERT_MINUTES', 60),
+
     'pricing' => [
 
         // Prix USD par message LIVRÉ, par catégorie de modèle.

@@ -935,6 +935,51 @@ class WhatsappOutboxService
      * ligne « en attente » n'offre pas de « Renvoyer ». L'exploitant n'avait
      * plus qu'à attendre le backoff, sans le savoir.
      */
+    /**
+     * Fiches que Meta a ACCEPTEES et dont la livraison n'est jamais venue.
+     *
+     * Un 200 de Meta porte un accuse d'ACCEPTATION : « je m'en charge », rien
+     * de plus. La livraison arrive ensuite par webhook — ou n'arrive jamais :
+     * numero mort, compte supprime, appareil eteint jusqu'a l'expiration du
+     * message chez Meta, webhook definitivement perdu.
+     *
+     * Rien ne regardait cet etat. `stuckCount()` compte les `failed` et les
+     * `pending` en attente de backoff ; l'ecran d'administration range ces
+     * fiches-la sous « envoyees », c'est-a-dire parmi les SUCCES. Sur un canal
+     * qui porte une obligation legale de declaration, le systeme affichait donc
+     * un succes pour une fiche que le poste de police n'a jamais recue, et
+     * personne ne pouvait s'en apercevoir.
+     *
+     * On ne garantit pas la livraison — elle ne depend pas de nous. On refuse
+     * seulement que son absence prolongee reste silencieuse.
+     *
+     * Les fiches de TEST sont exclues : elles ne portent aucune obligation, et
+     * les compter brouillerait le signal.
+     */
+    public function undeliveredCount(?int $minutes = null): int
+    {
+        return $this->undeliveredQuery($minutes)->count();
+    }
+
+    /** @return Builder<WhatsappSendLog> */
+    public function undeliveredQuery(?int $minutes = null): Builder
+    {
+        $minutes ??= (int) config('whatsapp.undelivered_alert_minutes', 60);
+
+        return WhatsappSendLog::query()
+            ->where('status', WhatsappSendLog::STATUS_SENT)
+            ->where('is_test', false)
+            ->whereNotNull('sent_at')
+            ->where('sent_at', '<=', now()->subMinutes($minutes))
+            // `failed` a deja son chemin (markFailed + alerte) : le recompter
+            // ici doublerait le signal. `delivered` et `read` sont des succes.
+            ->whereNotIn('delivery_status', [
+                WhatsappSendLog::DELIVERY_DELIVERED,
+                WhatsappSendLog::DELIVERY_READ,
+                WhatsappSendLog::DELIVERY_FAILED,
+            ]);
+    }
+
     public function stuckCount(): int
     {
         return $this->stuckQuery()->count();
