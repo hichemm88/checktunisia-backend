@@ -85,7 +85,30 @@ class AuthoritySearchController extends Controller
 
         $start = microtime(true);
 
-        $query = Guest::with(['primaryDocument', 'checkIns.hotel.address'])->select('guests.*');
+        /*
+         * Un voyageur n'est visible de l'autorite qu'a partir de la
+         * FINALISATION de son sejour — c'est la promesse meme du produit
+         * (voir DeclarationJourneyEndToEndTest). Un sejour « draft » est une
+         * saisie en cours au comptoir : donnees possiblement fausses,
+         * abandonnees, ou en cours de correction.
+         *
+         * Sans cette contrainte, la recherche par NOM (le cas le plus
+         * frequent, sans autre filtre) portait sur TOUS les sejours d'un
+         * voyageur, draft compris : un client dont la reception commence tout
+         * juste la saisie apparaissait deja, piece d'identite a l'appui, cote
+         * autorite. `recentCheckIns()` juste au-dessus applique deja cette
+         * regle ; elle manquait ici et dans show().
+         *
+         * La relation chargee est elle-meme restreinte : sans cela, un
+         * voyageur ayant LEGITIMEMENT un sejour actif ailleurs continuerait
+         * de laisser fuiter les sejours draft dans `last_stay` si un tri les
+         * plaçait devant.
+         */
+        $declaredScope = fn ($q) => $q->whereIn('status', ['active', 'completed']);
+
+        $query = Guest::with(['primaryDocument', 'checkIns' => fn ($q) => $declaredScope($q)->with('hotel.address')])
+            ->whereHas('checkIns', $declaredScope)
+            ->select('guests.*');
 
         /*
          * Jokers NEUTRALISES sur tous les criteres saisis.
@@ -118,7 +141,11 @@ class AuthoritySearchController extends Controller
             $query->whereDate('date_of_birth', $request->date_of_birth);
         }
         if ($request->filled('check_in_from') || $request->filled('check_in_to')) {
-            $query->whereHas('checkIns', function ($ci) use ($request) {
+            // Scope declare aussi ici : sans lui, une plage de dates pouvait
+            // matcher un sejour draft et faire ressortir un voyageur non
+            // declare — la meme fuite que le scope de base, par une autre porte.
+            $query->whereHas('checkIns', function ($ci) use ($request, $declaredScope) {
+                $declaredScope($ci);
                 if ($request->filled('check_in_from')) {
                     $ci->where('expected_check_out_date', '>=', $request->check_in_from);
                 }
@@ -128,9 +155,10 @@ class AuthoritySearchController extends Controller
             });
         }
         if ($request->filled('hotel_governorate')) {
-            $query->whereHas('checkIns.hotel.address', fn($a) =>
-                $a->where('governorate', 'ilike', LikePattern::contains($request->hotel_governorate))
-            );
+            $query->whereHas('checkIns', fn ($ci) => $declaredScope($ci)->whereHas(
+                'hotel.address',
+                fn ($a) => $a->where('governorate', 'ilike', LikePattern::contains($request->hotel_governorate)),
+            ));
         }
 
         $results     = $query->orderBy('last_name')->paginate($request->integer('per_page', 20));
@@ -233,20 +261,28 @@ class AuthoritySearchController extends Controller
     {
         $profile = $this->authorityProfile($request);
 
-        $query = Guest::with(['documents', 'checkIns' => function ($q) {
-            $q->with('hotel.address', 'room')->orderByDesc('check_in_date');
-        }]);
+        // Meme regle que search() : un sejour draft n'est pas une declaration.
+        // Sans ce scope, la fiche complete d'un voyageur — dont son numero de
+        // piece d'identite — etait accessible des la creation du sejour au
+        // comptoir, avant toute finalisation.
+        $declaredScope = fn ($q) => $q->whereIn('status', ['active', 'completed']);
 
-        // Police may only view guests with at least one stay in their own
-        // governorate — without this, any authority account could pull the
+        $query = Guest::with([
+            'documents',
+            'checkIns' => fn ($q) => $declaredScope($q)->with('hotel.address', 'room')->orderByDesc('check_in_date'),
+        ])->whereHas('checkIns', $declaredScope);
+
+        // Police may only view guests with at least one DECLARED stay in their
+        // own governorate — without this, any authority account could pull the
         // full passport/CIN profile of any guest nationwide by guessing IDs.
         // Jokers NEUTRALISES : la valeur vient de la base (validee en
         // `string|max:100`), et un « % » y transformait ce filtre en « tous
         // les gouvernorats » — donc ce poste de police en compte national.
         if (($profile['org_type'] ?? null) === 'police' && $profile['governorate']) {
-            $query->whereHas('checkIns.hotel.address', fn($a) =>
-                $a->where('governorate', 'ilike', LikePattern::contains($profile['governorate']))
-            );
+            $query->whereHas('checkIns', fn ($ci) => $declaredScope($ci)->whereHas(
+                'hotel.address',
+                fn ($a) => $a->where('governorate', 'ilike', LikePattern::contains($profile['governorate'])),
+            ));
         }
 
         $guest = $query->findOrFail($id);

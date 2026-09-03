@@ -3,7 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\AuthorityOrganization;
-use App\Models\Guest;
+use App\Models\CheckIn;
+use App\Models\Hotel;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -57,14 +58,22 @@ class SearchIndexTest extends TestCase
      * Le test qui compte vraiment : la recherche autorité doit continuer de
      * renvoyer les bons résultats. Un index cassé ou un opérateur mal choisi
      * se verrait ici, pas dans un contrôle de métadonnées.
+     *
+     * Les voyageurs portent un séjour DÉCLARÉ (`active`, via
+     * CheckIn::factory()->withGuest()) : depuis le correctif P9 (un voyageur
+     * dont le séjour n'était que « draft » restait visible côté autorité),
+     * un Guest créé seul, sans check-in finalisé, est invisible par
+     * construction. Ce test mesure le trigram, pas cette règle — le fixture
+     * s'aligne dessus plutôt que d'en devenir un faux négatif.
      */
     public function test_partial_name_search_still_returns_matches(): void
     {
         $org       = AuthorityOrganization::factory()->ministry()->create();
         $authority = User::factory()->authorityUser($org)->create();
+        $hotel     = Hotel::factory()->withActiveSubscription()->create();
 
-        Guest::factory()->named('Mohamed', 'Mathlouthi')->create();
-        Guest::factory()->named('Fatma', 'Trabelsi')->create();
+        CheckIn::factory()->for($hotel)->withGuest('Mohamed', 'Mathlouthi')->create();
+        CheckIn::factory()->for($hotel)->withGuest('Fatma', 'Trabelsi')->create();
 
         $response = $this->actingAs($authority)
             ->getJson('/api/v1/authority/search?last_name=athlou')
@@ -80,8 +89,9 @@ class SearchIndexTest extends TestCase
     {
         $org       = AuthorityOrganization::factory()->ministry()->create();
         $authority = User::factory()->authorityUser($org)->create();
+        $hotel     = Hotel::factory()->withActiveSubscription()->create();
 
-        Guest::factory()->named('Mohamed', 'Mathlouthi')->create();
+        CheckIn::factory()->for($hotel)->withGuest('Mohamed', 'Mathlouthi')->create();
 
         $response = $this->actingAs($authority)
             ->getJson('/api/v1/authority/search?last_name=MATHLOU')
