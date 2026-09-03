@@ -44,6 +44,7 @@ use App\Http\Controllers\Hotel\OrganizationController;
 use App\Http\Controllers\Hotel\PaymentController;
 use App\Http\Controllers\Hotel\RoomController;
 use App\Http\Controllers\Hotel\ScanController;
+use App\Http\Controllers\Hotel\ScanAuthorizationController;
 use App\Http\Controllers\Hotel\ScanEventController;
 use App\Http\Controllers\Hotel\SubscriptionController;
 use App\Http\Controllers\Hotel\WatchlistHitController;
@@ -308,6 +309,18 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
 
             // OCR scan status
             Route::get('scans/{scan_id}/status', [ScanController::class, 'status']);
+
+            /*
+             | Autorisation d'un scan IA, consultee par les fonctions
+             | serverless AVANT tout appel a Claude vision. Sans elle, ces
+             | fonctions ne verifiaient que la FORME du jeton porteur : le
+             | budget Anthropic etait ouvert a tout le monde, et le cout
+             | imputable a l'etablissement de son choix.
+             |
+             | Lecture seule, sans effet de bord : elle repond « ce compte
+             | peut-il scanner pour cet etablissement ? », rien d'autre.
+             */
+            Route::get('scan-authorization', ScanAuthorizationController::class);
 
             // Telemetrie OCR MRZ local (beacon metadata-only, pour le graphe comparatif).
             Route::post('scan-events/mrz-local', [ScanEventController::class, 'mrzLocal']);
