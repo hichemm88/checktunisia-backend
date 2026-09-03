@@ -42,15 +42,46 @@ class RoomController extends Controller
 
         $rooms = Room::where('hotel_id', $hotel->id)->orderBy('number')->get();
 
-        // Stays overlapping the requested nights [from, to)
-        $conflicts = CheckIn::with('primaryGuest')
+        /*
+         * ── Deux regles d'occupation qui ne disaient pas la meme chose ────────
+         *
+         * Ce selecteur ne retenait qu'un CHEVAUCHEMENT DE DATES : un sejour dont
+         * le depart prevu etait passe cessait de bloquer sa chambre. La creation
+         * d'un check-in, elle, refuse toute chambre portant un sejour `draft` ou
+         * `active`, SANS AUCUNE CONDITION DE DATE (CheckInController::
+         * roomConflictError).
+         *
+         * Le selecteur etait donc strictement plus permissif que le serveur : il
+         * affichait « Libre » des chambres que la creation refusait
+         * systematiquement. La reception choisissait la chambre, remplissait
+         * l'ecran, et ne decouvrait qu'a la validation un ROOM_OCCUPIED qu'aucun
+         * indice ne laissait prevoir — sans moyen de savoir quelles autres
+         * chambres marcheraient.
+         *
+         * Deux situations tres ordinaires y menaient : un depart en retard (le
+         * client prolonge, ou personne n'a saisi le check-out) et une chambre
+         * portant un brouillon pour des dates futures.
+         *
+         * On aligne donc l'affichage sur ce que le serveur ACCEPTE reellement.
+         * Une chambre presentee comme libre doit pouvoir etre reservee — c'est
+         * la seule promesse que ce selecteur ait a tenir.
+         *
+         * Le chevauchement de dates reste calcule : il sert a nommer le sejour
+         * en cause et a reperer les departs du jour. Il ne decide plus, seul, de
+         * l'etat affiche.
+         */
+        $blocking = CheckIn::with('primaryGuest')
             ->where('hotel_id', $hotel->id)
             ->whereNotNull('room_id')
             ->whereIn('status', ['draft', 'active'])
-            ->where('check_in_date', '<', $v['to'])
-            ->whereRaw('COALESCE(actual_check_out_date, expected_check_out_date) > ?', [$v['from']])
             ->get()
             ->groupBy('room_id');
+
+        // Sejours chevauchant les nuits demandees [from, to) — pour l'affichage.
+        $conflicts = $blocking->map(fn ($stays) => $stays->filter(
+            fn ($s) => $s->check_in_date < $v['to']
+                && ($s->actual_check_out_date ?? $s->expected_check_out_date) > $v['from'],
+        ))->filter->isNotEmpty();
 
         // Active stays whose departure falls exactly on `from` — room frees that day
         $departingSameDay = CheckIn::where('hotel_id', $hotel->id)
@@ -61,10 +92,15 @@ class RoomController extends Controller
             ->pluck('room_id')
             ->flip();
 
-        return response()->json(['data' => $rooms->map(function ($r) use ($conflicts, $departingSameDay) {
-            $conflict = $conflicts->get($r->id)?->first();
+        return response()->json(['data' => $rooms->map(function ($r) use ($blocking, $conflicts, $departingSameDay) {
+            // Le sejour a nommer : celui qui chevauche les dates si tout va bien,
+            // sinon n'importe lequel de ceux qui bloquent — sans quoi la chambre
+            // s'afficherait « occupee » sans dire par qui.
+            $conflict = $conflicts->get($r->id)?->first() ?? $blocking->get($r->id)?->first();
+
+            // L'etat suit la regle du SERVEUR, pas le chevauchement de dates.
             $state = !in_array($r->status, ['available', 'occupied'], true) ? 'unavailable'
-                : ($conflict ? 'occupied' : 'free');
+                : ($blocking->has($r->id) ? 'occupied' : 'free');
 
             $guest = $conflict?->primaryGuest->first();
 
