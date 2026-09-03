@@ -41,6 +41,27 @@ return Application::configure(basePath: dirname(__DIR__))
         },
     )
     ->withMiddleware(function (Middleware $middleware) {
+        /*
+         * Cette application n'a AUCUNE route web nommée « login » — routes/web.php
+         * n'existe pas, tout est API (routes/api.php, routes/public.php).
+         *
+         * Sans cette ligne, un visiteur non authentifié qui n'envoie pas
+         * `Accept: application/json` (curl brut, un ancien client mobile, un
+         * webhook mal formé) fait échouer le middleware `auth:sanctum` par
+         * `AuthenticationException`, et le gestionnaire par défaut de Laravel
+         * tente alors une redirection vers `route('login')` pour construire la
+         * réponse — une route qui n'existe pas. Le rendu échoue à son tour sur
+         * `RouteNotFoundException`, AVANT même d'atteindre le renderer
+         * `AuthenticationException` déclaré plus bas : l'appelant reçoit une
+         * page d'erreur 500 (avec la trace complète tant que APP_DEBUG=true)
+         * au lieu du 401 JSON structuré que l'API promet partout ailleurs.
+         *
+         * Le frontend n'est jamais touché — `src/lib/api.ts` fixe
+         * `Accept: application/json` sur chaque requête — mais tout autre
+         * appelant (santé/monitoring, intégration directe, webhook) l'était.
+         */
+        $middleware->redirectGuestsTo(fn () => null);
+
         // Conservative security headers on every API response (defence in depth).
         // throttle:api — repli global (API-01). Le périmètre /hotel/* n'avait
         // AUCUNE limitation, upload de scans compris. Les groupes qui ont déjà
