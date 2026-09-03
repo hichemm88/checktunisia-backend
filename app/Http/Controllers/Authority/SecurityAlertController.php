@@ -110,10 +110,26 @@ class SecurityAlertController extends Controller
 
         $old = ['authority_status' => $hit->authority_status];
 
+        /*
+         * Prise en charge IDEMPOTENTE : le premier geste fait foi.
+         *
+         * `authority_acknowledged_at` etait reecrit a chaque appel, la ou
+         * `authority_seen_at` etait deja preserve juste en dessous — deux
+         * regles opposees dans la meme methode, ce qui trahit un oubli plutot
+         * qu'une decision.
+         *
+         * Consequence : un double clic, un rejeu apres timeout ou un second
+         * agent effacaient QUI a pris en charge l'alerte et QUAND. Sur une
+         * alerte concernant un voyageur fiche, c'est precisement la trace de
+         * responsabilite qu'on veut garder — et la seule.
+         *
+         * L'appel reste un succes : l'etat demande est bien atteint. Un 409
+         * ferait croire a un echec pour une operation qui n'avait rien a faire.
+         */
         $hit->update([
             'authority_status'          => 'acknowledged',
-            'authority_acknowledged_at' => now(),
-            'authority_acknowledged_by' => $request->user()->id,
+            'authority_acknowledged_at' => $hit->authority_acknowledged_at ?? now(),
+            'authority_acknowledged_by' => $hit->authority_acknowledged_by ?? $request->user()->id,
             // Une prise en charge implique la consultation.
             'authority_seen_at'         => $hit->authority_seen_at ?? now(),
             'authority_seen_by'         => $hit->authority_seen_by ?? $request->user()->id,

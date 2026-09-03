@@ -178,7 +178,36 @@ class WhatsappOtpService
             return null;
         }
 
-        $entry->forceFill(['consumed_at' => now()])->save();
+        /*
+         * CONSOMMATION ATOMIQUE — c'est la base qui arbitre, pas une lecture
+         * suivie d'une ecriture.
+         *
+         * Entre le SELECT du code et son marquage, il y a un `Hash::check` :
+         * bcrypt, deliberement lent, une centaine de millisecondes. La fenetre
+         * n'est donc pas theorique — deux verifications arrivees dans cet
+         * intervalle voyaient toutes les deux un code non consomme, le
+         * marquaient toutes les deux, et ouvraient DEUX sessions avec une clef
+         * a usage unique.
+         *
+         * Ce que cette garantie protege : un code intercepte (epaule, appareil
+         * partage, compte WhatsApp compromis) ne doit servir qu'une fois. Si
+         * l'agent legitime l'utilise, l'attaquant qui court en parallele doit
+         * repartir les mains vides — c'est tout ce qui limite les degats apres
+         * une fuite de code.
+         *
+         * Meme motif que `WhatsappCostRecorder::recordDelivered()` : un UPDATE
+         * conditionnel, et on regarde le nombre de lignes affectees.
+         */
+        $claimed = WhatsappOtpCode::whereKey($entry->id)
+            ->whereNull('consumed_at')
+            ->update(['consumed_at' => now()]);
+
+        if ($claimed === 0) {
+            // Une autre requete a gagne la course : ce code est deja depense.
+            $this->journal('authority.otp_verify_failed', $phone, $ip, ['reason' => 'already_consumed']);
+
+            return null;
+        }
 
         // Tout autre code encore vivant sur ce numéro tombe : deux demandes
         // successives ne doivent pas laisser deux clés en circulation.

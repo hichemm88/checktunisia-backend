@@ -87,15 +87,28 @@ class AuthoritySearchController extends Controller
 
         $query = Guest::with(['primaryDocument', 'checkIns.hotel.address'])->select('guests.*');
 
+        /*
+         * Jokers NEUTRALISES sur tous les criteres saisis.
+         *
+         * Ils ne franchissent pas le perimetre — le cloisonnement par
+         * gouvernorat est applique ailleurs, et echappe. Mais « %% » (deux
+         * caracteres, donc accepte par `min:2`) transformait une recherche
+         * ciblee en vidage complet du perimetre : l'agent croit chercher une
+         * personne et obtient tout le monde, pendant que le journal d'audit
+         * enregistre une requete d'apparence banale.
+         *
+         * Un « _ » dans un nom produisait par ailleurs des resultats faux sans
+         * que rien ne l'indique.
+         */
         if ($request->filled('first_name')) {
-            $query->where('first_name', 'ilike', "%{$request->first_name}%");
+            $query->where('first_name', 'ilike', LikePattern::contains($request->first_name));
         }
         if ($request->filled('last_name')) {
-            $query->where('last_name', 'ilike', "%{$request->last_name}%");
+            $query->where('last_name', 'ilike', LikePattern::contains($request->last_name));
         }
         if ($request->filled('document_number')) {
             $query->whereHas('documents', fn($d) =>
-                $d->where('document_number', 'ilike', "%{$request->document_number}%")
+                $d->where('document_number', 'ilike', LikePattern::contains($request->document_number))
             );
         }
         if ($request->filled('nationality_code')) {
@@ -116,7 +129,7 @@ class AuthoritySearchController extends Controller
         }
         if ($request->filled('hotel_governorate')) {
             $query->whereHas('checkIns.hotel.address', fn($a) =>
-                $a->where('governorate', 'ilike', "%{$request->hotel_governorate}%")
+                $a->where('governorate', 'ilike', LikePattern::contains($request->hotel_governorate))
             );
         }
 
@@ -328,12 +341,14 @@ class AuthoritySearchController extends Controller
         if ($request->filled('search')) {
             $s = $request->search;
             $query->where(function ($q) use ($s) {
-                $q->where('reference', 'ilike', "%$s%")
+                // Meme neutralisation des jokers que la recherche voyageur.
+                $like = LikePattern::contains($s);
+                $q->where('reference', 'ilike', $like)
                     ->orWhereHas('guests', fn($gq) =>
-                        $gq->where('first_name', 'ilike', "%$s%")
-                            ->orWhere('last_name', 'ilike', "%$s%")
+                        $gq->where('first_name', 'ilike', $like)
+                            ->orWhere('last_name', 'ilike', $like)
                             ->orWhereHas('documents', fn($dq) =>
-                                $dq->where('document_number', 'ilike', "%$s%")
+                                $dq->where('document_number', 'ilike', $like)
                             )
                     );
             });
