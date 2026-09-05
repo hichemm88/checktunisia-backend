@@ -3,7 +3,15 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\WebauthnCredential;
+use App\Models\WhatsappSessionState;
+use App\Services\Backup\BackupKeyring;
+use App\Services\Backup\BackupState;
+use App\Services\Delivery\DeliveryChannelManager;
+use App\Services\Observability\SchedulerHeartbeat;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 
@@ -67,7 +75,7 @@ class HealthController extends Controller
             'rp_id'             => config('webauthn.rp_id'),
             'origins'           => config('webauthn.origins'),
             'user_verification' => config('webauthn.user_verification'),
-            'credentials'       => \App\Models\WebauthnCredential::count(),
+            'credentials'       => WebauthnCredential::count(),
         ];
     }
 
@@ -118,14 +126,14 @@ class HealthController extends Controller
     {
         $exists = DB::table('failed_jobs')->where('uuid', $uuid)->exists();
 
-        if (! $exists) {
+        if (!$exists) {
             return response()->json([
                 'data'   => null,
                 'errors' => [['code' => 'RESOURCE_NOT_FOUND', 'message' => 'Job introuvable.', 'field' => null]],
             ], 404);
         }
 
-        \Illuminate\Support\Facades\Artisan::call('queue:retry', ['id' => [$uuid]]);
+        Artisan::call('queue:retry', ['id' => [$uuid]]);
 
         return response()->json(['data' => ['retried' => true, 'uuid' => $uuid]]);
     }
@@ -143,12 +151,12 @@ class HealthController extends Controller
      */
     private function backup(): array
     {
-        $state = app(\App\Services\Backup\BackupState::class);
+        $state = app(BackupState::class);
         $data = $state->all();
         $hours = $state->hoursSinceLastSuccess();
 
         $configured = filled(config('filesystems.disks.backups.bucket'))
-            && app(\App\Services\Backup\BackupKeyring::class)->isConfigured();
+            && app(BackupKeyring::class)->isConfigured();
 
         return [
             // Faux = aucune sauvegarde ne peut avoir lieu, quel que soit le reste.
@@ -235,7 +243,7 @@ class HealthController extends Controller
         // d'autre finissent par diverger, et la divergence est silencieuse —
         // le panneau lirait une clé vide et déclarerait le planificateur mort
         // alors qu'il bat, ou l'inverse selon le sens de la faute de frappe.
-        $last = cache()->get(\App\Services\Observability\SchedulerHeartbeat::CACHE_KEY);
+        $last = cache()->get(SchedulerHeartbeat::CACHE_KEY);
 
         // Carbon 3 rend une différence SIGNÉE : `now()->diffInMinutes($passé)`
         // vaut -20, jamais 20, et la comparaison « > 5 » était donc toujours
@@ -244,7 +252,7 @@ class HealthController extends Controller
         // ailleurs dans le code.
         $minutesSince = $last === null
             ? null
-            : \Illuminate\Support\Carbon::parse($last)->diffInMinutes(now());
+            : Carbon::parse($last)->diffInMinutes(now());
 
         return [
             'last_run_at'    => $last,
@@ -282,8 +290,8 @@ class HealthController extends Controller
         // Lecture seule : aucune écriture, aucun appel au worker. Ce bloc ne
         // peut pas perturber le relais qu'il observe.
         try {
-            $state = \App\Models\WhatsappSessionState::query()
-                ->where('key', \App\Models\WhatsappSessionState::KEY)
+            $state = WhatsappSessionState::query()
+                ->where('key', WhatsappSessionState::KEY)
                 ->first();
 
             $counts['session'] = [
@@ -293,6 +301,16 @@ class HealthController extends Controller
                 'last_ready_at' => $state?->last_ready_at?->toIso8601String(),
                 'heartbeat_at'  => $state?->heartbeat_at?->toIso8601String(),
                 'revoked_at'    => $state?->revoked_at?->toIso8601String(),
+                /*
+                 | Ce statut ne décrit que le relais WhatsApp Web historique
+                 | (session appairée par QR, worker Node) : depuis la bascule
+                 | vers l'API Cloud — canal en PUSH, sans session ni QR — il ne
+                 | reflète plus rien de ce qui transmet réellement les fiches.
+                 | Sans ce champ, un panneau resté figé sur « logged_out » depuis
+                 | le bannissement de l'ancien numéro se lit comme une panne en
+                 | cours, indéfiniment.
+                 */
+                'relevant'      => !app(DeliveryChannelManager::class)->active()->supportsPush(),
             ];
         } catch (\Throwable) {
             $counts['session'] = null;

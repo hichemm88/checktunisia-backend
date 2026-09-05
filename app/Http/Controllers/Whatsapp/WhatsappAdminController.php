@@ -49,7 +49,7 @@ class WhatsappAdminController extends Controller
             // Verdict grossier, sans dire pourquoi : « degraded » suffit à
             // déclencher un regard humain, qui lira le détail côté admin.
             'status' => match (true) {
-                ! $enabled => 'disabled',
+                !$enabled => 'disabled',
                 $this->blockingReason($channels, $guard) !== null => 'degraded',
                 default => 'ok',
             },
@@ -79,6 +79,16 @@ class WhatsappAdminController extends Controller
         return response()->json(['data' => [
             'enabled' => $this->outbox->enabled(),
             'session' => $state->status,
+            /*
+             | Le statut ci-dessus ne décrit que le relais WhatsApp Web
+             | historique (session appairée par QR) : sur le canal Cloud API
+             | (PUSH, sans session ni QR — voir WhatsAppCloudChannel), il est
+             | figé sur son dernier état avant bascule et ne signale plus rien
+             | de réel. Sans ce champ, l'écran affiche indéfiniment
+             | « ré-appairage nécessaire » pour un canal qui n'en a jamais eu
+             | besoin.
+             */
+            'session_relevant' => !$channels->active()->supportsPush(),
             'reason' => $state->reason,
             'paused' => $state->paused,
             'last_ready_at' => $state->last_ready_at,

@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Mail\SystemMail;
+use App\Models\Hotel;
 use App\Models\User;
 use App\Models\WhatsappSessionState;
 use App\Services\Audit\AuditLogger;
@@ -47,7 +49,7 @@ class AdminSupervisionTest extends TestCase
 
     public function test_export_requires_platform_admin(): void
     {
-        $hotel = \App\Models\Hotel::factory()->create();
+        $hotel = Hotel::factory()->create();
         $receptionist = User::factory()->receptionist($hotel)->create();
 
         $this->actingAs($receptionist)->get('/api/v1/admin/audit-logs/export')->assertForbidden();
@@ -55,22 +57,50 @@ class AdminSupervisionTest extends TestCase
 
     public function test_silent_worker_triggers_one_alert_until_heartbeat_returns(): void
     {
-        config(['whatsapp.enabled' => true, 'whatsapp.recipient' => 'x@c.us']);
+        // Cette alerte ne concerne que le relais Web (worker Node, session
+        // appairee par QR) : sur le canal Cloud, il n'y a ni worker ni
+        // session a surveiller (voir test_a_stale_legacy_web_session_is_not_
+        // reported_once_cloud_is_active plus bas).
+        config(['whatsapp.enabled' => true, 'whatsapp.channel' => 'web', 'whatsapp.recipient' => 'x@c.us']);
         Mail::fake();
 
         $state = WhatsappSessionState::current();
         $state->forceFill(['heartbeat_at' => now()->subMinutes(30)])->save();
 
         $this->artisan('whatsapp:check-health')->assertOk();
-        Mail::assertSent(\App\Mail\SystemMail::class, 1);
+        Mail::assertSent(SystemMail::class, 1);
 
         // Deuxième passage pendant la même panne : pas de spam.
         $this->artisan('whatsapp:check-health')->assertOk();
-        Mail::assertSent(\App\Mail\SystemMail::class, 1);
+        Mail::assertSent(SystemMail::class, 1);
 
         // Le worker revient → le flag est levé, une future panne réalerte.
         $state->forceFill(['heartbeat_at' => now()])->save();
         $this->artisan('whatsapp:check-health')->assertOk();
         $this->assertNull(Cache::get('whatsapp:worker-silent-alerted'));
+    }
+
+    /**
+     * Le canal Cloud (PUSH) n'a ni worker ni session appairée par QR : la
+     * session Web abandonnée depuis la bascule reste figée sur son dernier
+     * état (`logged_out`, typiquement, depuis le bannissement du numéro).
+     * Avant ce correctif, `whatsapp:check-health` la relisait comme une
+     * panne en cours à chaque passage et le réclamait indéfiniment.
+     */
+    public function test_a_stale_legacy_web_session_is_not_reported_once_cloud_is_active(): void
+    {
+        config(['whatsapp.enabled' => true, 'whatsapp.channel' => 'cloud']);
+        Mail::fake();
+
+        $state = WhatsappSessionState::current();
+        $state->forceFill([
+            'status' => WhatsappSessionState::STATUS_LOGGED_OUT,
+            'heartbeat_at' => now()->subDays(30),
+            'last_ready_at' => now()->subDays(30),
+        ])->save();
+
+        $this->artisan('whatsapp:check-health')->assertOk();
+
+        Mail::assertNothingSent();
     }
 }
