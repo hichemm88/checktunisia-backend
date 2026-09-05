@@ -683,6 +683,7 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
             Route::get('whatsapp/health', [WhatsappAdminController::class, 'health']);
             Route::get('whatsapp/logs', [WhatsappAdminController::class, 'logs']);
             Route::post('whatsapp/logs/resend-all', [WhatsappAdminController::class, 'resendAll']);
+            Route::post('whatsapp/logs/dismiss-failed', [WhatsappAdminController::class, 'dismissFailed']);
             Route::post('whatsapp/logs/{id}/resend', [WhatsappAdminController::class, 'resend']);
             Route::post('whatsapp/test', [WhatsappAdminController::class, 'test']);
             Route::post('whatsapp/pause', [WhatsappAdminController::class, 'pause']);

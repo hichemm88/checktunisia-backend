@@ -45,6 +45,14 @@ class WhatsappOutboxService
      */
     public const PRE_CUTOVER_REASON = 'pre_cutover_backlog';
 
+    /**
+     * Motif d'annulation d'une fiche en échec définitif qu'un administrateur a
+     * choisi de ne pas relancer (bouton « Annuler les échecs »). Distinct de
+     * PRE_CUTOVER_REASON : celui-ci vise l'arriéré antérieur à la bascule,
+     * celui-ci une décision humaine ponctuelle sur des fiches déjà retentées.
+     */
+    public const ADMIN_DISMISSED_REASON = 'admin_dismissed';
+
     public function __construct(
         private WhatsappAlertService $alerts,
         private WhatsappCostRecorder $costs,
@@ -924,6 +932,42 @@ class WhatsappOutboxService
     public function resendAllFailed(): int
     {
         return $this->requeueStuck();
+    }
+
+    /**
+     * Abandon groupé (bouton « Annuler les échecs ») : marque « annulées »
+     * toutes les fiches en échec définitif qu'un administrateur choisit de ne
+     * PAS relancer — même geste que `cancelPreCutover()`, décision humaine
+     * ponctuelle en plus de l'automatisme de bascule.
+     *
+     * Annulées, pas supprimées : la ligne reste consultable dans le journal
+     * admin (compteur « Annulés »), avec un motif qui dit pourquoi. Sur un
+     * canal qui porte une obligation légale, effacer la trace d'une fiche non
+     * transmise serait pire que de ne pas l'avoir transmise.
+     *
+     * Renvoie le nombre de fiches annulées.
+     */
+    public function dismissAllFailed(): int
+    {
+        $dismissed = 0;
+
+        WhatsappSendLog::query()
+            ->where('status', WhatsappSendLog::STATUS_FAILED)
+            ->chunkById(200, function ($jobs) use (&$dismissed) {
+                foreach ($jobs as $job) {
+                    $job->update([
+                        'status' => WhatsappSendLog::STATUS_CANCELLED,
+                        'error_code' => self::ADMIN_DISMISSED_REASON,
+                        'last_error' => self::ADMIN_DISMISSED_REASON.' — annulée manuellement par un '
+                            .'administrateur depuis l\'écran WhatsApp le '.now()->toDateTimeString().'.',
+                        'next_attempt_at' => null,
+                        'claimed_at' => null,
+                    ]);
+                    $dismissed++;
+                }
+            });
+
+        return $dismissed;
     }
 
     /**

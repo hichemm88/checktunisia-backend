@@ -8,6 +8,7 @@ use App\Models\Hotel;
 use App\Models\User;
 use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
+use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -423,6 +424,34 @@ class WhatsappRelayTest extends TestCase
         // Ce qui n'était pas bloqué reste tel quel.
         $this->assertSame('sent', $sent->fresh()->status);
         $this->assertSame('pending', $readyToGo->fresh()->status);
+    }
+
+    /**
+     * Pendant de « Relancer tout » : renoncer plutôt que retenter, sans
+     * effacer la trace. La ligne reste dans le journal (compteur « Annulés »)
+     * avec un motif explicite — jamais une suppression, sur un canal qui
+     * porte une obligation légale de déclaration.
+     */
+    public function test_admin_dismiss_failed_cancels_without_deleting(): void
+    {
+        $failed1 = $this->pendingJob(['status' => 'failed', 'attempts' => 6, 'last_error' => 'timeout']);
+        $failed2 = $this->pendingJob(['status' => 'failed', 'attempts' => 3, 'last_error' => 'timeout']);
+        $sent = $this->pendingJob(['status' => 'sent']);
+        $pending = $this->pendingJob();
+
+        $this->actingAs($this->platformAdmin)
+            ->postJson('/api/v1/admin/whatsapp/logs/dismiss-failed')
+            ->assertOk()
+            ->assertJsonPath('data.dismissed', 2);
+
+        $this->assertSame('cancelled', $failed1->fresh()->status);
+        $this->assertSame('cancelled', $failed2->fresh()->status);
+        $this->assertSame(WhatsappOutboxService::ADMIN_DISMISSED_REASON, $failed1->fresh()->error_code);
+        $this->assertNotNull($failed1->fresh()->last_error);
+
+        // Rien d'autre que les `failed` n'est touché.
+        $this->assertSame('sent', $sent->fresh()->status);
+        $this->assertSame('pending', $pending->fresh()->status);
     }
 
     // ── Garde-fous anti-restriction Meta ─────────────────────────────────────

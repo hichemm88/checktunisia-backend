@@ -243,6 +243,17 @@ class WhatsappAdminController extends Controller
         return response()->json(['data' => ['ok' => true, 'requeued' => $count]]);
     }
 
+    /**
+     * POST admin/whatsapp/logs/dismiss-failed — annule (sans les supprimer)
+     * toutes les fiches en échec définitif, au lieu de les relancer.
+     */
+    public function dismissFailed(): JsonResponse
+    {
+        $count = $this->outbox->dismissAllFailed();
+
+        return response()->json(['data' => ['ok' => true, 'dismissed' => $count]]);
+    }
+
     /** POST admin/whatsapp/test — enfile une fiche factice [TEST]. */
     public function test(Request $request): JsonResponse
     {
