@@ -3,11 +3,14 @@
 namespace Tests\Feature;
 
 use App\Mail\SystemMail;
+use App\Models\AuthorityOrganization;
+use App\Models\AuthorityUserProfile;
 use App\Models\Hotel;
 use App\Models\User;
 use App\Models\WhatsappSendLog;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
@@ -189,6 +192,46 @@ class WhatsappUndeliveredWatchTest extends TestCase
         $this->assertGreaterThan(0, $this->undeliveredAlerts(), 'une aggravation est restée silencieuse');
     }
 
+    /**
+     * Le point qui manquait avant ce correctif : savoir COMBIEN de fiches
+     * traînent ne dit pas QUI ne les reçoit pas. L'administrateur devait
+     * rouvrir le journal WhatsApp et repérer la ligne figée à la main — cette
+     * information, l'email doit désormais la porter lui-même.
+     */
+    public function test_the_alert_names_the_stuck_authority_agent(): void
+    {
+        $org = AuthorityOrganization::create([
+            'name' => 'Poste de garde nationale — Hammamet',
+            'type' => 'police',
+        ]);
+        $agent = User::factory()->create(['first_name' => 'Fares', 'last_name' => 'Ben Salah']);
+        AuthorityUserProfile::create([
+            'user_id' => $agent->id,
+            'organization_id' => $org->id,
+            'whatsapp_number' => '+216 20 123 456',
+            'receives_whatsapp_fiches' => true,
+        ]);
+
+        $job = $this->fiche(WhatsappSendLog::DELIVERY_ACCEPTED, now()->subHours(3));
+        $job->forceFill(['recipient' => '21620123456'])->save();
+
+        User::factory()->platformAdmin()->create();
+
+        $this->artisan('whatsapp:check-health')->assertExitCode(0);
+
+        $mails = Mail::sent(
+            SystemMail::class,
+            fn (SystemMail $mail) => str_contains($mail->renderedSubject, 'jamais livrees'),
+        );
+
+        $this->assertGreaterThan(0, $mails->count());
+        $mails->each(function (SystemMail $mail) {
+            $this->assertStringContainsString('Fares Ben Salah', $mail->renderedHtml);
+            $this->assertStringContainsString('Poste de garde nationale', $mail->renderedHtml);
+            $this->assertStringContainsString('20123456', $mail->renderedHtml);
+        });
+    }
+
     public function test_no_alert_when_everything_was_delivered(): void
     {
         $this->fiche(WhatsappSendLog::DELIVERY_DELIVERED, now()->subDay());
@@ -212,7 +255,7 @@ class WhatsappUndeliveredWatchTest extends TestCase
         ));
     }
 
-    private function fiche(string $deliveryStatus, \Illuminate\Support\Carbon $sentAt): WhatsappSendLog
+    private function fiche(string $deliveryStatus, Carbon $sentAt): WhatsappSendLog
     {
         return WhatsappSendLog::create([
             'hotel_id' => $this->hotel->id,

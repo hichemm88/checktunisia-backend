@@ -9,6 +9,8 @@ use App\Models\User;
 use App\Models\WhatsappSendLog;
 use App\Models\WhatsappSessionState;
 use App\Services\Email\SystemMailer;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -195,7 +197,7 @@ class WhatsappAlertService
     {
         $key = 'whatsapp_channel_down:'.$channel;
 
-        if (! Cache::add($key, true, now()->addHour())) {
+        if (!Cache::add($key, true, now()->addHour())) {
             return;
         }
 
@@ -226,7 +228,7 @@ class WhatsappAlertService
      */
     public function templateMisconfigured(?int $code, ?string $reason, string $templateName, string $language): void
     {
-        if (! Cache::add('whatsapp_template_config:'.$templateName.':'.$language, true, now()->addDay())) {
+        if (!Cache::add('whatsapp_template_config:'.$templateName.':'.$language, true, now()->addDay())) {
             return;
         }
 
@@ -240,7 +242,7 @@ class WhatsappAlertService
             ."ne leur est décomptée.\n\n"
             ."À vérifier, dans cet ordre :\n"
             ."  1. le modèle est-il APPROVED chez Meta ? « php artisan whatsapp:templates »\n"
-            ."  2. WHATSAPP_TEMPLATE_NAME et WHATSAPP_TEMPLATE_LANGUAGE correspondent-ils EXACTEMENT "
+            .'  2. WHATSAPP_TEMPLATE_NAME et WHATSAPP_TEMPLATE_LANGUAGE correspondent-ils EXACTEMENT '
             ."au modèle approuvé ? Un écart d'une lettre produit ce code.\n\n"
             .'Les envois reprendront d\'eux-mêmes dès que le modèle sera approuvé : rien à relancer.',
             SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
@@ -263,7 +265,7 @@ class WhatsappAlertService
             ."L'envoi automatique est SUSPENDU : un arriéré de cette taille signale une panne, "
             ."et le vider d'un coup depuis un numéro neuf conduirait à un bannissement.\n\n"
             ."À faire : identifier la cause de l'accumulation, décider quelles fiches doivent "
-            ."réellement partir, puis débloquer explicitement avec « php artisan whatsapp:allow-backlog ». "
+            .'réellement partir, puis débloquer explicitement avec « php artisan whatsapp:allow-backlog ». '
             .'Aucune fiche n\'est perdue en attendant.',
             SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
         );
@@ -293,24 +295,42 @@ class WhatsappAlertService
      * poste de police n'a rien recu.
      *
      * Le message ne porte AUCUNE identite de voyageur : un email d'exploitation
-     * n'a pas a transporter les personnes qu'il denombre.
+     * n'a pas a transporter les personnes qu'il denombre. Le destinataire
+     * (agent/poste autorite) n'est pas un voyageur — c'est justement le
+     * compte dont il faut verifier le numero, donc l'email le nomme.
+     *
+     * @param  Collection<int, array{number: string, name: ?string, org: ?string, count: int, oldest_sent_at: ?Carbon}>|null  $recipients
      */
-    public function fichesUndelivered(int $count, int $minutes): void
+    public function fichesUndelivered(int $count, int $minutes, ?Collection $recipients = null): void
     {
+        $breakdown = ($recipients ?? collect())
+            ->map(function (array $r) {
+                $who = $r['name']
+                    ? $r['name'].($r['org'] ? " ({$r['org']})" : '')
+                    : ($r['org'] ?? 'destinataire non identifie (pas de compte autorite pour ce numero)');
+                $since = $r['oldest_sent_at']
+                    ? ' — bloquee(s) depuis '.$r['oldest_sent_at']->diffForHumans(null, true)
+                    : '';
+
+                return "  - {$who} — {$r['number']} : {$r['count']} fiche(s){$since}";
+            })
+            ->implode("\n");
+
         $this->dispatch(
             'WhatsApp Qayed — fiches acceptees mais jamais livrees',
             "{$count} fiche(s) ont ete acceptees par Meta il y a plus de {$minutes} min "
-            ."sans accuse de livraison.
+            .'sans accuse de livraison.
 
-"
+'
             ."Meta accuse reception a l'ACCEPTATION, pas a la livraison : ces fiches "
             ."apparaissent comme envoyees alors que le destinataire n'a peut-etre rien recu.
 
 "
+            .($breakdown !== '' ? "Compte(s) concerne(s) :\n{$breakdown}\n\n" : '')
             .'Causes usuelles : numero sans compte WhatsApp, appareil eteint, numero '
-            ."bloque, ou accuse de livraison perdu.
+            .'bloque, ou accuse de livraison perdu.
 
-"
+'
             .'A verifier dans le journal WhatsApp, puis renvoyer si necessaire.',
             SystemMailer::ctaButton(SystemMailer::frontendUrl('/admin/whatsapp'), 'Ouvrir le journal WhatsApp'),
         );

@@ -41,7 +41,7 @@ class CheckWhatsappHealth extends Command
 
     public function handle(WhatsappAlertService $alerts): void
     {
-        if (! config('whatsapp.enabled')) {
+        if (!config('whatsapp.enabled')) {
             return;
         }
 
@@ -129,7 +129,8 @@ class CheckWhatsappHealth extends Command
             return;
         }
 
-        $alerts->fichesUndelivered($count, $minutes);
+        $recipients = app(WhatsappOutboxService::class)->undeliveredRecipients($minutes);
+        $alerts->fichesUndelivered($count, $minutes, $recipients);
         Cache::put(self::UNDELIVERED_FLAG, $count, now()->addDay());
         $this->warn("{$count} fiche(s) acceptees mais jamais livrees — alerte envoyee.");
     }
