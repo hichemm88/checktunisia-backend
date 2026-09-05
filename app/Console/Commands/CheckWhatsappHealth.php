@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\WhatsappSessionState;
+use App\Services\Delivery\DeliveryChannelManager;
 use App\Services\Whatsapp\WhatsappAlertService;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Console\Command;
@@ -16,6 +17,14 @@ use Illuminate\Support\Facades\Cache;
  * sessionDown) — cette commande couvre le cas où il est MORT et ne signale
  * plus rien : battement de cœur périmé → alerte admin, une seule fois par
  * panne (flag en cache, levé au retour du heartbeat).
+ *
+ * Le worker et sa session appairée par QR n'existent que pour le canal
+ * WhatsApp Web (pull). Depuis la bascule vers l'API Cloud (push, sans worker
+ * ni session — voir WhatsAppCloudChannel), ces deux alertes n'ont plus de
+ * cible : la session Web reste figée sur son dernier état d'avant bascule
+ * (typiquement `logged_out`, depuis le bannissement du numéro), et sans ce
+ * garde-fou la commande le signalait comme une panne en cours, à chaque
+ * passage, indéfiniment.
  */
 class CheckWhatsappHealth extends Command
 {
@@ -39,7 +48,7 @@ class CheckWhatsappHealth extends Command
     /** Porte le NOMBRE de fiches non livrees deja signalees, pas un booleen. */
     private const UNDELIVERED_FLAG = 'whatsapp:undelivered-alerted';
 
-    public function handle(WhatsappAlertService $alerts): void
+    public function handle(WhatsappAlertService $alerts, DeliveryChannelManager $channels): void
     {
         if (!config('whatsapp.enabled')) {
             return;
@@ -48,7 +57,16 @@ class CheckWhatsappHealth extends Command
         // Fiches acceptees par Meta et jamais livrees. Verifie AVANT l'etat de
         // session : ce trou-la existe meme quand tout va bien par ailleurs —
         // c'est meme sa caracteristique, le canal a l'air en parfaite sante.
+        // Independant du canal actif : une fiche peut rester non livree que
+        // ce soit le Web ou le Cloud qui l'ait envoyee.
         $this->reportUndelivered($alerts);
+
+        // Le reste de cette methode ne concerne QUE le relais Web (session
+        // appairee par QR, worker Node). Le canal Cloud est en PUSH : PHP
+        // transmet lui-meme, il n'y a ni session ni worker a surveiller.
+        if ($channels->active()->supportsPush()) {
+            return;
+        }
 
         $state = WhatsappSessionState::current();
         $heartbeat = $state->heartbeat_at;

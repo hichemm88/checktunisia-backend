@@ -49,7 +49,7 @@ class WhatsappAdminController extends Controller
             // Verdict grossier, sans dire pourquoi : « degraded » suffit à
             // déclencher un regard humain, qui lira le détail côté admin.
             'status' => match (true) {
-                ! $enabled => 'disabled',
+                !$enabled => 'disabled',
                 $this->blockingReason($channels, $guard) !== null => 'degraded',
                 default => 'ok',
             },
@@ -79,6 +79,16 @@ class WhatsappAdminController extends Controller
         return response()->json(['data' => [
             'enabled' => $this->outbox->enabled(),
             'session' => $state->status,
+            /*
+             | Le statut ci-dessus ne décrit que le relais WhatsApp Web
+             | historique (session appairée par QR) : sur le canal Cloud API
+             | (PUSH, sans session ni QR — voir WhatsAppCloudChannel), il est
+             | figé sur son dernier état avant bascule et ne signale plus rien
+             | de réel. Sans ce champ, l'écran affiche indéfiniment
+             | « ré-appairage nécessaire » pour un canal qui n'en a jamais eu
+             | besoin.
+             */
+            'session_relevant' => !$channels->active()->supportsPush(),
             'reason' => $state->reason,
             'paused' => $state->paused,
             'last_ready_at' => $state->last_ready_at,
@@ -231,6 +241,17 @@ class WhatsappAdminController extends Controller
         $count = $this->outbox->resendAllFailed();
 
         return response()->json(['data' => ['ok' => true, 'requeued' => $count]]);
+    }
+
+    /**
+     * POST admin/whatsapp/logs/dismiss-failed — annule (sans les supprimer)
+     * toutes les fiches en échec définitif, au lieu de les relancer.
+     */
+    public function dismissFailed(): JsonResponse
+    {
+        $count = $this->outbox->dismissAllFailed();
+
+        return response()->json(['data' => ['ok' => true, 'dismissed' => $count]]);
     }
 
     /** POST admin/whatsapp/test — enfile une fiche factice [TEST]. */
