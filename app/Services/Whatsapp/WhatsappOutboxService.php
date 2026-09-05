@@ -3,6 +3,7 @@
 namespace App\Services\Whatsapp;
 
 use App\Contracts\DeliveryChannel;
+use App\Models\AuthorityUserProfile;
 use App\Models\CheckIn;
 use App\Models\DocumentScan;
 use App\Models\Guest;
@@ -13,6 +14,7 @@ use App\Services\Delivery\DeliveryChannelManager;
 use App\Services\Subscription\PlanEntitlements;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -309,7 +311,7 @@ class WhatsappOutboxService
         // `queueMayAdvance()` porte la même distinction pull/push que la
         // branche main écrivait ici : en PUSH il n'y a pas de session à
         // attendre, seulement la pause humaine.
-        if (! $this->enabled() || ! $this->queueMayAdvance()) {
+        if (!$this->enabled() || !$this->queueMayAdvance()) {
             return null;
         }
 
@@ -322,7 +324,7 @@ class WhatsappOutboxService
         // Il se cumule avec le plafond par MINUTE et par JOUR de
         // WhatsappSendingGuard : ils ne mesurent pas la même chose et se
         // complètent (rafale courte / usure quotidienne / réputation horaire).
-        if (! $this->throttle()['allowed']) {
+        if (!$this->throttle()['allowed']) {
             return null;
         }
 
@@ -364,7 +366,7 @@ class WhatsappOutboxService
         $state = WhatsappSessionState::current();
 
         return $this->channel()->supportsPush()
-            ? ! $state->paused
+            ? !$state->paused
             : $state->canDispatch();
     }
 
@@ -514,7 +516,7 @@ class WhatsappOutboxService
 
         $maxAge = (int) config('whatsapp.max_age_minutes', 1440);
 
-        if (! $retryable || $ageMinutes >= $maxAge) {
+        if (!$retryable || $ageMinutes >= $maxAge) {
             $job->update([
                 'status' => WhatsappSendLog::STATUS_FAILED,
                 'last_error' => $error,
@@ -579,7 +581,7 @@ class WhatsappOutboxService
     {
         $channel = $this->channel();
 
-        if (! $channel->supportsPush() || ! $this->enabled()) {
+        if (!$channel->supportsPush() || !$this->enabled()) {
             return ['sent' => 0, 'failed' => 0, 'cancelled' => 0, 'blocked' => null];
         }
 
@@ -619,7 +621,7 @@ class WhatsappOutboxService
         for ($i = 0; $i < $max; $i++) {
             // Budget de débit AVANT la réclamation : réclamer puis renoncer
             // consommerait une tentative sans qu'aucun envoi ait été tenté.
-            if (! $guard->minuteBudgetAvailable()) {
+            if (!$guard->minuteBudgetAvailable()) {
                 break;
             }
 
@@ -978,6 +980,60 @@ class WhatsappOutboxService
                 WhatsappSendLog::DELIVERY_READ,
                 WhatsappSendLog::DELIVERY_FAILED,
             ]);
+    }
+
+    /**
+     * Qui est bloqué, regroupé par destinataire — pas juste combien.
+     *
+     * L'alerte « fiches jamais livrées » disait un nombre et laissait
+     * l'administrateur rouvrir le journal WhatsApp, filtrer par « Envoyé » et
+     * repérer à la main la ligne figée : plusieurs minutes de recherche, à
+     * chaque email, pour une information que le système connaît déjà.
+     *
+     * Même résolution JID → agent que le journal (`WhatsappAdminController`) :
+     * un numéro qui correspond à un agent autorité identifie qui n'a rien
+     * reçu ; sinon on retombe sur le numéro global s'il correspond, ou sur le
+     * numéro brut. Aucune identité de VOYAGEUR n'y figure — seulement le
+     * destinataire police/agent, qui est une donnée d'exploitation.
+     *
+     * @return Collection<int, array{number: string, name: ?string, org: ?string, count: int, oldest_sent_at: ?Carbon}>
+     */
+    public function undeliveredRecipients(?int $minutes = null): Collection
+    {
+        $logs = $this->undeliveredQuery($minutes)->get(['recipient', 'sent_at']);
+
+        $profilesByNumber = AuthorityUserProfile::whereNotNull('whatsapp_number')
+            ->with(['user:id,first_name,last_name', 'organization:id,name'])
+            ->get()
+            ->keyBy(fn ($p) => preg_replace('/\D+/', '', (string) $p->whatsapp_number));
+
+        $globalNumber = preg_replace('/\D+/', '', (string) config('whatsapp.recipient'));
+
+        return $logs
+            ->map(function (WhatsappSendLog $log) use ($profilesByNumber, $globalNumber) {
+                $digits = preg_replace('/\D+/', '', (string) str_replace('@c.us', '', (string) $log->recipient));
+                $prof = $profilesByNumber[$digits] ?? null;
+                $name = $prof
+                    ? trim(((string) $prof->user?->first_name).' '.((string) $prof->user?->last_name))
+                    : ($digits !== '' && $digits === $globalNumber ? 'Numéro global' : null);
+
+                return [
+                    'number' => $digits ?: '—',
+                    'name' => $name ?: null,
+                    'org' => $prof?->organization?->name,
+                    'sent_at' => $log->sent_at,
+                ];
+            })
+            ->groupBy('number')
+            ->map(fn (Collection $group) => [
+                'number' => $group->first()['number'],
+                'name' => $group->first()['name'],
+                'org' => $group->first()['org'],
+                'count' => $group->count(),
+                'oldest_sent_at' => $group->min('sent_at'),
+            ])
+            ->sortByDesc('count')
+            ->values();
     }
 
     public function stuckCount(): int
