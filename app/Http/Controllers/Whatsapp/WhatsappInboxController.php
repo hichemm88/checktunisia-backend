@@ -126,6 +126,23 @@ class WhatsappInboxController extends Controller
     }
 
     /**
+     * GET admin/whatsapp/inbox/unread-count
+     *
+     * Endpoint dédié pour le badge de navigation : il doit rester lisible
+     * depuis n'importe quel écran de l'administration, pas seulement depuis
+     * cette page. Même définition que `meta.unread_total` ci-dessus — c'est
+     * la MÊME requête, pas une deuxième version qui pourrait diverger.
+     */
+    public function unreadCount(): JsonResponse
+    {
+        return response()->json([
+            'data' => [
+                'count' => (int) WhatsappConversation::where('unread_count', '>', 0)->sum('unread_count'),
+            ],
+        ]);
+    }
+
+    /**
      * GET admin/whatsapp/inbox/{id}
      *
      * Ouvrir un fil le marque lu CÔTÉ ADMINISTRATION uniquement. Rien n'est
@@ -291,6 +308,11 @@ class WhatsappInboxController extends Controller
      * Chaque source est bornée à TIMELINE_LIMIT AVANT la fusion : un fil très
      * bavard ne doit pas pouvoir charger tout le journal d'envoi en mémoire.
      *
+     * Les RÉACTIONS n'y figurent jamais comme entrées à part : sur WhatsApp,
+     * un emoji n'est pas un message, c'est une annotation d'un message
+     * existant. On les résout à part (voir `resolveReactions`) et on les
+     * accroche à l'entrée qu'elles visent.
+     *
      * @return array<int,array<string,mixed>>
      */
     private function timeline(WhatsappConversation $c): array
@@ -300,26 +322,78 @@ class WhatsappInboxController extends Controller
             ->with(['guest:id,first_name,last_name', 'hotel:id,name'])
             ->orderByDesc('queued_at')
             ->limit(self::TIMELINE_LIMIT)
-            ->get()
-            ->map(fn (WhatsappSendLog $l) => $this->ficheEntry($l));
+            ->get();
 
         $messages = WhatsappConversationMessage::query()
             ->where('conversation_id', $c->id)
             ->with('sender:id,first_name,last_name')
             ->orderByDesc('occurred_at')
             ->limit(self::TIMELINE_LIMIT)
-            ->get()
-            ->map(fn (WhatsappConversationMessage $m) => $this->message($m));
+            ->get();
 
-        return Collection::make($fiches)
-            ->merge($messages)
+        $reactions = $this->resolveReactions($c);
+
+        $ficheEntries = $fiches->map(fn (WhatsappSendLog $l) => $this->ficheEntry($l, $reactions));
+
+        $messageEntries = $messages
+            ->reject(fn (WhatsappConversationMessage $m) => $m->isReaction())
+            ->map(fn (WhatsappConversationMessage $m) => $this->message($m, $reactions));
+
+        return Collection::make($ficheEntries)
+            ->merge($messageEntries)
             ->sortBy('at')
             ->values()
             ->all();
     }
 
-    /** @return array<string,mixed> */
-    private function ficheEntry(WhatsappSendLog $l): array
+    /**
+     * État courant des réactions du fil, par wamid VISÉ.
+     *
+     * Meta ne redonne jamais l'historique : chaque webhook `reaction` porte
+     * l'état à cet instant. La ligne la plus récente par cible EST l'état
+     * courant — une réaction plus récente en remplace une plus ancienne sur
+     * la même cible, et un retrait (`reaction_emoji` NULL) fait disparaître
+     * la cible de la carte rendue ici.
+     *
+     * @return array<string,array{emoji:string,at:?string}>
+     */
+    private function resolveReactions(WhatsappConversation $c): array
+    {
+        $latestPerTarget = WhatsappConversationMessage::query()
+            ->where('conversation_id', $c->id)
+            ->where('type', WhatsappConversationMessage::TYPE_REACTION)
+            ->whereNotNull('target_wamid')
+            ->orderByDesc('occurred_at')
+            ->get()
+            ->unique('target_wamid');
+
+        $map = [];
+
+        foreach ($latestPerTarget as $reaction) {
+            if ($reaction->reaction_emoji === null) {
+                continue; // Retirée : rien à accrocher sur la cible.
+            }
+
+            $map[$reaction->target_wamid] = [
+                'emoji' => $reaction->reaction_emoji,
+                'at' => $reaction->occurred_at?->toIso8601String(),
+            ];
+        }
+
+        return $map;
+    }
+
+    /** @param array<string,array{emoji:string,at:?string}> $reactions */
+    private function reactionFor(?string $wamid, array $reactions): ?array
+    {
+        return $wamid !== null ? ($reactions[$wamid] ?? null) : null;
+    }
+
+    /**
+     * @param  array<string,array{emoji:string,at:?string}>  $reactions
+     * @return array<string,mixed>
+     */
+    private function ficheEntry(WhatsappSendLog $l, array $reactions = []): array
     {
         return [
             'kind' => 'fiche',
@@ -341,11 +415,15 @@ class WhatsappInboxController extends Controller
             'delivered_at' => $l->delivered_at?->toIso8601String(),
             'read_at' => $l->read_at?->toIso8601String(),
             'error' => $l->last_error,
+            'reaction' => $this->reactionFor($l->message_id_whatsapp, $reactions),
         ];
     }
 
-    /** @return array<string,mixed> */
-    private function message(WhatsappConversationMessage $m): array
+    /**
+     * @param  array<string,array{emoji:string,at:?string}>  $reactions
+     * @return array<string,mixed>
+     */
+    private function message(WhatsappConversationMessage $m, array $reactions = []): array
     {
         $sender = $m->sender;
 
@@ -369,6 +447,7 @@ class WhatsappInboxController extends Controller
             'read_at' => $m->read_at?->toIso8601String(),
             'error' => $m->error_message,
             'sent_by' => $sender ? trim($sender->first_name.' '.$sender->last_name) : null,
+            'reaction' => $this->reactionFor($m->wamid, $reactions),
         ];
     }
 }

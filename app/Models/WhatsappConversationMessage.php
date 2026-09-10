@@ -33,6 +33,9 @@ class WhatsappConversationMessage extends Model
 
     public const STATUS_FAILED = 'failed';
 
+    /** Type Meta d'un emoji posé sur un autre message — pas une bulle en soi. */
+    public const TYPE_REACTION = 'reaction';
+
     /** Longueur maximale d'un texte accepté par la Cloud API. */
     public const MAX_BODY_LENGTH = 4096;
 
@@ -46,6 +49,8 @@ class WhatsappConversationMessage extends Model
         'media_mime',
         'media_filename',
         'context_wamid',
+        'target_wamid',
+        'reaction_emoji',
         'sent_by_user_id',
         'status',
         'error_code',
@@ -86,5 +91,10 @@ class WhatsappConversationMessage extends Model
     public function isInbound(): bool
     {
         return $this->direction === self::DIRECTION_INBOUND;
+    }
+
+    public function isReaction(): bool
+    {
+        return $this->type === self::TYPE_REACTION;
     }
 }

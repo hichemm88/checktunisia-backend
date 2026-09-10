@@ -676,6 +676,9 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
              | pouvoir inonder un agent.
              */
             Route::get('whatsapp/inbox', [WhatsappInboxController::class, 'index']);
+            // AVANT la route à paramètre : sinon « unread-count » serait
+            // avalé comme un {id} et tomberait sur `show()`.
+            Route::get('whatsapp/inbox/unread-count', [WhatsappInboxController::class, 'unreadCount']);
             Route::get('whatsapp/inbox/{id}', [WhatsappInboxController::class, 'show']);
             Route::post('whatsapp/inbox/{id}/reply', [WhatsappInboxController::class, 'reply'])
                 ->middleware('throttle:10,1');

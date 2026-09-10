@@ -399,6 +399,146 @@ class AuthorityWhatsappInboxTest extends TestCase
         $this->assertSame('read', WhatsappConversationMessage::where('wamid', 'wamid.ORDER')->sole()->status);
     }
 
+    // ── Réactions ────────────────────────────────────────────────────────────
+
+    public function test_a_reaction_on_a_message_is_attached_to_it_not_shown_as_its_own_bubble(): void
+    {
+        $this->postSigned($this->inboundPayload('wamid.RM1', '21620123456', 'Bien reçu'))->assertOk();
+
+        $this->postSigned($this->reactionPayload('wamid.REACT1', '21620123456', 'wamid.RM1', '👍'))->assertOk();
+
+        $conversation = WhatsappConversation::sole();
+        $this->assertSame('A réagi 👍 à un message', $conversation->last_message_preview);
+
+        $admin = User::factory()->platformAdmin()->create();
+        $timeline = $this->actingAs($admin)
+            ->getJson("/api/v1/admin/whatsapp/inbox/{$conversation->id}")
+            ->assertOk()
+            ->json('data.timeline');
+
+        // Une seule entrée : la réaction n'est jamais sa propre bulle.
+        $this->assertCount(1, $timeline);
+        $this->assertSame('message', $timeline[0]['kind']);
+        $this->assertSame('wamid.RM1', $timeline[0]['wamid']);
+        $this->assertSame('👍', $timeline[0]['reaction']['emoji']);
+    }
+
+    public function test_a_reaction_on_a_transmitted_fiche_is_attached_to_the_fiche_card(): void
+    {
+        $job = $this->fiche('21620123456', 'wamid.FICHE1');
+
+        $this->postSigned($this->reactionPayload('wamid.REACT2', '21620123456', 'wamid.FICHE1', '🙏'))->assertOk();
+
+        $conversation = $job->fresh()->conversation;
+        $this->assertSame('A réagi 🙏 à une fiche', $conversation->last_message_preview);
+
+        $admin = User::factory()->platformAdmin()->create();
+        $timeline = $this->actingAs($admin)
+            ->getJson("/api/v1/admin/whatsapp/inbox/{$conversation->id}")
+            ->assertOk()
+            ->json('data.timeline');
+
+        $this->assertCount(1, $timeline);
+        $this->assertSame('fiche', $timeline[0]['kind']);
+        $this->assertSame('🙏', $timeline[0]['reaction']['emoji']);
+    }
+
+    public function test_a_new_reaction_from_the_same_agent_replaces_the_previous_one(): void
+    {
+        $this->postSigned($this->inboundPayload('wamid.RM2', '21620123456', 'Bien reçu'))->assertOk();
+        $this->postSigned($this->reactionPayload('wamid.REACT3', '21620123456', 'wamid.RM2', '👍'))->assertOk();
+        $this->postSigned($this->reactionPayload('wamid.REACT4', '21620123456', 'wamid.RM2', '❤️'))->assertOk();
+
+        $conversation = WhatsappConversation::sole();
+        $this->assertSame('A réagi ❤️ à un message', $conversation->last_message_preview);
+
+        $admin = User::factory()->platformAdmin()->create();
+        $timeline = $this->actingAs($admin)
+            ->getJson("/api/v1/admin/whatsapp/inbox/{$conversation->id}")
+            ->assertOk()
+            ->json('data.timeline');
+
+        $this->assertCount(1, $timeline);
+        $this->assertSame('❤️', $timeline[0]['reaction']['emoji']);
+    }
+
+    public function test_removing_a_reaction_falls_back_to_the_last_real_message_and_stays_read(): void
+    {
+        $this->postSigned($this->inboundPayload('wamid.RM3', '21620123456', 'Bien reçu'))->assertOk();
+        $this->postSigned($this->reactionPayload('wamid.REACT5', '21620123456', 'wamid.RM3', '👍'))->assertOk();
+
+        $conversation = WhatsappConversation::sole();
+        // La réponse au fil est ouverte entre les deux webhooks, comme le
+        // ferait un administrateur qui a déjà lu le message avant le retrait.
+        app(\App\Services\Whatsapp\WhatsappConversationService::class)->markRead($conversation);
+
+        // Retrait : emoji absent du payload.
+        $this->postSigned($this->reactionPayload('wamid.REACT6', '21620123456', 'wamid.RM3', null))->assertOk();
+
+        $conversation->refresh();
+        $this->assertSame('Bien reçu', $conversation->last_message_preview);
+        $this->assertSame(
+            0,
+            $conversation->unread_count,
+            'Le retrait d\'une réaction ne doit pas remettre le fil en non-lu.',
+        );
+
+        $admin = User::factory()->platformAdmin()->create();
+        $timeline = $this->actingAs($admin)
+            ->getJson("/api/v1/admin/whatsapp/inbox/{$conversation->id}")
+            ->assertOk()
+            ->json('data.timeline');
+
+        $this->assertCount(1, $timeline);
+        $this->assertNull($timeline[0]['reaction']);
+    }
+
+    public function test_a_reaction_on_an_unknown_wamid_is_stored_without_crashing_or_an_orphan_bubble(): void
+    {
+        $this->postSigned($this->inboundPayload('wamid.RM4', '21620123456', 'Bien reçu'))->assertOk();
+
+        $this->postSigned(
+            $this->reactionPayload('wamid.REACT7', '21620123456', 'wamid.INTROUVABLE', '👍'),
+        )->assertOk();
+
+        $conversation = WhatsappConversation::sole();
+
+        // Enregistrée quand même : ni perdue, ni cause de panne du webhook.
+        $this->assertSame(1, WhatsappConversationMessage::where('type', 'reaction')->count());
+
+        $admin = User::factory()->platformAdmin()->create();
+        $timeline = $this->actingAs($admin)
+            ->getJson("/api/v1/admin/whatsapp/inbox/{$conversation->id}")
+            ->assertOk()
+            ->json('data.timeline');
+
+        // Mais rien de tel qu'une bulle « reaction » orpheline dans le fil.
+        $this->assertCount(1, $timeline);
+        $this->assertSame('message', $timeline[0]['kind']);
+        $this->assertSame('wamid.RM4', $timeline[0]['wamid']);
+        $this->assertNull($timeline[0]['reaction']);
+    }
+
+    public function test_the_sidebar_unread_count_endpoint_matches_the_list_total(): void
+    {
+        $this->postSigned($this->inboundPayload('wamid.UC1', '21620111111', 'A'))->assertOk();
+        $this->postSigned($this->inboundPayload('wamid.UC2', '21620222222', 'B'))->assertOk();
+
+        $admin = User::factory()->platformAdmin()->create();
+
+        $listTotal = $this->actingAs($admin)
+            ->getJson('/api/v1/admin/whatsapp/inbox')
+            ->assertOk()
+            ->json('meta.unread_total');
+
+        $this->actingAs($admin)
+            ->getJson('/api/v1/admin/whatsapp/inbox/unread-count')
+            ->assertOk()
+            ->assertJsonPath('data.count', $listTotal);
+
+        $this->assertSame(2, $listTotal);
+    }
+
     // ── Écran ────────────────────────────────────────────────────────────────
 
     public function test_the_timeline_merges_fiches_and_messages_in_order(): void
@@ -564,6 +704,30 @@ class AuthorityWhatsappInboxTest extends TestCase
                 'type' => 'text',
                 'timestamp' => (string) now()->timestamp,
                 'text' => ['body' => $body],
+            ]],
+        ]]]]]];
+    }
+
+    /**
+     * Webhook Meta d'une réaction — `emoji` null simule un RETRAIT, exactement
+     * comme Meta l'envoie (le champ est simplement absent du payload).
+     *
+     * @return array<string,mixed>
+     */
+    private function reactionPayload(string $wamid, string $from, string $targetWamid, ?string $emoji): array
+    {
+        $reaction = ['message_id' => $targetWamid];
+        if ($emoji !== null) {
+            $reaction['emoji'] = $emoji;
+        }
+
+        return ['entry' => [['changes' => [['value' => [
+            'messages' => [[
+                'id' => $wamid,
+                'from' => $from,
+                'type' => 'reaction',
+                'timestamp' => (string) now()->timestamp,
+                'reaction' => $reaction,
             ]],
         ]]]]]];
     }

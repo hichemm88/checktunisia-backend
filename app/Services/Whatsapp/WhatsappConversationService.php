@@ -164,6 +164,31 @@ class WhatsappConversationService
 
             $type = (string) ($message['type'] ?? 'unsupported');
             $occurredAt = $this->timestamp($message['timestamp'] ?? null);
+            $isReaction = $type === WhatsappConversationMessage::TYPE_REACTION;
+            $targetWamid = $isReaction ? $this->reactionTargetWamid($message) : null;
+            $reactionEmoji = $isReaction ? $this->reactionEmoji($message) : null;
+
+            if ($isReaction && $targetWamid !== null && ! $this->wamidExists($targetWamid, $conversation->id)) {
+                // Cas limite documenté : la cible n'est pas (encore, ou plus)
+                // connue de ce fil. On enregistre quand même — le message visé
+                // peut arriver plus tard dans la même livraison, ou avoir été
+                // purgé — mais rien n'affichera de bulle orpheline : le
+                // contrôleur n'expose une réaction qu'accrochée à sa cible.
+                Log::info('[whatsapp-inbox] réaction sur un wamid inconnu de ce fil', [
+                    'conversation_id' => $conversation->id,
+                    'target_wamid' => $targetWamid,
+                ]);
+            }
+
+            /*
+             * Une réaction RETIRÉE (emoji vide) n'est pas une activité qui
+             * doit rouvrir le fil : elle n'avance ni `last_inbound_at`, ni le
+             * compteur de non-lus, ni l'aperçu de liste. Sans cette
+             * distinction, retirer un 👍 remettrait un fil déjà traité en
+             * tête de la boîte de réception, non lu — l'inverse de ce que
+             * l'agent vient de faire.
+             */
+            $isReactionRemoval = $isReaction && $reactionEmoji === null;
 
             /*
              * Deux écritures pour un seul événement — enregistrer le message,
@@ -180,7 +205,10 @@ class WhatsappConversationService
              * écrit » alors qu'elle vient de le faire, et la réponse reste
              * bloquée jusqu'à son PROCHAIN message.
              */
-            $stored = DB::transaction(function () use ($conversation, $wamid, $type, $message, $occurredAt) {
+            $stored = DB::transaction(function () use (
+                $conversation, $wamid, $type, $message, $occurredAt,
+                $targetWamid, $reactionEmoji, $isReactionRemoval,
+            ) {
                 $stored = WhatsappConversationMessage::create([
                     'conversation_id' => $conversation->id,
                     'direction' => WhatsappConversationMessage::DIRECTION_INBOUND,
@@ -191,16 +219,27 @@ class WhatsappConversationService
                     'media_mime' => $this->mediaField($message, $type, 'mime_type'),
                     'media_filename' => $this->mediaField($message, $type, 'filename'),
                     'context_wamid' => $message['context']['id'] ?? null,
+                    'target_wamid' => $targetWamid,
+                    'reaction_emoji' => $reactionEmoji,
                     'occurred_at' => $occurredAt,
                 ]);
 
-                $conversation->forceFill([
-                    'last_inbound_at' => $occurredAt,
-                    'last_message_at' => $occurredAt,
-                    'last_message_direction' => WhatsappConversation::DIRECTION_INBOUND,
-                    'last_message_preview' => $this->preview($stored),
-                    'unread_count' => $conversation->unread_count + 1,
-                ])->save();
+                if (! $isReactionRemoval) {
+                    $conversation->forceFill([
+                        'last_inbound_at' => $occurredAt,
+                        'last_message_at' => $occurredAt,
+                        'last_message_direction' => WhatsappConversation::DIRECTION_INBOUND,
+                        'last_message_preview' => $this->preview($stored),
+                        'unread_count' => $conversation->unread_count + 1,
+                    ])->save();
+                } else {
+                    // Le retrait ne touche pas au compteur de non-lus, mais
+                    // l'aperçu de liste NE DOIT PAS rester bloqué sur une
+                    // réaction qui n'existe plus : s'il portait justement le
+                    // texte de CETTE réaction, on le fait retomber sur la
+                    // dernière activité réelle du fil.
+                    $this->resyncLastMessageSummaryAfterReactionRemoved($conversation);
+                }
 
                 return $stored;
             });
@@ -475,11 +514,128 @@ class WhatsappConversationService
 
     private function preview(WhatsappConversationMessage $message): string
     {
+        if ($message->isReaction()) {
+            // N'est appelé que pour une réaction AJOUTÉE ou REMPLACÉE — un
+            // retrait ne passe jamais ici, voir `resyncLastMessageSummary...`.
+            $targetsFiche = $message->target_wamid !== null
+                && WhatsappSendLog::where('conversation_id', $message->conversation_id)
+                    ->where('message_id_whatsapp', $message->target_wamid)
+                    ->exists();
+
+            return sprintf(
+                'A réagi %s à %s',
+                $message->reaction_emoji,
+                $targetsFiche ? 'une fiche' : 'un message',
+            );
+        }
+
         if (filled($message->body)) {
             return mb_substr((string) $message->body, 0, self::PREVIEW_LENGTH);
         }
 
         return '['.$message->type.']';
+    }
+
+    /**
+     * wamid visé par une réaction (`reaction.message_id` chez Meta) — celui
+     * du message qui a REÇU l'emoji, jamais celui de la réaction elle-même.
+     */
+    private function reactionTargetWamid(array $message): ?string
+    {
+        $value = $message['reaction']['message_id'] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
+     * Emoji d'une réaction. Rend null aussi bien pour un champ absent que
+     * vide : Meta signale un RETRAIT des deux façons selon les versions de
+     * l'API, et les deux doivent produire le même comportement ici.
+     */
+    private function reactionEmoji(array $message): ?string
+    {
+        $value = $message['reaction']['emoji'] ?? null;
+
+        return is_string($value) && trim($value) !== '' ? trim($value) : null;
+    }
+
+    /** La cible d'une réaction est-elle un wamid déjà connu de ce fil ? */
+    private function wamidExists(string $wamid, string $conversationId): bool
+    {
+        return WhatsappConversationMessage::where('conversation_id', $conversationId)
+            ->where('wamid', $wamid)
+            ->exists()
+            || WhatsappSendLog::where('conversation_id', $conversationId)
+                ->where('message_id_whatsapp', $wamid)
+                ->exists();
+    }
+
+    /**
+     * Après le retrait d'une réaction, l'aperçu de liste doit redevenir celui
+     * de la DERNIÈRE ACTIVITÉ RÉELLE du fil — jamais celui de la réaction
+     * qu'on vient d'effacer. On recalcule plutôt que de garder l'ancienne
+     * valeur : si c'était justement cette réaction qui portait l'aperçu
+     * affiché, la laisser telle quelle montrerait un emoji qui n'existe plus.
+     */
+    private function resyncLastMessageSummaryAfterReactionRemoved(WhatsappConversation $conversation): void
+    {
+        $lastFiche = WhatsappSendLog::where('conversation_id', $conversation->id)
+            ->orderByDesc(DB::raw('COALESCE(sent_at, queued_at)'))
+            ->first();
+        $lastFicheAt = $lastFiche?->sent_at ?? $lastFiche?->queued_at;
+
+        $lastPlainMessage = WhatsappConversationMessage::where('conversation_id', $conversation->id)
+            ->where('type', '!=', WhatsappConversationMessage::TYPE_REACTION)
+            ->orderByDesc('occurred_at')
+            ->first();
+
+        /*
+         * Une réaction encore active sur une AUTRE cible que celle qu'on
+         * vient de retirer compte aussi comme activité réelle. « Active » se
+         * juge comme le contrôleur le fait pour l'écran : la ligne la plus
+         * RÉCENTE par cible, si son emoji n'est pas vide — une ligne plus
+         * ancienne sur la MÊME cible que celle qu'on retire ne doit jamais
+         * revenir, sous peine de réafficher l'emoji qu'on vient d'effacer.
+         */
+        $lastActiveReaction = WhatsappConversationMessage::where('conversation_id', $conversation->id)
+            ->where('type', WhatsappConversationMessage::TYPE_REACTION)
+            ->whereNotNull('target_wamid')
+            ->orderByDesc('occurred_at')
+            ->get()
+            ->unique('target_wamid')
+            ->first(fn (WhatsappConversationMessage $r) => $r->reaction_emoji !== null);
+
+        $candidates = array_filter([
+            $lastFicheAt !== null ? ['at' => $lastFicheAt, 'kind' => 'fiche'] : null,
+            $lastPlainMessage !== null ? ['at' => $lastPlainMessage->occurred_at, 'kind' => 'message', 'message' => $lastPlainMessage] : null,
+            $lastActiveReaction !== null ? ['at' => $lastActiveReaction->occurred_at, 'kind' => 'message', 'message' => $lastActiveReaction] : null,
+        ]);
+
+        if ($candidates === []) {
+            // Le fil n'a d'activité que cette réaction déjà retirée. On
+            // laisse l'aperçu existant plutôt que d'inventer un état vide —
+            // cas d'école qui ne devrait jamais se produire en pratique.
+            return;
+        }
+
+        usort($candidates, fn ($a, $b) => $b['at']->compare($a['at']));
+        $latest = $candidates[0];
+
+        if ($latest['kind'] === 'fiche') {
+            $conversation->forceFill([
+                'last_message_at' => $latest['at'],
+                'last_message_direction' => WhatsappConversation::DIRECTION_OUTBOUND,
+                'last_message_preview' => 'Fiche de police transmise',
+            ])->save();
+
+            return;
+        }
+
+        $conversation->forceFill([
+            'last_message_at' => $latest['at'],
+            'last_message_direction' => $latest['message']->direction,
+            'last_message_preview' => $this->preview($latest['message']),
+        ])->save();
     }
 
     /**
