@@ -6,13 +6,14 @@ use App\Models\CheckIn;
 use App\Models\CheckInGuest;
 use App\Models\DocumentScan;
 use App\Models\Guest;
-use App\Models\Room;
 use App\Models\Hotel;
+use App\Models\Room;
 use App\Models\TravelDocument;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
 use App\Services\Notifications\PushNotificationService;
 use App\Services\OCR\OcrService;
+use App\Services\Subscription\CheckinUsageRecorder;
 use App\Services\Watchlist\WatchlistService;
 use App\Services\Whatsapp\WhatsappOutboxService;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -101,7 +102,7 @@ class CheckInService
             $guest = $this->findOrCreateGuest($data);
 
             // Upsert travel document
-            if (! empty($data['document'])) {
+            if (!empty($data['document'])) {
                 $this->upsertDocument($guest, $data['document']);
             }
 
@@ -117,7 +118,7 @@ class CheckInService
                 ->wherePivot('is_primary', true)
                 ->where('guests.id', '!=', $guest->id)
                 ->exists();
-            $isPrimary = ! empty($data['is_primary']) ? true : ! $hasOtherPrimary;
+            $isPrimary = !empty($data['is_primary']) ? true : !$hasOtherPrimary;
 
             CheckInGuest::updateOrCreate(
                 ['check_in_id' => $checkIn->id, 'guest_id' => $guest->id],
@@ -135,7 +136,7 @@ class CheckInService
             // MODULE PROVISOIRE — relais WhatsApp : relie le scan de ce voyageur
             // (téléversé à l'étape scan, guest_id null) à son voyageur, pour que
             // chaque fiche parte avec LA bonne photo (support multi-voyageurs).
-            if (! empty($data['scan_id'])) {
+            if (!empty($data['scan_id'])) {
                 DocumentScan::where('id', $data['scan_id'])
                     ->where('check_in_id', $checkIn->id)
                     ->whereNull('guest_id')
@@ -165,7 +166,7 @@ class CheckInService
             // voyageur ajouté après coup (mode amend).
             $isTestFiche = (bool) ($checkIn->metadata['test_mode'] ?? false);
 
-            if ($checkIn->status !== 'draft' && ! $isTestFiche) {
+            if ($checkIn->status !== 'draft' && !$isTestFiche) {
                 app(WhatsappOutboxService::class)->enqueueForGuest($checkIn, $guest);
             }
 
@@ -189,12 +190,12 @@ class CheckInService
                 'place_of_birth' => $data['place_of_birth'] ?? null,
                 'email' => $data['email'] ?? null,
                 'phone' => $data['phone'] ?? null,
-            ], fn ($v) => ! is_null($v)));
+            ], fn ($v) => !is_null($v)));
 
-            if (! empty($data['document'])) {
+            if (!empty($data['document'])) {
                 $doc = $guest->primaryDocument;
                 if ($doc) {
-                    $changes = array_filter($data['document'], fn ($v) => ! is_null($v));
+                    $changes = array_filter($data['document'], fn ($v) => !is_null($v));
 
                     // Même normalisation qu'à la création, sinon une correction
                     // manuelle ré-introduisait les formes non canoniques
@@ -282,7 +283,7 @@ class CheckInService
             // notification, et surtout DEUX fiches de police envoyées.
             $checkIn = $this->lockFresh($checkIn);
 
-            if (! $checkIn->isDraft()) {
+            if (!$checkIn->isDraft()) {
                 throw new \DomainException('Only draft check-ins can be completed.');
             }
 
@@ -310,8 +311,8 @@ class CheckInService
             // transaction que le passage en « active » : si la finalisation
             // échoue, aucune consommation n'est laissée derrière. L'unicité
             // SQL sur check_in_id rend l'écriture rejouable sans risque.
-            if (! $isTestFiche) {
-                \App\Services\Subscription\CheckinUsageRecorder::recordSafely($checkIn);
+            if (!$isTestFiche) {
+                CheckinUsageRecorder::recordSafely($checkIn);
             }
 
             // ── Watchlist check: flag hotel if any guest is on a watchlist ──
@@ -327,7 +328,7 @@ class CheckInService
             // unique. Uniquement de l'enfilage (inserts) : l'envoi réel est fait par
             // le worker Node. Entièrement gardé/avalé — un souci WhatsApp ne doit
             // jamais bloquer ni ralentir le check-in. Inerte si WHATSAPP_POLICE_ENABLED=false.
-            if (! $isTestFiche) {
+            if (!$isTestFiche) {
                 app(WhatsappOutboxService::class)->enqueueForCheckIn($checkIn);
             }
 
@@ -347,7 +348,7 @@ class CheckInService
             // enregistrer.
             $checkIn = $this->lockFresh($checkIn);
 
-            if (! in_array($checkIn->status, ['draft', 'active'], true)) {
+            if (!in_array($checkIn->status, ['draft', 'active'], true)) {
                 throw new \DomainException('Only an open (draft or active) check-in can be checked out.');
             }
 
@@ -447,7 +448,7 @@ class CheckInService
             // managers ; annuler un séjour déjà clôturé effaçait un départ réel.
             $checkIn = $this->lockFresh($checkIn);
 
-            if (! in_array($checkIn->status, ['draft', 'active'], true)) {
+            if (!in_array($checkIn->status, ['draft', 'active'], true)) {
                 throw new \DomainException('Only an open (draft or active) check-in can be cancelled.');
             }
 
@@ -462,7 +463,7 @@ class CheckInService
             // consommation. Elle ne rend PAS le check-in — la fiche a été
             // déclarée. Sans consommation posée (annulation d'un brouillon),
             // il n'y a rien à horodater.
-            \App\Services\Subscription\CheckinUsageRecorder::markCancelled($checkIn);
+            CheckinUsageRecorder::markCancelled($checkIn);
 
             app(PushNotificationService::class)
                 ->notifyCheckInEvent($checkIn, PushNotificationService::TYPE_FICHE_CANCELLED, $actor);
@@ -473,8 +474,15 @@ class CheckInService
 
     /**
      * Upload a passport scan and trigger OCR.
+     *
+     * `$runOcr = false` (widget embarqué, voir WidgetScanController) laisse le
+     * scan en 'pending' : OcrService répond à une question qui ne se pose pas
+     * pour ce chemin (décision mock/skip selon l'ENVIRONNEMENT du serveur),
+     * hors de propos pour une lecture qui doit se faire quel que soit
+     * l'environnement — c'est WidgetVisionScanService qui la fait, à l'appelant
+     * de la déclencher.
      */
-    public function uploadScan(CheckIn $checkIn, User $uploader, UploadedFile $file): DocumentScan
+    public function uploadScan(CheckIn $checkIn, User $uploader, UploadedFile $file, bool $runOcr = true): DocumentScan
     {
         $hash = hash_file('sha256', $file->getRealPath());
 
@@ -528,7 +536,9 @@ class CheckInService
         // un état d'attente qui ne se résolvait jamais et que rien ne signalait.
         // OcrService décide seul de ce qui est honnête selon le pilote et
         // l'environnement (extraction, échec explicite, ou lecture non effectuée).
-        $this->ocrService->process($scan);
+        if ($runOcr) {
+            $this->ocrService->process($scan);
+        }
 
         return $scan->fresh();
     }
@@ -564,7 +574,7 @@ class CheckInService
         // Le triplet est NORMALISÉ (cf. DocumentIdentity) : sans ça « TN »/« TUN »
         // ou « ab 123 »/« AB123 » désignaient deux documents, donc deux voyageurs,
         // pour une seule et même personne.
-        if (! empty($data['document']['document_number'])) {
+        if (!empty($data['document']['document_number'])) {
             $key = DocumentIdentity::key($data['document']);
 
             $doc = TravelDocument::where('type', $key['type'])
@@ -644,7 +654,7 @@ class CheckInService
             'expiry_date' => $docData['expiry_date'] ?? null,
             'mrz_line1' => $docData['mrz_line1'] ?? null,
             'mrz_line2' => $docData['mrz_line2'] ?? null,
-        ], fn ($v) => ! is_null($v) && $v !== '');
+        ], fn ($v) => !is_null($v) && $v !== '');
 
         return TravelDocument::updateOrCreate(
             $key,

@@ -102,6 +102,42 @@ l'interaction utilisateur d'octroi de permission.
       `GET /widget/v1/scan/{scanId}/status` finit par renvoyer
       `status` terminal avec `confidence`/`extracted` renseignés.
 
+## 4bis. Lecture réelle du document (CIN et passeport)
+
+**Pourquoi manuel** : la lecture passe par un modèle de vision (Claude) sur une
+vraie photo — aucun test automatisé ne remplace un contrôle visuel sur des
+pièces réelles (éclairage, angle, reflets, format CIN ancien/biométrique).
+`WidgetVisionScanServiceTest` (PHPUnit) ne couvre que la fusion MRZ ↔ lecture
+libre, jamais l'appel réseau lui-même — voir la discipline de test déjà
+suivie pour `FicheScanCropper`.
+
+- [ ] `OCR_DRIVER` reste sur son défaut (`mock`) — n'affecte pas ce chemin,
+      voir `config/ocr.php` (`widget_vision` est un bloc séparé). Vérifier que
+      `WIDGET_SCAN_AI` n'est pas à `false` et qu'`ANTHROPIC_API_KEY` est bien
+      définie sur l'environnement testé.
+- [ ] Bouton « Scanner CIN » : photographier une vraie CIN tunisienne
+      (légale ou biométrique) avec un bon éclairage. Vérifier que
+      prénom/nom/date de naissance/numéro sont correctement prérempli dans le
+      formulaire (comparer à l'œil avec la pièce), et que `document_type`
+      vaut bien « Carte d'identité ».
+- [ ] Bouton « Scanner passeport » : vérifier que le cadre de visée affiche
+      bien la bande MRZ (pointillés) et photographier un vrai passeport ouvert
+      à la page de données. Vérifier que les champs proviennent de la lecture
+      MRZ déterministe (numéro de document, date de naissance, sexe,
+      expiration cohérents avec le passeport), pas d'une simple lecture
+      visuelle approximative.
+- [ ] Photographier un document flou/mal cadré/sans pièce (ex. la table vide)
+      → vérifier un message d'erreur clair (pas de blocage, pas de champs
+      inventés) et que la saisie manuelle reste possible.
+- [ ] Reprendre exactement la même photo une seconde fois (retake avec le
+      même cadrage/lumière autant que possible, ou réutiliser le même fichier
+      via « Importer une image ») → vérifier dans `Admin > Coûts IA` qu'un
+      seul événement `cin_scan`/`passport_scan` a été facturé pour ce
+      check-in (idempotence par hash, voir `uploadScan`).
+- [ ] Vérifier dans `Admin > Coûts IA` que les événements de cette session
+      apparaissent avec le bon `feature` (`cin_scan` ou `passport_scan` selon
+      le bouton utilisé) et un coût non nul.
+
 ## 5. Responsive tablette / mobile
 
 - [ ] Réduire le viewport à une largeur tablette (~768px) : vérifier que la

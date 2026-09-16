@@ -38,8 +38,12 @@ Route::prefix('v1')
             ->middleware('throttle:establishment-link-exchange');
 
         Route::get('establishments', [PartnerEstablishmentController::class, 'index']);
+        Route::get('establishments/{hotel_id}/rooms', [PartnerEstablishmentController::class, 'rooms']);
 
         Route::post('fiche-sessions', [FicheSessionController::class, 'store']);
+        // AVANT la route à paramètre : sinon "by-booking-ref" serait avalé
+        // comme un {session_id} et tomberait sur show().
+        Route::get('fiche-sessions/by-booking-ref', [FicheSessionController::class, 'showByBookingRef']);
         Route::get('fiche-sessions/{session_id}', [FicheSessionController::class, 'show']);
 
         Route::get('fiches/{fiche_id}', [PartnerFicheController::class, 'show']);

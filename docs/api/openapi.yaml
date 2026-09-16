@@ -174,6 +174,59 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
 
+  /v1/establishments/{hotel_id}/rooms:
+    get:
+      tags: [Établissements]
+      summary: Lister les chambres réelles d'un établissement
+      description: |
+        Renvoie les chambres telles qu'elles existent dans Qayed. Les libellés
+        partenaire (import OTA, etc.) diffèrent presque toujours des noms Qayed —
+        construisez votre propre table de correspondance à partir de cette liste et
+        envoyez `room_id` (pas un nom en texte libre) dans `POST /v1/fiche-sessions`
+        pour que la fiche soit réellement rattachée à la bonne chambre.
+      operationId: listEstablishmentRooms
+      parameters:
+        - name: hotel_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Chambres de l'établissement.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        number: { type: string }
+                        floor: { type: integer, nullable: true }
+                        type: { type: string }
+                        capacity: { type: integer }
+                        status: { type: string, enum: [available, occupied, maintenance, inactive] }
+              example:
+                data:
+                  - id: "3c1a9e7a-2b4d-4f6a-8c0e-1a2b3c4d5e6f"
+                    number: "Chambre verte"
+                    floor: 1
+                    type: "standard"
+                    capacity: 2
+                    status: "available"
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '403':
+          description: Établissement non lié à ce partenaire (`establishment_not_linked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
   /v1/fiche-sessions:
     post:
       tags: [Sessions de fiche]
@@ -220,6 +273,21 @@ paths:
                   type: string
                   maxLength: 100
                   nullable: true
+                  description: |
+                    Libellé partenaire brut, conservé pour affichage uniquement (badge
+                    « via {partenaire} » dans l'historique Qayed). Ne rattache la fiche à
+                    AUCUNE chambre réelle — utilisez `room_id` pour ça.
+                room_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: |
+                    Chambre RÉELLE de l'établissement (voir
+                    `GET /v1/establishments/{hotel_id}/rooms`). Si fournie, doit
+                    appartenir à `establishment_id` et être libre (aucune fiche
+                    draft/active en cours) — sinon `422 validation_error`. Peut être
+                    ajouté sur un appel ultérieur tant que la fiche est encore un
+                    brouillon jamais soumis (jamais modifiable après soumission).
                 guests:
                   type: array
                   maxItems: 20
@@ -275,6 +343,50 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         '422':
           description: Erreur de validation (`validation_error`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/fiche-sessions/by-booking-ref:
+    get:
+      tags: [Sessions de fiche]
+      summary: Retrouver la dernière session connue pour une réservation
+      description: |
+        Utile quand vous n'avez plus le `session_id` d'origine (redémarrage de votre
+        intégration, page rechargée) et voulez savoir si une fiche existe déjà pour
+        cette réservation avant d'afficher/activer un bouton « Fiche police ». Même
+        forme de réponse que `GET /v1/fiche-sessions/{session_id}`.
+      operationId: findFicheSessionByBookingRef
+      parameters:
+        - name: establishment_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: booking_ref
+          in: query
+          required: true
+          schema: { type: string, maxLength: 100 }
+      responses:
+        '200':
+          description: Dernière session connue pour ce couple (establishment_id, booking_ref).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: { type: string, format: uuid }
+                  status: { type: string, enum: [pending, submitted, expired] }
+                  fiche_id: { type: string, format: uuid, nullable: true }
+                  booking_ref: { type: string }
+                  created_at: { type: string, format: date-time }
+                  expires_at: { type: string, format: date-time }
+                required: [session_id, status, fiche_id, booking_ref, created_at, expires_at]
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '404':
+          description: Aucune session n'a jamais été créée pour cette réservation (`session_not_found`).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -531,11 +643,11 @@ paths:
   /widget/v1/scan:
     post:
       tags: [Widget]
-      summary: "[Widget uniquement] Envoyer une capture CIN/passeport pour OCR"
+      summary: "[Widget uniquement] Envoyer une capture CIN/passeport pour lecture"
       description: |
-        Même pipeline OCR que la capture native (`ScanController`), authentifié par le
-        jeton de session widget. Nécessite `allow="camera"` sur l'iframe du partenaire
-        pour que la caméra embarquée fonctionne (voir `widget-integration.html`).
+        Lecture par un modèle de vision (Claude), authentifiée par le jeton de session
+        widget. Nécessite `allow="camera"` sur l'iframe du partenaire pour que la caméra
+        embarquée fonctionne (voir `widget-integration.html`).
       operationId: widgetScan
       security:
         - widgetSession: []
@@ -551,6 +663,14 @@ paths:
                   type: string
                   format: binary
                   description: jpeg, jpg, png, heic ou pdf — 10 Mo maximum.
+                document_type:
+                  type: string
+                  enum: [cin, passport]
+                  default: cin
+                  description: |
+                    Type de document photographié — ajuste le cadrage attendu et, pour
+                    un passeport, déclenche la relecture déterministe de la zone MRZ en
+                    complément de la lecture libre du modèle.
       responses:
         '202':
           description: Scan accepté, OCR en cours de traitement.

@@ -8,6 +8,7 @@ use App\Models\ApiPartner;
 use App\Models\CheckIn;
 use App\Models\FicheSession;
 use App\Models\Hotel;
+use App\Models\Room;
 use App\Services\CheckIn\CheckInService;
 use App\Services\Subscription\PlanEntitlements;
 use Illuminate\Support\Facades\DB;
@@ -69,6 +70,10 @@ class FicheSessionService
                     ]);
                 }
 
+                if ($existing->mode === FicheSession::MODE_CREATE) {
+                    $this->maybeAssignRoom($hotel, $existing->check_in_id, $data);
+                }
+
                 return ['session' => $existing, 'created' => false];
             }
 
@@ -96,6 +101,13 @@ class FicheSessionService
             }
 
             if ($existingCheckIn && $existingCheckIn->status === 'draft') {
+                // Le brouillon a pu être créé sans room_id (partenaire n'ayant
+                // pas encore sa table de correspondance) ; une nouvelle
+                // demande qui EN apporte un corrige l'affectation avant que
+                // la fiche ne soit finalisée — jamais après (voir amend
+                // ci-dessus, qui ne touche pas au brouillon déjà clos).
+                $this->maybeAssignRoom($hotel, $existingCheckIn->id, $data);
+
                 $session = $this->makeSession($partner, $apiKey, $hotel, $data, FicheSession::MODE_CREATE, $existingCheckIn->id);
 
                 return ['session' => $session, 'created' => false];
@@ -105,7 +117,10 @@ class FicheSessionService
             $actor = $this->actor->forOrganization($org = $hotel->organization);
             $this->actor->ensureAttachedTo($actor, $hotel);
 
+            $room = empty($data['room_id']) ? null : $this->resolveRoom($hotel, $data['room_id']);
+
             $checkIn = $this->checkInService->create($hotel, $actor, [
+                'room_id' => $room?->id,
                 'check_in_date' => $data['arrival_date'],
                 'expected_check_out_date' => $data['departure_date'],
                 'booking_reference' => $data['booking_ref'],
@@ -126,6 +141,73 @@ class FicheSessionService
 
             return ['session' => $session, 'created' => true];
         });
+    }
+
+    /** Applique room_id sur un brouillon encore ouvert si fourni et différent — voir les deux appelants. */
+    private function maybeAssignRoom(Hotel $hotel, string $checkInId, array $data): void
+    {
+        if (empty($data['room_id'])) {
+            return;
+        }
+
+        $checkIn = CheckIn::whereKey($checkInId)->first();
+
+        if (! $checkIn || $checkIn->status !== 'draft' || $checkIn->room_id === $data['room_id']) {
+            return;
+        }
+
+        $room = $this->resolveRoom($hotel, $data['room_id'], excludeCheckInId: $checkIn->id);
+        $checkIn->update(['room_id' => $room->id]);
+    }
+
+    /**
+     * Valide `room_id` (appartient bien à cet établissement), verrouille et
+     * refuse un conflit — même discipline que CheckInController::store()
+     * côté natif : deux fiches (API ou native) ne doivent jamais partager
+     * une chambre sur des dates qui se chevauchent.
+     */
+    private function resolveRoom(Hotel $hotel, string $roomId, ?string $excludeCheckInId = null): Room
+    {
+        $room = Room::where('hotel_id', $hotel->id)->where('id', $roomId)->first();
+
+        if (! $room) {
+            throw new PartnerApiException(ErrorCodes::VALIDATION_ERROR, "room_id inconnu pour cet établissement : {$roomId}.");
+        }
+
+        Room::whereKey($room->id)->lockForUpdate()->first();
+
+        $occupied = CheckIn::where('room_id', $room->id)
+            ->whereIn('status', ['draft', 'active'])
+            ->when($excludeCheckInId, fn ($q) => $q->where('id', '!=', $excludeCheckInId))
+            ->exists();
+
+        if ($occupied) {
+            throw new PartnerApiException(ErrorCodes::VALIDATION_ERROR, 'Cette chambre a déjà une fiche en cours.');
+        }
+
+        return $room;
+    }
+
+    /**
+     * Dernière session connue pour ce (établissement, booking_ref) — permet à
+     * un partenaire de savoir si une fiche existe déjà SANS avoir gardé le
+     * session_id d'origine (ex. après un redémarrage de son intégration),
+     * pour ne montrer un bouton « Fiche police » actif que quand c'est
+     * pertinent.
+     */
+    public function findLatestForBooking(ApiPartner $partner, string $hotelId, string $bookingRef): FicheSession
+    {
+        $session = FicheSession::where('hotel_id', $hotelId)
+            ->where('partner_id', $partner->id)
+            ->where('booking_reference', $bookingRef)
+            ->orderByDesc('created_at')
+            ->first();
+
+        if (! $session) {
+            throw new PartnerApiException(ErrorCodes::SESSION_NOT_FOUND);
+        }
+
+        return $session;
     }
 
     private function makeSession(ApiPartner $partner, ApiKey $apiKey, Hotel $hotel, array $data, string $mode, string $checkInId): FicheSession

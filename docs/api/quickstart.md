@@ -94,6 +94,18 @@ Réponse (`201` pour une nouvelle session, `200` si vous rappelez avec le même
 }
 ```
 
+- **Chambres** : `room` est un texte libre, conservé pour affichage seulement — il
+  ne rattache la fiche à aucune chambre réelle. Pour un vrai rattachement, récupérez
+  la liste des chambres Qayed via `GET /v1/establishments/{id}/rooms`, construisez
+  votre propre correspondance (vos libellés OTA → ces chambres), et envoyez
+  `room_id` plutôt que — ou en plus de — `room`.
+- **Éviter de rouvrir une fiche déjà soumise sans raison** : avant d'activer votre
+  bouton « Fiche police », vous pouvez vérifier l'état d'une réservation via
+  `GET /v1/fiche-sessions/by-booking-ref?establishment_id=...&booking_ref=...`
+  (utile après un redémarrage de votre intégration, quand vous n'avez plus le
+  `session_id` d'origine). Note : rouvrir une fiche déjà soumise n'est de toute
+  façon jamais dangereux côté Qayed — cela ouvre le widget en mode `amend` pour
+  corriger/compléter, sans jamais créer de doublon.
 - `guests` peut être un tableau **vide** : le réceptionniste saisira tout dans
   le widget.
 - Le champ `mode` vaut `amend` (au lieu de `create`) si une fiche existe déjà

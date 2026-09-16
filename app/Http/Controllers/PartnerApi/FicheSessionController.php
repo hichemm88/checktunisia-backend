@@ -22,6 +22,10 @@ class FicheSessionController extends Controller
             'arrival_date' => ['required', 'date'],
             'departure_date' => ['required', 'date', 'after_or_equal:arrival_date'],
             'room' => ['nullable', 'string', 'max:100'],
+            // Libellé partenaire brut, conservé pour affichage — 'room_id'
+            // (GET /v1/establishments/{id}/rooms) est ce qui rattache
+            // réellement la fiche à une chambre Qayed.
+            'room_id' => ['nullable', 'uuid'],
             'guests' => ['present', 'array', 'max:20'],
             'guests.*.first_name' => ['nullable', 'string', 'max:100'],
             'guests.*.last_name' => ['nullable', 'string', 'max:100'],
@@ -40,6 +44,7 @@ class FicheSessionController extends Controller
             'arrival_date' => $validated['arrival_date'],
             'departure_date' => $validated['departure_date'],
             'room' => $validated['room'] ?? null,
+            'room_id' => $validated['room_id'] ?? null,
             'guests' => $validated['guests'],
             'metadata' => $validated['metadata'] ?? [],
         ]);
@@ -57,13 +62,37 @@ class FicheSessionController extends Controller
         $partner = app(ApiPartner::class);
         $session = $this->sessions->findForPartner($partner, $sessionId);
 
-        return response()->json([
+        return response()->json($this->statusPayload($session));
+    }
+
+    /**
+     * Permet à un partenaire de savoir si une fiche existe déjà pour une
+     * réservation SANS avoir gardé le session_id d'origine — utile pour
+     * décider, à l'affichage d'une vignette d'arrivée, si le bouton « Fiche
+     * police » doit rouvrir le widget ou juste indiquer que c'est déjà fait.
+     */
+    public function showByBookingRef(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'establishment_id' => ['required', 'uuid'],
+            'booking_ref' => ['required', 'string', 'max:100'],
+        ]);
+
+        $partner = app(ApiPartner::class);
+        $session = $this->sessions->findLatestForBooking($partner, $validated['establishment_id'], $validated['booking_ref']);
+
+        return response()->json($this->statusPayload($session));
+    }
+
+    private function statusPayload(FicheSession $session): array
+    {
+        return [
             'session_id' => $session->id,
             'status' => $session->publicStatus(),
             'fiche_id' => $session->status === FicheSession::STATUS_SUBMITTED ? $session->check_in_id : null,
             'booking_ref' => $session->booking_reference,
             'created_at' => $session->created_at->toIso8601String(),
             'expires_at' => $session->expires_at->toIso8601String(),
-        ]);
+        ];
     }
 }
