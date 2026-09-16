@@ -17,6 +17,17 @@ use Illuminate\Http\Request;
 /** Partenaires de l'API publique v1 (Diar, etc.) — vue platform_admin. */
 class PartnerAdminController extends Controller
 {
+    /**
+     * Origine stricte : schéma https, hôte (+ port optionnel), rien d'autre —
+     * ni chemin, ni requête, ni caractère générique. C'est la valeur comparée
+     * telle quelle à `Origin`/`Referer` (RequestOrigin::of) et posée dans la
+     * CSP frame-ancestors du widget : un chemin ou un « * » n'y aurait aucun
+     * effet (les navigateurs ignorent tout ce qui suit l'hôte dans cette
+     * directive) et laisserait croire à une restriction qui n'existe pas.
+     */
+    private const ORIGIN_REGEX = '/^https:\/\/[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(:\d{1,5})?$/';
+
+
     public function __construct(
         private ApiKeyService $keys,
         private EstablishmentLinkService $links,
@@ -46,7 +57,7 @@ class PartnerAdminController extends Controller
         $v = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'allowed_widget_origins' => ['nullable', 'array'],
-            'allowed_widget_origins.*' => ['string', 'max:255'],
+            'allowed_widget_origins.*' => ['string', 'max:255', 'regex:'.self::ORIGIN_REGEX],
         ]);
 
         $partner = ApiPartner::create([
@@ -73,7 +84,7 @@ class PartnerAdminController extends Controller
             'name' => ['sometimes', 'string', 'max:255'],
             'status' => ['sometimes', 'in:active,suspended'],
             'allowed_widget_origins' => ['sometimes', 'array'],
-            'allowed_widget_origins.*' => ['string', 'max:255'],
+            'allowed_widget_origins.*' => ['string', 'max:255', 'regex:'.self::ORIGIN_REGEX],
         ]);
 
         $old = $partner->toArray();

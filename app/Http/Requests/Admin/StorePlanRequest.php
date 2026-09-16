@@ -43,6 +43,7 @@ class StorePlanRequest extends FormRequest {
             'features.ocr_scans_per_month' => ['sometimes', 'nullable', 'integer', 'min:-1'],
             'features.checkins_per_month'  => ['sometimes', 'nullable', 'integer', 'min:-1'],
             'features.whatsapp_relay'      => ['sometimes', 'boolean'],
+            'features.api_access'          => ['sometimes', 'boolean'],
         ];
     }
 
