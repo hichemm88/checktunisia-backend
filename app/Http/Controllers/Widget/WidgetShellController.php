@@ -37,8 +37,20 @@ class WidgetShellController extends Controller
         $origins = $partner?->allowed_widget_origins ?: [];
         $directive = $origins === [] ? "'none'" : "'self' ".implode(' ', $origins);
 
-        return response()
-            ->view('widget-shell', ['token' => $token])
-            ->header('Content-Security-Policy', "frame-ancestors {$directive}");
+        // APP_DEBUG=true en production (constaté) : sans ce garde, une
+        // exception ici (vue Blade cassée, etc.) afficherait la page de
+        // débogage Laravel — trace complète, chemins serveur — À L'INTÉRIEUR
+        // de l'iframe d'un partenaire. `report()` maintient la remontée vers
+        // Sentry/les logs malgré le catch ; la CSP reste posée sur la réponse
+        // de repli, qui ne révèle rien de l'erreur réelle.
+        try {
+            return response()
+                ->view('widget-shell', ['token' => $token])
+                ->header('Content-Security-Policy', "frame-ancestors {$directive}");
+        } catch (\Throwable $e) {
+            report($e);
+
+            return response('', 500)->header('Content-Security-Policy', "frame-ancestors {$directive}");
+        }
     }
 }

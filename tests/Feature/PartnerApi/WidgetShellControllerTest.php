@@ -95,6 +95,60 @@ class WidgetShellControllerTest extends TestCase
         $this->assertSame("frame-ancestors 'none'", $response->headers->get('Content-Security-Policy'));
     }
 
+    /**
+     * APP_DEBUG=true was found set in production. Whatever the environment
+     * config, this controller must never let Laravel's debug/error page
+     * (stack trace, server paths) render inside a partner's iframe — the
+     * inner try/catch around the view render + report() exists precisely
+     * for this. Forcing app.debug=true here means this test would fail on a
+     * regression regardless of what the real environment is configured to.
+     */
+    public function test_widget_shell_never_leaks_a_debug_page_even_with_app_debug_true(): void
+    {
+        config(['app.debug' => true]);
+        $this->seedWidgetJwtSecret();
+
+        $response = $this->get('/widget/fiche?token=not-a-real-jwt-at-all');
+
+        $response->assertOk();
+        $body = $response->getContent();
+        $this->assertStringNotContainsStringIgnoringCase('whoops', $body);
+        $this->assertStringNotContainsStringIgnoringCase('stack trace', $body);
+        $this->assertStringNotContainsStringIgnoringCase('WidgetShellController.php', $body);
+        $this->assertStringNotContainsStringIgnoringCase('vendor/laravel', $body);
+    }
+
+    /**
+     * Genuinely exercises the try/catch around the view render (not just the
+     * token-decode catch, which the other tests already hit) — a view
+     * composer throwing mid-render is a realistic stand-in for a broken
+     * Blade template, and it lets this test force the failure without
+     * touching anything on disk.
+     */
+    public function test_widget_shell_returns_a_clean_500_if_rendering_the_view_itself_fails(): void
+    {
+        config(['app.debug' => true]);
+        \Illuminate\Support\Facades\View::composer('widget-shell', function () {
+            throw new \RuntimeException('forced failure for WidgetShellControllerTest');
+        });
+
+        ['hotel' => $hotel] = $this->makeOrgWithHotel();
+        $partner = $this->makePartner(['allowed_widget_origins' => ['https://diarna.kasbahost.com']]);
+        ['plaintext' => $plaintext] = $this->issuePartnerKey($partner, ApiKey::MODE_TEST);
+        $this->linkEstablishment($partner, $hotel);
+        $widgetUrl = $this->createWidgetUrl($partner, $plaintext, $hotel, 'DIARNA-SHELL-005');
+        $token = $this->tokenFromWidgetUrl($widgetUrl);
+
+        $response = $this->get('/widget/fiche?token='.$token);
+
+        $response->assertStatus(500);
+        $this->assertStringContainsString('https://diarna.kasbahost.com', $response->headers->get('Content-Security-Policy'));
+        $body = $response->getContent();
+        $this->assertStringNotContainsStringIgnoringCase('forced failure', $body);
+        $this->assertStringNotContainsStringIgnoringCase('whoops', $body);
+        $this->assertStringNotContainsStringIgnoringCase('stack trace', $body);
+    }
+
     public function test_widget_bootstrap_from_a_disallowed_origin_is_still_refused(): void
     {
         // Defense-in-depth check on the JSON endpoint is unaffected by this
