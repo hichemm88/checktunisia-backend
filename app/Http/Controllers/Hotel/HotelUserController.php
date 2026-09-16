@@ -1,9 +1,13 @@
 <?php
+
 namespace App\Http\Controllers\Hotel;
+
 use App\Http\Controllers\Controller;
 use App\Models\Hotel;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
+use App\Services\Email\SystemMailer;
+use App\Services\Subscription\PlanEntitlements;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -12,35 +16,55 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
-class HotelUserController extends Controller {
+class HotelUserController extends Controller
+{
     /**
      * Hotel IDs the current hotel_admin may manage. A hotel_admin can own several
      * properties under the same organization (see ResolveTenant); staff aren't
      * necessarily attached to the currently *active* property, so any listing/
      * management query must span every property of the org, not just app('tenant').
      */
-    private function manageableHotelIds(): Collection {
+    private function manageableHotelIds(): Collection
+    {
         // Note: read organization_id off the tenant model rather than app('organization') —
         // Laravel's container stores that binding via instance() even when the org is null,
         // and isset()-based lookups in Container::resolve() treat a bound null as "not bound",
         // so app('organization') throws "Target class [organization] does not exist" instead
         // of returning null for hotels/users with no organization yet.
         $hotel = app('tenant');
+
         return $hotel->organization_id
             ? Hotel::where('organization_id', $hotel->organization_id)->pluck('id')
             : collect([$hotel->id]);
     }
 
-    /** Users attached to any of the org's properties, with their per-property assignments. */
-    private function manageableUsersQuery(Collection $hotelIds) {
-        return User::whereHas('hotels', fn($q) => $q->whereIn('hotels.id', $hotelIds))
-            ->with(['roles', 'hotels' => fn($q) => $q->whereIn('hotels.id', $hotelIds)]);
+    /**
+     * Users attached to any of the org's properties, with their per-property
+     * assignments.
+     *
+     * Excludes system actors (`is_system_actor`, e.g. the synthetic "Intégration
+     * API" account created per organization by PartnerIntegrationActor for the
+     * Partner API/widget): they aren't a team member an owner manages here, and
+     * this owner-facing screen isn't where an integration gets switched off —
+     * that's the "Intégrations" establishment-link revocation, which doesn't
+     * touch this account. Surfacing it confused an owner into trying to delete
+     * it from this list; deleting it here would only soft-delete/deactivate it,
+     * and the very next API-created fiche would silently find and reuse that
+     * same (now inactive) record via `withTrashed()` — worse than doing nothing.
+     */
+    private function manageableUsersQuery(Collection $hotelIds)
+    {
+        return User::whereHas('hotels', fn ($q) => $q->whereIn('hotels.id', $hotelIds))
+            ->where('is_system_actor', false)
+            ->with(['roles', 'hotels' => fn ($q) => $q->whereIn('hotels.id', $hotelIds)]);
     }
 
-    public function index(): JsonResponse {
+    public function index(): JsonResponse
+    {
         $hotelIds = $this->manageableHotelIds();
         $users = $this->manageableUsersQuery($hotelIds)->get();
-        return response()->json(['data' => $users->map(fn($u) => [
+
+        return response()->json(['data' => $users->map(fn ($u) => [
             'id'            => $u->id,
             'first_name'    => $u->first_name,
             'last_name'     => $u->last_name,
@@ -49,21 +73,22 @@ class HotelUserController extends Controller {
             'role_org'      => $u->role_org,
             'status'        => $u->status,
             'last_login_at' => $u->last_login_at,
-            'properties'    => $u->hotels->map(fn($h) => ['id' => $h->id, 'name' => $h->name])->values(),
+            'properties'    => $u->hotels->map(fn ($h) => ['id' => $h->id, 'name' => $h->name])->values(),
         ])]);
     }
 
-    public function store(Request $request): JsonResponse {
+    public function store(Request $request): JsonResponse
+    {
         $hotel = app('tenant');
         $manageableIds = $this->manageableHotelIds();
         $v = $request->validate([
-            'first_name' => ['required','string','max:100'],
-            'last_name'  => ['required','string','max:100'],
-            'email'      => ['required','email','unique:users,email'],
-            'role'       => ['required','in:hotel_admin,receptionist'],
+            'first_name' => ['required', 'string', 'max:100'],
+            'last_name'  => ['required', 'string', 'max:100'],
+            'email'      => ['required', 'email', 'unique:users,email'],
+            'role'       => ['required', 'in:hotel_admin,receptionist'],
             // Which propertie(s) to grant access to. Defaults to the currently active one.
             // A staff member (receptionist or admin) can be assigned several properties at once.
-            'hotel_ids'   => ['sometimes','array','min:1'],
+            'hotel_ids'   => ['sometimes', 'array', 'min:1'],
             'hotel_ids.*' => ['string', Rule::in($manageableIds->all())],
         ]);
 
@@ -71,14 +96,14 @@ class HotelUserController extends Controller {
 
         // Limite d'utilisateurs du pack (pilotée dans Admin > Abonnements).
         if ($org = ($request->user()->organization ?? $hotel->organization)) {
-            \App\Services\Subscription\PlanEntitlements::assertWithinLimit($org, 'max_users');
+            PlanEntitlements::assertWithinLimit($org, 'max_users');
         }
 
         // L'invitant est forcément l'owner (route org.owner) : tout hotel_admin
         // invité est un « admin » de l'organisation, jamais un second owner.
         $orgId = app('tenant')->organization_id ?? $request->user()->organization_id;
 
-        $user = DB::transaction(function() use ($v, $targetHotelIds, $orgId) {
+        $user = DB::transaction(function () use ($v, $targetHotelIds, $orgId) {
             $u = User::create([
                 // Membership org posé à la création — l'absence d'organization_id
                 // sur les invités est ce qui renvoyait à tort le 2e hotel_admin
@@ -96,7 +121,8 @@ class HotelUserController extends Controller {
             ]);
             $u->assignRole($v['role']);
             $u->hotels()->attach($targetHotelIds, ['granted_at' => now()]);
-            AuditLogger::log('user.created', $u, [], $u->only(['email','first_name','last_name']), hotelId: $targetHotelIds[0]);
+            AuditLogger::log('user.created', $u, [], $u->only(['email', 'first_name', 'last_name']), hotelId: $targetHotelIds[0]);
+
             return $u;
         });
 
@@ -110,7 +136,8 @@ class HotelUserController extends Controller {
         ]], 201);
     }
 
-    public function update(Request $request, string $id): JsonResponse {
+    public function update(Request $request, string $id): JsonResponse
+    {
         $manageableIds = $this->manageableHotelIds();
         $user = $this->manageableUsersQuery($manageableIds)->findOrFail($id);
         $hotel = $user->hotels->first() ?? app('tenant');
@@ -120,20 +147,22 @@ class HotelUserController extends Controller {
             return $this->ownerProtected();
         }
         $v = $request->validate([
-            'first_name' => ['sometimes','string','max:100'],
-            'last_name'  => ['sometimes','string','max:100'],
-            'role'       => ['sometimes','in:hotel_admin,receptionist'],
-            'status'     => ['sometimes','in:active,inactive,suspended'],
+            'first_name' => ['sometimes', 'string', 'max:100'],
+            'last_name'  => ['sometimes', 'string', 'max:100'],
+            'role'       => ['sometimes', 'in:hotel_admin,receptionist'],
+            'status'     => ['sometimes', 'in:active,inactive,suspended'],
             // Full replacement of this user's property assignments.
-            'hotel_ids'   => ['sometimes','array','min:1'],
+            'hotel_ids'   => ['sometimes', 'array', 'min:1'],
             'hotel_ids.*' => ['string', Rule::in($manageableIds->all())],
         ]);
         $fields = array_filter([
             'first_name' => $v['first_name'] ?? null,
             'last_name'  => $v['last_name']  ?? null,
             'status'     => $v['status']     ?? null,
-        ], fn($val) => $val !== null);
-        if ($fields) { $user->update($fields); }
+        ], fn ($val) => $val !== null);
+        if ($fields) {
+            $user->update($fields);
+        }
         if (isset($v['role'])) {
             $user->syncRoles([$v['role']]);
             // role_org suit le rôle plateforme : un hotel_admin non owner est un
@@ -149,6 +178,7 @@ class HotelUserController extends Controller {
             $user->tokens()->delete();
         }
         AuditLogger::log('user.updated', $user, newValues: $user->only(['email', 'first_name', 'last_name']), hotelId: $hotel->id);
+
         return response()->json(['data' => [
             'id'         => $user->id,
             'first_name' => $user->first_name,
@@ -156,11 +186,12 @@ class HotelUserController extends Controller {
             'role'       => $user->primary_role,
             'role_org'   => $user->role_org,
             'status'     => $user->status,
-            'properties' => $user->hotels()->get()->map(fn($h) => ['id' => $h->id, 'name' => $h->name])->values(),
+            'properties' => $user->hotels()->get()->map(fn ($h) => ['id' => $h->id, 'name' => $h->name])->values(),
         ]]);
     }
 
-    public function destroy(string $id): JsonResponse {
+    public function destroy(string $id): JsonResponse
+    {
         $user = $this->manageableUsersQuery($this->manageableHotelIds())->findOrFail($id);
         $hotel = $user->hotels->first() ?? app('tenant');
         if ($user->isOrgOwner()) {
@@ -171,6 +202,7 @@ class HotelUserController extends Controller {
         $old = $user->only(['email', 'first_name', 'last_name']);
         $user->delete();
         AuditLogger::log('user.deleted', $user, $old, hotelId: $hotel->id);
+
         return response()->json(null, 204);
     }
 
@@ -179,7 +211,8 @@ class HotelUserController extends Controller {
      * original welcome email never arrived (mail misconfiguration, typo, etc.)
      * so the account doesn't need to be recreated — it already exists and is active.
      */
-    public function resendInvite(string $id): JsonResponse {
+    public function resendInvite(string $id): JsonResponse
+    {
         $hotelIds = $this->manageableHotelIds();
         $user = $this->manageableUsersQuery($hotelIds)->findOrFail($id);
         $hotel = $user->hotels->first() ?? app('tenant');
@@ -198,7 +231,8 @@ class HotelUserController extends Controller {
         ]]);
     }
 
-    private function ownerProtected(): JsonResponse {
+    private function ownerProtected(): JsonResponse
+    {
         return response()->json([
             'data'   => null,
             'errors' => [[
@@ -209,16 +243,18 @@ class HotelUserController extends Controller {
         ], 403);
     }
 
-    private function sendWelcomeEmail(User $user, string $hotelName, string $role): bool {
+    private function sendWelcomeEmail(User $user, string $hotelName, string $role): bool
+    {
         $locale = $user->locale ?? 'fr';
-        return \App\Services\Email\SystemMailer::send('welcome', $user->email, [
+
+        return SystemMailer::send('welcome', $user->email, [
             'first_name' => $user->first_name,
             'last_name'  => $user->last_name,
             'hotel_name' => $hotelName,
-            'role_label' => \App\Services\Email\SystemMailer::label($role === 'hotel_admin' ? 'role_admin' : 'role_receptionist', $locale),
-            'cta_button' => \App\Services\Email\SystemMailer::ctaButton(
-                \App\Services\Email\SystemMailer::issueSetPasswordLink($user),
-                \App\Services\Email\SystemMailer::label('set_password', $locale),
+            'role_label' => SystemMailer::label($role === 'hotel_admin' ? 'role_admin' : 'role_receptionist', $locale),
+            'cta_button' => SystemMailer::ctaButton(
+                SystemMailer::issueSetPasswordLink($user),
+                SystemMailer::label('set_password', $locale),
             ),
         ], $locale);
     }
