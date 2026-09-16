@@ -359,6 +359,8 @@ class CheckInController extends Controller
             'status'                  => $c->status,
             'guests_count'            => $c->guests_count,
             'document_expired'        => $this->hasExpiredDocument($c),
+            'source'                  => $c->metadata['source'] ?? 'native',
+            'partner_name'            => $c->metadata['partner_name'] ?? null,
             'primary_guest'           => $primary ? [
                 'first_name'      => $primary->first_name,
                 'last_name'       => $primary->last_name,
@@ -399,6 +401,8 @@ class CheckInController extends Controller
             'children_count'          => $c->children_count,
             'notes'                   => $c->notes,
             'document_expired'        => $this->hasExpiredDocument($c),
+            'source'                  => $c->metadata['source'] ?? 'native',
+            'partner_name'            => $c->metadata['partner_name'] ?? null,
             'guests'                  => $c->guests->map(fn($g) => $this->formatGuest($g, $c->id)),
             'created_by'              => $c->creator ? ['id' => $c->creator->id, 'first_name' => $c->creator->first_name, 'last_name' => $c->creator->last_name] : null,
             'completed_by'            => $c->completedBy ? ['id' => $c->completedBy->id, 'first_name' => $c->completedBy->first_name] : null,

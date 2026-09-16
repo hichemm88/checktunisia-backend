@@ -1,18 +1,24 @@
 <?php
 
+use App\Exceptions\PartnerApi\PartnerApiException;
+use App\Http\Middleware\AddRateLimitHeaders;
 use App\Http\Middleware\AuditRequestMiddleware;
 use App\Http\Middleware\EnsureActiveSubscription;
 use App\Http\Middleware\EnsureAuthorityCredentialValid;
 use App\Http\Middleware\EnsureOrgOwner;
 use App\Http\Middleware\EnsureOtpDeviceMatches;
 use App\Http\Middleware\EnsurePlatformAdmin2FA;
+use App\Http\Middleware\PartnerWidgetFrameAncestors;
 use App\Http\Middleware\Require2FA;
 use App\Http\Middleware\ResolveTenant;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\SentryContext;
 use App\Http\Middleware\VerifyAiTrackingSecret;
+use App\Http\Middleware\VerifyPartnerApiKey;
 use App\Http\Middleware\VerifyWhatsappWorker;
+use App\Http\Middleware\VerifyWidgetSessionToken;
 use Illuminate\Auth\AuthenticationException;
+use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -38,6 +44,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // WhatsApp, dont l'URL est figée chez Meta. Voir routes/public.php.
         then: function () {
             Route::middleware('api')->group(base_path('routes/public.php'));
+
+            // API publique v1 + widget embarqué (partenaires) — hors /api/v1,
+            // même mécanisme que routes/public.php ci-dessus. Voir ces fichiers
+            // pour le détail des routes et API-V1-DECISIONS.md pour le pourquoi.
+            Route::middleware('api')->group(base_path('routes/partner_api.php'));
+            Route::middleware('api')->group(base_path('routes/widget.php'));
         },
     )
     ->withMiddleware(function (Middleware $middleware) {
@@ -100,6 +112,12 @@ return Application::configure(basePath: dirname(__DIR__))
             'whatsapp.worker' => VerifyWhatsappWorker::class,
             // Ingestion interne du tracking des coûts IA (fonction serverless Vercel).
             'ai.tracking.secret' => VerifyAiTrackingSecret::class,
+
+            // API publique v1 + widget embarqué (partenaires).
+            'partner.key' => VerifyPartnerApiKey::class,
+            'partner.rate_limit' => AddRateLimitHeaders::class,
+            'widget.session' => VerifyWidgetSessionToken::class,
+            'widget.frame_ancestors' => PartnerWidgetFrameAncestors::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
@@ -107,6 +125,48 @@ return Application::configure(basePath: dirname(__DIR__))
         // SENTRY_LARAVEL_DSN n'est pas défini (cas du local et des tests).
         // Le filtrage des données personnelles est dans config/sentry.php.
         SentryIntegration::handles($exceptions);
+
+        // API publique v1 + widget embarqué : enveloppe {error:{code,message,doc_url}}
+        // dédiée à ce contrat public tiers, distincte de {data,errors:[]} utilisée
+        // partout ailleurs (voir API-V1-DECISIONS.md, D3). Rendus AVANT les
+        // handlers `api/*` génériques ci-dessous : ces routes vivent hors du
+        // préfixe /api/v1 (routes/partner_api.php, routes/widget.php).
+        $exceptions->render(function (PartnerApiException $e, Request $request) {
+            if ($request->is('v1/*') || $request->is('widget/*')) {
+                return response()->json($e->toResponseArray(), $e->status());
+            }
+        });
+
+        // Limiteurs Laravel standard (`throttle:establishment-link-exchange`,
+        // `throttle:widget-session`) : sans ce rendu dédié, un 429 sur ces
+        // routes sortait avec le rendu par défaut de Laravel, pas l'enveloppe
+        // {error:{...}} documentée (bug trouvé en écrivant
+        // EstablishmentLinkExchangeTest).
+        $exceptions->render(function (ThrottleRequestsException $e, Request $request) {
+            if ($request->is('v1/*') || $request->is('widget/*')) {
+                return response()->json([
+                    'error' => [
+                        'code' => 'rate_limited',
+                        'message' => 'Trop de requêtes.',
+                        'doc_url' => 'https://qayed.tn/docs/api#rate_limited',
+                    ],
+                ], 429, $e->getHeaders());
+            }
+        });
+
+        $exceptions->render(function (ValidationException $e, Request $request) {
+            if ($request->is('v1/*') || $request->is('widget/*')) {
+                $first = collect($e->errors())->collapse()->first();
+
+                return response()->json([
+                    'error' => [
+                        'code' => 'validation_error',
+                        'message' => $first ?? 'Erreur de validation.',
+                        'doc_url' => 'https://qayed.tn/docs/api#validation_error',
+                    ],
+                ], 422);
+            }
+        });
 
         $exceptions->render(function (NotFoundHttpException $e, Request $request) {
             if ($request->is('api/*')) {

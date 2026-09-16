@@ -161,7 +161,11 @@ class CheckInService
             // partait jamais. On l'enfile ici, pour ce voyageur uniquement.
             // Sur un check-in encore en draft on ne fait rien : la finalisation
             // enfilera tout le monde (sinon doublon).
-            if ($checkIn->status !== 'draft') {
+            // Fiche API en mode test (voir complete()) : même isolation pour un
+            // voyageur ajouté après coup (mode amend).
+            $isTestFiche = (bool) ($checkIn->metadata['test_mode'] ?? false);
+
+            if ($checkIn->status !== 'draft' && ! $isTestFiche) {
                 app(WhatsappOutboxService::class)->enqueueForGuest($checkIn, $guest);
             }
 
@@ -294,12 +298,21 @@ class CheckInService
 
             AuditLogger::log('check_in.completed', $checkIn, ['status' => 'draft'], ['status' => 'active', 'reference' => $checkIn->reference], hotelId: $checkIn->hotel_id);
 
+            // Fiche créée en MODE TEST par l'API partenaire (clé qyd_test_…) :
+            // isolation complète exigée par le contrat — aucun décompte de
+            // quota, aucun envoi à l'autorité. Ce marqueur n'existe QUE sur les
+            // fiches API (FicheSessionService) ; le flux natif n'est jamais
+            // concerné. Voir API-V1-DECISIONS.md.
+            $isTestFiche = (bool) ($checkIn->metadata['test_mode'] ?? false);
+
             // ── Consommation de quota : c'est ICI, et nulle part ailleurs ──
             // La finalisation est l'acte déclaratif facturable. Dans la même
             // transaction que le passage en « active » : si la finalisation
             // échoue, aucune consommation n'est laissée derrière. L'unicité
             // SQL sur check_in_id rend l'écriture rejouable sans risque.
-            \App\Services\Subscription\CheckinUsageRecorder::recordSafely($checkIn);
+            if (! $isTestFiche) {
+                \App\Services\Subscription\CheckinUsageRecorder::recordSafely($checkIn);
+            }
 
             // ── Watchlist check: flag hotel if any guest is on a watchlist ──
             app(WatchlistService::class)->checkCheckIn($checkIn->load('guests.documents'));
@@ -314,7 +327,9 @@ class CheckInService
             // unique. Uniquement de l'enfilage (inserts) : l'envoi réel est fait par
             // le worker Node. Entièrement gardé/avalé — un souci WhatsApp ne doit
             // jamais bloquer ni ralentir le check-in. Inerte si WHATSAPP_POLICE_ENABLED=false.
-            app(WhatsappOutboxService::class)->enqueueForCheckIn($checkIn);
+            if (! $isTestFiche) {
+                app(WhatsappOutboxService::class)->enqueueForCheckIn($checkIn);
+            }
 
             return $checkIn->fresh()->load(['room', 'guests.documents', 'creator']);
         });

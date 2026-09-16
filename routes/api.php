@@ -30,9 +30,12 @@ use App\Http\Controllers\Authority\AuthoritySearchController;
 use App\Http\Controllers\Authority\ExportController;
 use App\Http\Controllers\Authority\SecurityAlertController;
 use App\Http\Controllers\Authority\WatchlistController;
+use App\Http\Controllers\Admin\PartnerAdminController;
+use App\Http\Controllers\Admin\PartnerWebhookAdminController;
 use App\Http\Controllers\Hotel\ActivityLogController;
 use App\Http\Controllers\Hotel\CheckInController;
 use App\Http\Controllers\Hotel\DashboardController;
+use App\Http\Controllers\Hotel\EstablishmentIntegrationController;
 use App\Http\Controllers\Hotel\GuestController;
 use App\Http\Controllers\Hotel\HotelExportController;
 use App\Http\Controllers\Hotel\HotelProfileController;
@@ -476,6 +479,11 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
                 Route::patch('organization/properties/{id}', [OrganizationController::class, 'updateProperty']);
                 Route::delete('organization/properties/{id}', [OrganizationController::class, 'deleteProperty']);
                 Route::post('organization/transfer-ownership', [OrganizationController::class, 'transferOwnership']);
+
+                // Section Intégrations : liaison avec un partenaire de l'API publique v1.
+                Route::get('integrations', [EstablishmentIntegrationController::class, 'index']);
+                Route::post('integrations/link-codes', [EstablishmentIntegrationController::class, 'storeLinkCode']);
+                Route::delete('integrations/{linkId}', [EstablishmentIntegrationController::class, 'destroy']);
             });
         });
 
@@ -648,6 +656,23 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
             Route::post('plans', [PlanAdminController::class, 'store']);
             Route::patch('plans/{id}', [PlanAdminController::class, 'update']);
             Route::delete('plans/{id}', [PlanAdminController::class, 'destroy']);
+
+            // API publique v1 — section Partenaires (clés, liaisons, webhooks, métriques).
+            Route::get('partners', [PartnerAdminController::class, 'index']);
+            Route::post('partners', [PartnerAdminController::class, 'store']);
+            Route::get('partners/{id}', [PartnerAdminController::class, 'show']);
+            Route::patch('partners/{id}', [PartnerAdminController::class, 'update']);
+            Route::post('partners/{id}/keys', [PartnerAdminController::class, 'issueKey']);
+            Route::post('partners/{id}/keys/{keyId}/revoke', [PartnerAdminController::class, 'revokeKey']);
+            Route::get('partners/{id}/links', [PartnerAdminController::class, 'links']);
+            Route::post('partners/{id}/links/{linkId}/revoke', [PartnerAdminController::class, 'revokeLink']);
+            Route::get('partners/{id}/metrics', [PartnerAdminController::class, 'metrics']);
+            Route::get('partners/{id}/webhooks', [PartnerWebhookAdminController::class, 'index']);
+            Route::post('partners/{id}/webhooks', [PartnerWebhookAdminController::class, 'store']);
+            Route::patch('partners/{id}/webhooks/{endpointId}', [PartnerWebhookAdminController::class, 'update']);
+            Route::delete('partners/{id}/webhooks/{endpointId}', [PartnerWebhookAdminController::class, 'destroy']);
+            Route::get('partners/{id}/webhooks/{endpointId}/deliveries', [PartnerWebhookAdminController::class, 'deliveries']);
+            Route::post('partners/{id}/webhooks/{endpointId}/deliveries/{deliveryId}/redrive', [PartnerWebhookAdminController::class, 'redrive']);
 
             // CMS : pages dynamiques (Puck), menus publics, médias
             Route::get('pages', [PageAdminController::class, 'index']);

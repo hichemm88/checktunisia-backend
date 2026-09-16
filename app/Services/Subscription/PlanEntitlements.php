@@ -30,6 +30,10 @@ use Illuminate\Http\Exceptions\HttpResponseException;
  *                           alertes et à la facturation des dépassements
  *                           (voir CheckinQuota).
  *  - whatsapp_relay       : relais des fiches police vers WhatsApp (bool)
+ *  - api_access           : accès à l'API publique v1 + widget embarqué (bool).
+ *                           Seul gate COMMERCIAL de cette fonctionnalité — le
+ *                           quota de fiches reste jamais bloquant même pour
+ *                           une fiche créée via l'API (FicheSessionService).
  *
  * Web et mobile passent par les mêmes endpoints : l'application côté serveur
  * vaut pour les deux (règle transverse n°1).
@@ -44,6 +48,7 @@ class PlanEntitlements
         'ocr_scans_per_month' => null,
         'checkins_per_month'  => null,
         'whatsapp_relay'      => true,
+        'api_access'          => false,
     ];
 
     /** Libellés FR servis à l'admin (grille d'édition) et aux messages d'erreur. */
@@ -54,10 +59,11 @@ class PlanEntitlements
         'ocr_scans_per_month' => 'Scans OCR / mois',
         'checkins_per_month'  => 'Check-ins / mois',
         'whatsapp_relay'      => 'Relais WhatsApp police',
+        'api_access'          => 'Accès API partenaires',
     ];
 
     private const LIMIT_KEYS = ['max_properties', 'max_users', 'max_rooms', 'ocr_scans_per_month', 'checkins_per_month'];
-    private const TOGGLE_KEYS = ['whatsapp_relay'];
+    private const TOGGLE_KEYS = ['whatsapp_relay', 'api_access'];
 
     // ─── Résolution ──────────────────────────────────────────────────────────
 
@@ -127,7 +133,10 @@ class PlanEntitlements
             'max_properties'      => $org->properties()->count(),
             // Le staff est rattaché aux établissements via le pivot (sans
             // organization_id) : compter les deux populations, sans doublon.
-            'max_users'           => \App\Models\User::where(fn ($q) => $q
+            // Exclut les acteurs système (intégrations API partenaires,
+            // PartnerIntegrationActor) : ce ne sont pas des sièges vendus.
+            'max_users'           => \App\Models\User::where('is_system_actor', false)
+                ->where(fn ($q) => $q
                     ->where('organization_id', $org->id)
                     ->orWhereHas('hotels', fn ($h) => $h->where('organization_id', $org->id)))
                 ->count(),

@@ -1,0 +1,164 @@
+<!doctype html>
+<!--
+  Snippet d'intégration du widget Qayed (modale iframe plein écran).
+
+  Prérequis : vous avez déjà appelé POST /v1/fiche-sessions côté serveur et
+  récupéré `widget_url` dans la réponse. Ne générez/n'ouvrez JAMAIS ce lien
+  depuis le navigateur du voyageur directement avec votre clé API — l'appel
+  POST /v1/fiche-sessions doit être fait depuis VOTRE backend (la clé API ne
+  doit jamais être exposée côté client).
+
+  Ce fichier est autonome : copiez le <script>/<style> ci-dessous dans votre
+  propre page, ou incluez-le tel quel pour un test rapide.
+-->
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Exemple d'intégration du widget Qayed</title>
+<style>
+  /* Overlay modal plein écran contenant l'iframe du widget. */
+  #qayed-widget-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.55);
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+  }
+  #qayed-widget-overlay.is-open {
+    display: flex;
+  }
+  #qayed-widget-frame {
+    width: min(480px, 94vw);
+    height: min(760px, 92vh);
+    border: 0;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  }
+  #qayed-widget-close {
+    position: absolute;
+    top: 18px;
+    right: max(3vw, calc(50vw - 240px - 44px));
+    width: 36px;
+    height: 36px;
+    border-radius: 999px;
+    border: 0;
+    background: #fff;
+    color: #0f172a;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<button id="open-qayed-widget-btn" type="button">Enregistrer les voyageurs</button>
+
+<div id="qayed-widget-overlay">
+  <button id="qayed-widget-close" type="button" aria-label="Fermer">&times;</button>
+  <!--
+    allow="camera" est INDISPENSABLE : sans cette délégation de permission,
+    la capture caméra intégrée (CIN/passeport) dans le widget ne pourra pas
+    demander l'accès à la caméra depuis l'intérieur de l'iframe, même si
+    l'utilisateur a déjà autorisé la caméra pour votre propre domaine.
+  -->
+  <iframe
+    id="qayed-widget-frame"
+    src="about:blank"
+    allow="camera"
+    title="Formulaire d'enregistrement voyageur Qayed"
+  ></iframe>
+</div>
+
+<script>
+(function () {
+  // Origine exacte du widget Qayed — à adapter si vous utilisez un
+  // environnement de test dédié. C'est CETTE valeur qui doit être comparée
+  // à event.origin ci-dessous, jamais une correspondance partielle/regex
+  // permissive.
+  var QAYED_ORIGIN = 'https://qayed.tn';
+
+  var overlay = document.getElementById('qayed-widget-overlay');
+  var frame = document.getElementById('qayed-widget-frame');
+  var openBtn = document.getElementById('open-qayed-widget-btn');
+  var closeBtn = document.getElementById('qayed-widget-close');
+
+  /**
+   * Ouvre le widget dans la modale.
+   * @param {string} widgetUrl La valeur `widget_url` reçue de votre backend
+   *   suite à POST /v1/fiche-sessions (ex. https://qayed.tn/widget/fiche?token=...).
+   */
+  function openQayedWidget(widgetUrl) {
+    frame.src = widgetUrl;
+    overlay.classList.add('is-open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeQayedWidget() {
+    overlay.classList.remove('is-open');
+    document.body.style.overflow = '';
+    // Décharge l'iframe : évite qu'elle continue de tourner (caméra, etc.)
+    // une fois la modale refermée.
+    frame.src = 'about:blank';
+  }
+
+  closeBtn.addEventListener('click', closeQayedWidget);
+
+  // Exemple de déclenchement : dans une vraie intégration, widgetUrl vient
+  // de la réponse JSON de VOTRE backend (qui a lui-même appelé
+  // POST /v1/fiche-sessions avec votre clé API), pas d'un appel direct
+  // depuis le navigateur.
+  openBtn.addEventListener('click', function () {
+    fetch('/api/qayed/fiche-sessions', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) { openQayedWidget(data.widget_url); });
+  });
+
+  // Écoute des événements postMessage émis par le widget. TOUJOURS vérifier
+  // event.origin avant de faire confiance au contenu du message : n'importe
+  // quelle page peut envoyer un postMessage à votre fenêtre.
+  window.addEventListener('message', function (event) {
+    if (event.origin !== QAYED_ORIGIN) {
+      return;
+    }
+
+    var msg = event.data;
+    if (!msg || typeof msg.type !== 'string') {
+      return;
+    }
+
+    // Les champs sont PORTÉS À PLAT sur le message (pas de sous-objet
+    // `payload`) : { type: 'qayed:submitted', session_id, fiche_id, guest_count }.
+    switch (msg.type) {
+      case 'qayed:submitted':
+        // { session_id, fiche_id, guest_count }
+        console.log('Fiche soumise :', msg.fiche_id, msg.guest_count);
+        closeQayedWidget();
+        // -> Rafraîchissez votre UI (ex. marquer la réservation comme
+        //    enregistrée) ; le webhook fiche.submitted reste la source de
+        //    vérité côté serveur, ce message n'est qu'un signal UX immédiat.
+        break;
+
+      case 'qayed:closed':
+        // { session_id }
+        // L'utilisateur a fermé/annulé depuis l'intérieur du widget.
+        closeQayedWidget();
+        break;
+
+      case 'qayed:error':
+        // { code }
+        console.error('Erreur widget Qayed :', msg.code);
+        closeQayedWidget();
+        // -> Affichez un message d'erreur adapté à msg.code dans votre
+        //    propre UI plutôt que de laisser la modale ouverte.
+        break;
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

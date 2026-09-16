@@ -164,6 +164,19 @@ class AppServiceProvider extends ServiceProvider
         // WhatsappOtpService, où elles peuvent distinguer une demande d'un
         // essai.
         RateLimiter::for('whatsapp-otp', fn (Request $request) => Limit::perMinute(12)->by($request->ip()));
+
+        // API publique v1 — anti brute-force du code de liaison établissement
+        // (§8, exigence explicite). Un partenaire légitime échange un code une
+        // fois par intégration ; indexé sur IP + clé API pour couvrir à la fois
+        // une clé volée essayant plusieurs codes et un acteur sans clé valide.
+        RateLimiter::for('establishment-link-exchange', fn (Request $request) => Limit::perMinute(5)
+            ->by($request->ip().'|'.($request->attributes->get('api_key')?->id ?? '')));
+
+        // Widget embarqué — indexé sur le jti de la session, pas l'IP : le
+        // widget est chargé depuis des postes de réception variés, qui ne
+        // partagent aucune IP commune.
+        RateLimiter::for('widget-session', fn (Request $request) => Limit::perMinute(30)
+            ->by($request->route('jti') ?? $request->ip()));
     }
 
     /**

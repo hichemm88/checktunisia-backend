@@ -78,6 +78,11 @@ Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
 // 24 h. La commande est inerte quand le canal actif est en pull.
 Schedule::command('whatsapp:dispatch')->everyMinute()->withoutOverlapping(15);
 
+// API publique v1 + widget embarqué — livraison des webhooks partenaires
+// (même pattern outbox que whatsapp:dispatch ci-dessus) et expiration des
+// sessions de fiche dont le JWT n'a jamais été consommé dans les 15 minutes.
+Schedule::command('partner-webhooks:dispatch')->everyMinute()->withoutOverlapping(15);
+
 // Coûts Meta : rapatriement quotidien des montants réels facturés par Meta
 // (analytics du WABA), qui remplacent l'estimation locale sur la période.
 //

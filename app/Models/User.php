@@ -32,6 +32,7 @@ class User extends Authenticatable
         'last_name',
         'phone',
         'status',
+        'is_system_actor',
         'locale',
         'email_verified_at',
         'last_login_at',
@@ -57,6 +58,7 @@ class User extends Authenticatable
             'last_login_at'           => 'datetime',
             'two_factor_confirmed_at' => 'datetime',
             'metadata'                => 'array',
+            'is_system_actor'         => 'boolean',
         ];
     }
 
@@ -133,6 +135,12 @@ class User extends Authenticatable
     public function isOrgOwner(): bool
     {
         return $this->role_org === 'owner';
+    }
+
+    /** Compte synthétique représentant une intégration partenaire (API publique), pas une vraie personne. */
+    public function isSystemActor(): bool
+    {
+        return (bool) $this->is_system_actor;
     }
 
     public function hasPasskey(): bool

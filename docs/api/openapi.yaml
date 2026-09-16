@@ -1,0 +1,903 @@
+openapi: 3.1.0
+info:
+  title: Qayed — API publique v1
+  version: "1.0.0"
+  summary: API partenaires + widget embarqué pour la fiche de police Qayed.
+  description: |
+    API publique v1 permettant à une plateforme tierce (PMS, moteur de réservation…)
+    de créer une **session de fiche** pour un séjour, puis d'ouvrir le **widget Qayed**
+    (formulaire réglementaire officiel, jamais dupliqué chez le partenaire) pour que
+    le réceptionniste ou le voyageur saisisse les informations d'identité. Le résultat
+    est notifié de façon asynchrone par **webhook signé**.
+
+    Le modèle suit le pattern *Stripe Checkout* :
+
+    1. Le partenaire échange un **code de liaison** (généré côté propriétaire de
+       l'établissement dans Qayed) contre un lien établissement↔partenaire durable.
+    2. Le partenaire crée une **session de fiche** (`POST /v1/fiche-sessions`) pour un
+       séjour identifié par sa référence de réservation (`booking_ref`).
+    3. Le partenaire ouvre `widget_url` dans une iframe (voir le snippet
+       `widget-integration.html` et le guide `quickstart.md`).
+    4. Le widget notifie sa fenêtre parente via `postMessage`, et Qayed notifie le
+       partenaire via un **webhook** signé (`fiche.submitted`, `fiche.failed`,
+       `session.expired`).
+
+    ### Emplacement des routes
+
+    Cette API vit délibérément **hors** du préfixe `/api/v1` utilisé par l'API interne
+    de l'application (session Sanctum). `/v1/*` et `/widget/v1/*` (ainsi que
+    `/widget/fiche`) forment un contrat public tiers versionné indépendamment, sur le
+    même principe que les autres routes publiques de l'application.
+
+    ### Authentification
+
+    - **API partenaire (`/v1/*`)** : `Authorization: Bearer qyd_live_...` (production)
+      ou `Authorization: Bearer qyd_test_...` (mode test — voir plus bas). Jamais de
+      session Sanctum sur ce périmètre.
+    - **Widget (`/widget/v1/*`)** : un **JSON Web Token** à usage unique (HS256, TTL
+      15 minutes par défaut), reçu dans `widget_url` sous forme de paramètre de requête
+      `?token=...`, et consommé au premier appel à `GET /widget/v1/bootstrap`. Cet appel
+      renvoie un **jeton de session widget opaque** (`widget_token`), qui doit ensuite
+      être envoyé en `Authorization: Bearer {widget_token}` sur tous les appels suivants
+      (`guests`, `scan`, `submit`). Le JWT d'origine ne peut donc jamais être rejoué,
+      même dans sa fenêtre de validité.
+
+    ### Mode test
+
+    Une clé `qyd_test_...` fonctionne à l'identique d'une clé `qyd_live_...`, à
+    l'exception de deux effets de bord toujours désactivés en mode test : aucun envoi
+    réel via le relais WhatsApp de transmission aux autorités, et aucun événement
+    `fiche.submitted` envoyé aux webhooks configurés (`fiche.failed` et
+    `session.expired` restent envoyés).
+
+    ### Limite de débit
+
+    Toutes les routes `/v1/*` sont limitées à **120 requêtes/minute par clé API**
+    (indexé sur l'identifiant de la clé, pas sur l'adresse IP). Chaque réponse porte
+    les en-têtes `X-RateLimit-Limit`, `X-RateLimit-Remaining` et `X-RateLimit-Reset`
+    (timestamp Unix de réinitialisation). `POST /v1/establishment-links` a une limite
+    plus stricte et dédiée : **5 requêtes/minute** (IP + clé API), anti brute-force du
+    code de liaison. `GET /widget/v1/bootstrap` (et les routes authentifiées par
+    session widget) sont limitées à **30 requêtes/minute** par session.
+
+    Un dépassement renvoie `429` avec le code d'erreur `rate_limited` et un en-tête
+    `Retry-After` (secondes).
+
+    ### Enveloppe d'erreur
+
+    Toute erreur sur `/v1/*` ou `/widget/v1/*` renvoie le même format, voir
+    `components.schemas.Error` : `{"error": {"code", "message", "doc_url"}}`. Le champ
+    `code` est **stable** et fait partie du contrat — construisez votre logique
+    applicative dessus, jamais sur le texte de `message` (en français, susceptible
+    d'évoluer).
+servers:
+  - url: https://qayed.tn
+    description: Production (chemins déjà préfixés par /v1 ou /widget/v1)
+tags:
+  - name: Liaison établissement
+    description: Échange du code de liaison propriétaire↔partenaire.
+  - name: Établissements
+    description: Établissements liés à votre clé API.
+  - name: Sessions de fiche
+    description: Création et consultation des sessions de fiche (modèle Stripe Checkout).
+  - name: Fiches
+    description: Consultation d'une fiche déjà soumise.
+  - name: Widget
+    description: |
+      Endpoints du widget embarqué, appelés par l'iframe elle-même — jamais
+      directement par le backend du partenaire. Authentifiés par JWT (bootstrap) puis
+      par jeton de session widget opaque (tout le reste).
+security:
+  - bearerAuth: []
+paths:
+  /v1/establishment-links:
+    post:
+      tags: [Liaison établissement]
+      summary: Échanger un code de liaison contre un lien établissement↔partenaire
+      description: |
+        Le code de liaison est généré côté Qayed par le propriétaire (owner) de
+        l'établissement, valable **24 heures**, à usage unique. Cet appel est limité à
+        **5 requêtes/minute** (par IP et par clé API) pour dissuader le brute-force.
+      operationId: exchangeEstablishmentLink
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [link_code]
+              properties:
+                link_code:
+                  type: string
+                  maxLength: 20
+                  description: Code de liaison communiqué par l'établissement.
+                  example: "QY-7F3K2A"
+      responses:
+        '201':
+          description: Établissement lié avec succès.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  establishment_id:
+                    type: string
+                    format: uuid
+                  establishment_name:
+                    type: string
+                  linked_at:
+                    type: string
+                    format: date-time
+                required: [establishment_id, establishment_name, linked_at]
+              example:
+                establishment_id: "0f2e6b8a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
+                establishment_name: "Dar el Kenz"
+                linked_at: "2026-09-16T09:12:00+00:00"
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '422':
+          description: |
+            Code invalide, expiré (`link_code_expired`) ou déjà utilisé
+            (`link_code_already_used`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/establishments:
+    get:
+      tags: [Établissements]
+      summary: Lister les établissements liés à votre clé API
+      operationId: listEstablishments
+      responses:
+        '200':
+          description: Liste des établissements actifs liés au partenaire.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Establishment'
+                required: [data]
+              example:
+                data:
+                  - establishment_id: "0f2e6b8a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
+                    name: "Dar el Kenz"
+                    status: "active"
+                    quota: { used: 42, limit: 200, period: "monthly" }
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/fiche-sessions:
+    post:
+      tags: [Sessions de fiche]
+      summary: Créer (ou réutiliser) une session de fiche pour un séjour
+      description: |
+        Point d'entrée du modèle *Stripe Checkout* : cet appel prépare une fiche pour
+        un séjour identifié par `(establishment_id, booking_ref)` et renvoie
+        `widget_url`, l'URL à ouvrir dans une iframe pour que le formulaire Qayed soit
+        rempli. **Idempotent** : un second appel avec le même `(establishment_id,
+        booking_ref)` alors qu'une session est encore utilisable renvoie **200** avec
+        la session existante plutôt que d'en créer une nouvelle (double-clic côté
+        PMS partenaire). Si une fiche existe déjà pour ce séjour (`active` ou
+        `completed`), une nouvelle session en mode `amend` est créée à la place —
+        aucune fiche dupliquée n'est produite.
+
+        Le quota de fiches (`checkins_per_month`) n'est **jamais bloquant** sur cet
+        appel — un dépassement peut être facturé après coup mais ne bloque jamais la
+        création. Le seul blocage commercial possible est `api_access_disabled`
+        (fonctionnalité API non activée sur le plan/l'établissement).
+      operationId: createFicheSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [establishment_id, booking_ref, arrival_date, departure_date, guests]
+              properties:
+                establishment_id:
+                  type: string
+                  format: uuid
+                booking_ref:
+                  type: string
+                  maxLength: 100
+                  description: Référence de réservation du partenaire — clé d'idempotence avec establishment_id.
+                arrival_date:
+                  type: string
+                  format: date
+                departure_date:
+                  type: string
+                  format: date
+                  description: Doit être postérieure ou égale à arrival_date.
+                room:
+                  type: string
+                  maxLength: 100
+                  nullable: true
+                guests:
+                  type: array
+                  maxItems: 20
+                  description: |
+                    Pré-remplissage optionnel (tous les champs sont facultatifs par
+                    voyageur) — le tableau peut être vide, le réceptionniste complétera
+                    dans le widget. Ces valeurs ne créent aucun voyageur tant que le
+                    widget n'a pas été ouvert.
+                  items:
+                    type: object
+                    properties:
+                      first_name: { type: string, maxLength: 100, nullable: true }
+                      last_name: { type: string, maxLength: 100, nullable: true }
+                      nationality: { type: string, maxLength: 3, nullable: true, description: "Code pays (ISO 3166-1 alpha-3 recommandé)." }
+                      id_document_number: { type: string, maxLength: 100, nullable: true }
+                      id_document_type: { type: string, maxLength: 50, nullable: true }
+                metadata:
+                  type: object
+                  nullable: true
+                  additionalProperties: true
+                  description: Renvoyé tel quel dans l'événement webhook fiche.submitted.
+            example:
+              establishment_id: "0f2e6b8a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
+              booking_ref: "DIAR-88213"
+              arrival_date: "2026-09-20"
+              departure_date: "2026-09-23"
+              room: "204"
+              guests:
+                - first_name: "Amine"
+                  last_name: "Trabelsi"
+                  nationality: "TUN"
+              metadata:
+                pms_booking_id: "88213"
+      responses:
+        '201':
+          description: Nouvelle session créée.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FicheSessionCreated' }
+        '200':
+          description: Session existante réutilisée (idempotence, ou mode amend).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FicheSessionCreated' }
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '403':
+          description: |
+            `establishment_not_linked` (établissement non lié à ce partenaire) ou
+            `api_access_disabled` (fonctionnalité API désactivée sur ce plan).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: Erreur de validation (`validation_error`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/fiche-sessions/{session_id}:
+    get:
+      tags: [Sessions de fiche]
+      summary: Consulter le statut d'une session de fiche
+      operationId: getFicheSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Statut courant de la session.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: { type: string, format: uuid }
+                  status:
+                    type: string
+                    enum: [pending, submitted, expired]
+                    description: |
+                      `expired` est calculé à la volée (session pending dont `expires_at`
+                      est dépassée) même si le balayage planifié ne l'a pas encore
+                      persisté en base.
+                  fiche_id:
+                    type: string
+                    format: uuid
+                    nullable: true
+                    description: Non nul uniquement si status=submitted.
+                  booking_ref: { type: string }
+                  created_at: { type: string, format: date-time }
+                  expires_at: { type: string, format: date-time }
+                required: [session_id, status, fiche_id, booking_ref, created_at, expires_at]
+              example:
+                session_id: "5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e"
+                status: "submitted"
+                fiche_id: "a1b2c3d4-e5f6-4789-90ab-cdef01234567"
+                booking_ref: "DIAR-88213"
+                created_at: "2026-09-16T09:00:00+00:00"
+                expires_at: "2026-09-16T09:15:00+00:00"
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '404':
+          description: Session introuvable pour ce partenaire (`session_not_found`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/fiches/{fiche_id}:
+    get:
+      tags: [Fiches]
+      summary: Consulter une fiche soumise
+      operationId: getFiche
+      parameters:
+        - name: fiche_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Détail de la fiche.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  fiche_id: { type: string, format: uuid }
+                  booking_ref: { type: string }
+                  establishment_id: { type: string, format: uuid }
+                  guest_count: { type: integer }
+                  submitted_at: { type: string, format: date-time, nullable: true }
+                  authority_status:
+                    type: string
+                    enum: [pending, relayed, unavailable]
+                    description: |
+                      **Important** : ceci N'EST PAS un accusé de réception gouvernemental —
+                      aucune intégration directe avec le Ministère de l'Intérieur n'existe à
+                      ce jour. Cette valeur est dérivée de l'état du relais WhatsApp
+                      provisoire utilisé pour la transmission aux autorités :
+                      `pending` (transmission pas encore confirmée), `relayed` (message
+                      délivré/lu sur le canal de transmission), `unavailable` (toutes les
+                      tentatives de relais ont échoué). Ce champ est susceptible de changer
+                      de sémantique le jour où une homologation officielle sera en place.
+                  reference_number: { type: string, nullable: true }
+                required: [fiche_id, booking_ref, establishment_id, guest_count, authority_status]
+              example:
+                fiche_id: "a1b2c3d4-e5f6-4789-90ab-cdef01234567"
+                booking_ref: "DIAR-88213"
+                establishment_id: "0f2e6b8a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
+                guest_count: 2
+                submitted_at: "2026-09-16T09:14:32+00:00"
+                authority_status: "relayed"
+                reference_number: "QY-2026-004821"
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '403':
+          description: Établissement révoqué depuis (`establishment_not_linked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Fiche introuvable ou n'appartenant pas à ce partenaire (`fiche_not_found`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /widget/v1/bootstrap:
+    get:
+      tags: [Widget]
+      summary: "[Widget uniquement] Initialiser la session widget à partir du JWT"
+      description: |
+        Appelé par l'iframe du widget elle-même au chargement, jamais par le backend
+        du partenaire. Consomme le JWT porté par `?token=` (usage unique réel : un jti
+        déjà consommé ne redonne jamais accès, même dans sa fenêtre de validité) et
+        renvoie un jeton de session widget opaque à utiliser en `Authorization: Bearer`
+        sur tous les appels suivants. Limité à 30 requêtes/minute par session.
+      operationId: widgetBootstrap
+      security:
+        - widgetJwt: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+          description: JWT émis dans widget_url.
+      responses:
+        '200':
+          description: Session widget initialisée.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: { type: string, format: uuid }
+                  widget_token:
+                    type: string
+                    description: Jeton opaque à envoyer en Authorization Bearer sur tous les appels suivants.
+                  mode: { type: string, enum: [create, amend] }
+                  establishment_name: { type: string }
+                  booking_ref: { type: string }
+                  arrival_date: { type: string, format: date }
+                  departure_date: { type: string, format: date }
+                  room: { type: string, nullable: true }
+                  prefill_guests:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+                  existing_guests:
+                    type: array
+                    description: Non vide uniquement en mode amend.
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        first_name: { type: string }
+                        last_name: { type: string }
+                        nationality_code: { type: string }
+                        is_primary: { type: boolean }
+                required: [session_id, widget_token, mode, establishment_name, booking_ref, arrival_date, departure_date, prefill_guests, existing_guests]
+        '401':
+          description: JWT invalide ou signature incorrecte (`invalid_signature`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Origine de l'iframe non autorisée (`frame_disallowed`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '410':
+          description: JWT expiré ou déjà consommé (`session_expired`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Session introuvable (`session_not_found`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /widget/v1/guests:
+    post:
+      tags: [Widget]
+      summary: "[Widget uniquement] Ajouter un voyageur à la fiche en cours"
+      operationId: widgetAddGuest
+      security:
+        - widgetSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WidgetGuestInput' }
+      responses:
+        '201':
+          description: Voyageur ajouté.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      first_name: { type: string }
+                      last_name: { type: string }
+                      nationality_code: { type: string }
+                    required: [id, first_name, last_name, nationality_code]
+                required: [data]
+        '401':
+          description: Jeton de session widget invalide ou expiré (`session_expired`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: Erreur de validation (`validation_error`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /widget/v1/guests/{guestId}:
+    delete:
+      tags: [Widget]
+      summary: "[Widget uniquement] Retirer un voyageur de la fiche en cours"
+      operationId: widgetRemoveGuest
+      security:
+        - widgetSession: []
+      parameters:
+        - name: guestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Voyageur retiré.
+        '401':
+          description: Jeton de session widget invalide ou expiré (`session_expired`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Voyageur introuvable sur cette fiche.
+
+  /widget/v1/scan:
+    post:
+      tags: [Widget]
+      summary: "[Widget uniquement] Envoyer une capture CIN/passeport pour OCR"
+      description: |
+        Même pipeline OCR que la capture native (`ScanController`), authentifié par le
+        jeton de session widget. Nécessite `allow="camera"` sur l'iframe du partenaire
+        pour que la caméra embarquée fonctionne (voir `widget-integration.html`).
+      operationId: widgetScan
+      security:
+        - widgetSession: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [passport_image]
+              properties:
+                passport_image:
+                  type: string
+                  format: binary
+                  description: jpeg, jpg, png, heic ou pdf — 10 Mo maximum.
+      responses:
+        '202':
+          description: Scan accepté, OCR en cours de traitement.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      scan_id: { type: string, format: uuid }
+                      status: { type: string, description: "Statut initial de l'OCR (ex. pending)." }
+                    required: [scan_id, status]
+                required: [data]
+        '401':
+          description: Jeton de session widget invalide ou expiré (`session_expired`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: Fichier invalide (`validation_error`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /widget/v1/scan/{scanId}/status:
+    get:
+      tags: [Widget]
+      summary: "[Widget uniquement] Interroger le statut d'un scan OCR"
+      operationId: widgetScanStatus
+      security:
+        - widgetSession: []
+      parameters:
+        - name: scanId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: |
+            Statut courant. `confidence` et `extracted` ne sont présents que si l'OCR
+            est terminé avec succès ; `error` n'est présent que si l'OCR a échoué.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      scan_id: { type: string, format: uuid }
+                      status: { type: string }
+                      confidence: { type: number, nullable: true }
+                      extracted: { type: object, additionalProperties: true, nullable: true }
+                      error: { type: string, nullable: true }
+                    required: [scan_id, status]
+                required: [data]
+        '401':
+          description: Jeton de session widget invalide ou expiré (`session_expired`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Scan introuvable pour cette session.
+
+  /widget/v1/submit:
+    post:
+      tags: [Widget]
+      summary: "[Widget uniquement] Soumettre la fiche (fin du parcours)"
+      description: |
+        En mode `create`, au moins un voyageur doit avoir été ajouté via `POST
+        /widget/v1/guests` avant cet appel. Déclenche (hors mode test) le webhook
+        `fiche.submitted` et, en mode `create`, le décompte de quota ainsi que le
+        relais WhatsApp de transmission, exactement comme une fiche saisie nativement.
+      operationId: widgetSubmit
+      security:
+        - widgetSession: []
+      responses:
+        '200':
+          description: Fiche soumise.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: { type: string, format: uuid }
+                  fiche_id: { type: string, format: uuid }
+                  guest_count: { type: integer }
+                required: [session_id, fiche_id, guest_count]
+              example:
+                session_id: "5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e"
+                fiche_id: "a1b2c3d4-e5f6-4789-90ab-cdef01234567"
+                guest_count: 2
+        '401':
+          description: Jeton de session widget invalide ou expiré (`session_expired`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: |
+            Échec de soumission (ex. aucun voyageur en mode create) —
+            `validation_error`. Un webhook `fiche.failed` est également enfilé.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Clé API partenaire. Format : `qyd_live_...` en production, `qyd_test_...` en
+        mode test. En-tête : `Authorization: Bearer qyd_live_...`.
+    widgetJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT à usage unique porté par `?token=` sur `GET /widget/v1/bootstrap`
+        (HS256, TTL 15 minutes par défaut, claims `session_id`, `establishment_id`,
+        `partner_id`, `iat`, `exp`, `jti`). Ne contient aucune donnée voyageur.
+        Documenté ici pour référence — dans les faits ce JWT est transmis en
+        paramètre de requête (`?token=`), pas en en-tête Authorization, car
+        `GET /widget/v1/bootstrap` est chargé directement par le navigateur dans
+        l'iframe.
+    widgetSession:
+      type: http
+      scheme: bearer
+      description: |
+        Jeton de session widget opaque (48 caractères aléatoires), renvoyé par
+        `GET /widget/v1/bootstrap` sous `widget_token`. TTL glissant de 20 minutes par
+        défaut (prolongé à chaque appel authentifié). En-tête :
+        `Authorization: Bearer {widget_token}`.
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    InvalidApiKey:
+      description: Clé API absente, invalide ou révoquée (`invalid_api_key`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Limite de débit dépassée (`rate_limited`). Voir l'en-tête Retry-After.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Secondes avant la prochaine requête autorisée.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      description: |
+        Enveloppe d'erreur unique à `/v1/*` et `/widget/v1/*` — distincte du format
+        `{data, errors:[]}` utilisé par le reste de l'application, sur le modèle des
+        API publiques à la Stripe.
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+              description: Message par défaut en français — n'utilisez jamais ce texte pour de la logique applicative, seulement `code`.
+            doc_url:
+              type: string
+              format: uri
+              description: "Lien direct vers la section de cette documentation décrivant ce code."
+          required: [code, message, doc_url]
+      required: [error]
+      example:
+        error:
+          code: "session_expired"
+          message: "Cette session a expiré."
+          doc_url: "https://qayed.tn/docs/api#session_expired"
+    ErrorCode:
+      type: string
+      description: Code d'erreur stable — ne change jamais de valeur une fois publié, seul un nouveau code peut être ajouté.
+      enum:
+        - invalid_api_key
+        - invalid_link_code
+        - link_code_expired
+        - link_code_already_used
+        - establishment_not_linked
+        - api_access_disabled
+        - quota_exceeded
+        - session_expired
+        - session_not_found
+        - fiche_not_found
+        - invalid_signature
+        - frame_disallowed
+        - rate_limited
+        - validation_error
+      x-error-details:
+        invalid_api_key: { http_status: 401, message: "Clé API invalide ou révoquée." }
+        invalid_link_code: { http_status: 422, message: "Code de liaison invalide." }
+        link_code_expired: { http_status: 422, message: "Ce code de liaison a expiré (validité 24h)." }
+        link_code_already_used: { http_status: 422, message: "Ce code de liaison a déjà été utilisé." }
+        establishment_not_linked: { http_status: 403, message: "Cet établissement n'est pas lié à ce partenaire." }
+        api_access_disabled: { http_status: 403, message: "L'accès API n'est pas activé pour cet établissement." }
+        quota_exceeded:
+          http_status: 422
+          message: "Quota de fiches dépassé."
+          note: >-
+            Réservé par contrat : le quota de fiches n'est aujourd'hui jamais
+            bloquant (dépassement facturé après coup, jamais empêché). Ce code
+            existe pour rester documentable si une limite commerciale distincte
+            est introduite un jour ; en v1 seul api_access_disabled bloque réellement.
+        session_expired: { http_status: 410, message: "Cette session a expiré." }
+        session_not_found: { http_status: 404, message: "Session introuvable." }
+        fiche_not_found: { http_status: 404, message: "Fiche introuvable." }
+        invalid_signature: { http_status: 401, message: "Signature invalide (JWT du widget)." }
+        frame_disallowed: { http_status: 403, message: "Origine non autorisée à charger ce widget." }
+        rate_limited: { http_status: 429, message: "Trop de requêtes." }
+        validation_error: { http_status: 422, message: "Erreur de validation." }
+    Establishment:
+      type: object
+      properties:
+        establishment_id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string }
+        quota:
+          type: object
+          properties:
+            used: { type: integer }
+            limit: { type: integer, nullable: true, description: "null = illimité." }
+            period: { type: string, enum: [monthly] }
+          required: [used, limit, period]
+      required: [establishment_id, name, status, quota]
+    FicheSessionCreated:
+      type: object
+      properties:
+        session_id: { type: string, format: uuid }
+        widget_url:
+          type: string
+          format: uri
+          description: "URL à ouvrir dans une iframe : https://qayed.tn/widget/fiche?token={jwt}."
+        expires_at:
+          type: string
+          format: date-time
+          description: Expiration du JWT porté par widget_url (15 minutes par défaut).
+        mode:
+          type: string
+          enum: [create, amend]
+          description: |
+            create = nouvelle fiche ; amend = une fiche existe déjà pour ce séjour
+            (booking_ref), le widget permettra de la compléter/corriger sans en créer
+            une seconde.
+      required: [session_id, widget_url, expires_at, mode]
+    WidgetGuestInput:
+      type: object
+      description: Schéma strict utilisé par le widget lui-même — plus contraignant que le pré-remplissage libre de POST /v1/fiche-sessions.
+      required: [first_name, last_name, date_of_birth, sex, nationality_code, document]
+      properties:
+        first_name: { type: string, maxLength: 100 }
+        last_name: { type: string, maxLength: 100 }
+        date_of_birth: { type: string, format: date, description: "Doit être antérieure à aujourd'hui." }
+        sex: { type: string, enum: [M, F, X] }
+        nationality_code: { type: string, minLength: 3, maxLength: 3, description: "Code pays ISO 3166-1 alpha-3." }
+        country_of_birth: { type: string, minLength: 3, maxLength: 3, nullable: true }
+        place_of_birth: { type: string, maxLength: 150, nullable: true }
+        email: { type: string, format: email, nullable: true }
+        phone: { type: string, maxLength: 30, nullable: true }
+        is_primary: { type: boolean, default: false }
+        scan_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Identifiant d'un scan OCR précédemment envoyé via POST /widget/v1/scan, pour préremplir/valider le document.
+        document:
+          type: object
+          required: [type, document_number, issuing_country_code]
+          properties:
+            type: { type: string, enum: [passport, national_id, residence_permit, visa, travel_document] }
+            document_number: { type: string, maxLength: 100 }
+            issuing_country_code: { type: string, minLength: 2, maxLength: 3 }
+            issue_date: { type: string, format: date, nullable: true }
+            expiry_date: { type: string, format: date, nullable: true }
+            mrz_line1: { type: string, maxLength: 50, nullable: true }
+            mrz_line2: { type: string, maxLength: 50, nullable: true }
+    WebhookEventFicheSubmitted:
+      type: object
+      description: Événement Qayed-Event = fiche.submitted. Jamais envoyé pour une session créée avec une clé qyd_test_ (isolation du mode test).
+      properties:
+        fiche_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid }
+        booking_ref: { type: string }
+        establishment_id: { type: string, format: uuid }
+        guest_count: { type: integer }
+        submitted_at: { type: string, format: date-time }
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Copie exacte du champ metadata envoyé à la création de la session.
+      required: [fiche_id, session_id, booking_ref, establishment_id, guest_count, submitted_at, metadata]
+    WebhookEventFicheFailed:
+      type: object
+      description: Événement Qayed-Event = fiche.failed. Envoyé même en mode test.
+      properties:
+        session_id: { type: string, format: uuid }
+        booking_ref: { type: string }
+        error_code:
+          type: string
+          description: "Actuellement toujours submission_failed — champ conservé stable pour un futur détail plus fin."
+      required: [session_id, booking_ref, error_code]
+    WebhookEventSessionExpired:
+      type: object
+      description: |
+        Événement Qayed-Event = session.expired. Émis par le balayage planifié
+        (job récurrent) sur les sessions pending dont le JWT a expiré sans qu'aucune
+        fiche n'ait été soumise. Envoyé même en mode test.
+      properties:
+        session_id: { type: string, format: uuid }
+        booking_ref: { type: string }
+      required: [session_id, booking_ref]
+    WebhookEnvelopeExample:
+      type: object
+      description: |
+        Le corps brut du POST envoyé à votre endpoint EST directement l'objet
+        événement ci-dessus (pas d'enveloppe supplémentaire) — le type d'événement se
+        lit dans l'en-tête Qayed-Event, pas dans le corps.
+x-webhooks-signature:
+  description: |
+    Chaque livraison porte deux en-têtes :
+    - `Qayed-Event`: le nom de l'événement (fiche.submitted | fiche.failed | session.expired).
+    - `Qayed-Signature`: `t={unix_timestamp},v1={hex}` où `hex` =
+      `hash_hmac('sha256', "{timestamp}.{corps_brut_json}", secret_endpoint)`.
+
+    Vérifiez systématiquement :
+    1. Que `timestamp` est dans une fenêtre de tolérance de 300 secondes (par défaut,
+       configurable) autour de l'heure courante — anti-rejeu.
+    2. Que `hex` correspond au HMAC-SHA256 recalculé sur `"{timestamp}.{corps_brut}"`
+       avec le secret de VOTRE endpoint, en comparaison à temps constant
+       (`hash_equals` / `crypto.timingSafeEqual`).
+
+    Le calcul DOIT porter sur les octets bruts du corps de la requête, avant tout
+    parsing JSON — voir verify-webhook.js et verify-webhook.php.
+  retry_schedule_minutes: [1, 5, 15, 60, 240, 1440]
+  retry_notes: |
+    Backoff exponentiel après le premier échec (HTTP non 2xx ou exception réseau),
+    au moins 5 tentatives réparties sur 24h. Un endpoint est désactivé automatiquement
+    après 20 échecs consécutifs par défaut (réactivable côté admin Qayed).

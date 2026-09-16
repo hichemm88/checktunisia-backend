@@ -64,6 +64,11 @@ class RolesAndPermissionsSeeder extends Seeder
             'authority.search', 'authority.view_guest', 'authority.view_hotel',
         ]);
 
+        // Compte synthétique par organisation représentant une intégration API
+        // partenaire (voir PartnerIntegrationActor) — aucune permission propre,
+        // il agit exclusivement via les services internes de l'API partenaire.
+        Role::firstOrCreate(['name' => 'api_integration', 'guard_name' => 'api']);
+
         $this->command->info('Roles and permissions seeded.');
     }
 }
