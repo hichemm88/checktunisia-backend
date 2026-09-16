@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ApiPartner;
 use App\Services\PartnerApi\WidgetTokenService;
 use Illuminate\Http\Request;
-use Illuminate\View\View;
+use Illuminate\Http\Response;
 
 /**
  * Page HTML du widget (§3). Servie par une vue Blade dédiée — et non le
@@ -18,7 +18,7 @@ class WidgetShellController extends Controller
 {
     public function __construct(private WidgetTokenService $tokens) {}
 
-    public function show(Request $request): View
+    public function show(Request $request): Response
     {
         $token = (string) $request->query('token', '');
 
