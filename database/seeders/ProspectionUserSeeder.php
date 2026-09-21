@@ -45,7 +45,7 @@ class ProspectionUserSeeder extends Seeder
 
     private function seedOne(string $name, ?string $email, ?string $password, string $role): void
     {
-        if (!$email || !$password) {
+        if (! $email || ! $password) {
             Log::info("[prospection] compte {$role} non seedé : variables d'environnement absentes.");
 
             return;

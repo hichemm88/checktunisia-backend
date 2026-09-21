@@ -20,7 +20,7 @@ class ProspectionServiceProvider extends ServiceProvider
         Auth::viaRequest('prospection-token', function (Request $request) {
             $plainTextToken = $request->bearerToken();
 
-            if (!$plainTextToken) {
+            if (! $plainTextToken) {
                 return null;
             }
 
@@ -28,13 +28,13 @@ class ProspectionServiceProvider extends ServiceProvider
                 ->where('expires_at', '>', now())
                 ->first();
 
-            if (!$accessToken) {
+            if (! $accessToken) {
                 return null;
             }
 
             $user = $accessToken->user;
 
-            if (!$user || !$user->active) {
+            if (! $user || ! $user->active) {
                 return null;
             }
 
@@ -42,7 +42,7 @@ class ProspectionServiceProvider extends ServiceProvider
             // continu pendant une tournée écrirait plusieurs fois par
             // minute pour une information dont personne ne lit la
             // précision à la seconde près.
-            if (!$accessToken->last_used_at || $accessToken->last_used_at->lt(now()->subMinutes(5))) {
+            if (! $accessToken->last_used_at || $accessToken->last_used_at->lt(now()->subMinutes(5))) {
                 $accessToken->forceFill(['last_used_at' => now()])->save();
             }
 

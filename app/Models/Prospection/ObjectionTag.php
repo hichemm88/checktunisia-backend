@@ -10,13 +10,10 @@ class ObjectionTag extends Model
     use HasUuids;
 
     protected $connection = 'prospection';
-
     protected $table = 'objection_tags';
 
     protected $primaryKey = 'id';
-
     public $incrementing = false;
-
     protected $keyType = 'string';
 
     protected $fillable = [

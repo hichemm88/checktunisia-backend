@@ -16,13 +16,10 @@ class ProspectionUser extends Authenticatable
     use HasUuids;
 
     protected $connection = 'prospection';
-
     protected $table = 'users';
 
     protected $primaryKey = 'id';
-
     public $incrementing = false;
-
     protected $keyType = 'string';
 
     protected $fillable = [

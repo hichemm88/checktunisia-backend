@@ -18,13 +18,13 @@ class AuthController extends Controller
     {
         $user = ProspectionUser::where('email', $request->input('email'))->first();
 
-        if (!$user || !Hash::check($request->input('password'), $user->password)) {
+        if (! $user || ! Hash::check($request->input('password'), $user->password)) {
             throw ValidationException::withMessages([
                 'email' => ['Identifiants incorrects.'],
             ]);
         }
 
-        if (!$user->active) {
+        if (! $user->active) {
             return response()->json([
                 'data' => null,
                 'errors' => [['code' => 'ACCOUNT_DISABLED', 'message' => 'Ce compte est désactivé.', 'field' => null]],
