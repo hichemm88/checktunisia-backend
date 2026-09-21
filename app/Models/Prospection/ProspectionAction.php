@@ -17,10 +17,13 @@ class ProspectionAction extends Model
     public const UPDATED_AT = null;
 
     protected $connection = 'prospection';
+
     protected $table = 'actions';
 
     protected $primaryKey = 'id';
+
     public $incrementing = false;
+
     protected $keyType = 'string';
 
     protected $fillable = [
