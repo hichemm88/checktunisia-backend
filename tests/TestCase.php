@@ -9,6 +9,15 @@ use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 abstract class TestCase extends BaseTestCase
 {
     /**
+     * RefreshDatabase n'enveloppe par défaut que la connexion par défaut
+     * ('pgsql') dans une transaction annulée après chaque test. Le CRM de
+     * prospection vit sur une connexion séparée ('prospection', voir
+     * config/database.php) : sans l'ajouter ici, les lignes qu'un test y crée
+     * survivraient au test suivant.
+     */
+    protected $connectionsToTransact = ['pgsql', 'prospection'];
+
+    /**
      * Rôles et permissions, semés avant chaque test QUI TOUCHE LA BASE.
      *
      * La condition manquait, alors que l'intention était déjà écrite ici. Le

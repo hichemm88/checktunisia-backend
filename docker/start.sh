@@ -34,7 +34,10 @@ for seeder in \
   PlatformAdminSeeder \
   AiPricingSeeder \
   HomePageSeeder \
-  LegalPagesSeeder
+  LegalPagesSeeder \
+  ProspectionUserSeeder \
+  ProspectionMessageTemplateSeeder \
+  ProspectionObjectionTagSeeder
 do
   php artisan db:seed --class="${seeder}" --force || echo "  ! ${seeder} a échoué (ignoré)"
 done
