@@ -71,7 +71,7 @@ class UserController extends Controller
 
     private function authorizeAdmin(Request $request): void
     {
-        if (! $request->user()?->isAdmin()) {
+        if (!$request->user()?->isAdmin()) {
             abort(response()->json([
                 'data' => null,
                 'errors' => [['code' => 'PERMISSION_DENIED', 'message' => 'Réservé aux administrateurs.', 'field' => null]],

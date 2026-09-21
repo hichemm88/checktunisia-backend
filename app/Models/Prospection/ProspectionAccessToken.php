@@ -11,10 +11,13 @@ class ProspectionAccessToken extends Model
     use HasUuids;
 
     protected $connection = 'prospection';
+
     protected $table = 'access_tokens';
 
     protected $primaryKey = 'id';
+
     public $incrementing = false;
+
     protected $keyType = 'string';
 
     protected $fillable = [
