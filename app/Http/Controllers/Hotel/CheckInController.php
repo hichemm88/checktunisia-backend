@@ -7,9 +7,13 @@ use App\Models\CheckIn;
 use App\Models\Hotel;
 use App\Models\Room;
 use App\Services\CheckIn\CheckInService;
+use App\Services\Delivery\FicheScanImage;
 use App\Services\Notifications\PushNotificationService;
+use App\Services\Whatsapp\FicheFormatter;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
@@ -136,6 +140,51 @@ class CheckInController extends Controller
     {
         $checkIn = $this->findForTenant($id);
         return response()->json(['data' => $this->detail($checkIn->load(['room', 'guests.documents', 'creator', 'completedBy']))]);
+    }
+
+    /**
+     * GET hotel/check-ins/{id}/police-fiche
+     *
+     * Le MÊME template (`pdf.police-fiches`, `FicheFormatter::fields()`,
+     * `FicheScanImage`) que l'export par email et la pièce jointe WhatsApp —
+     * une carte par voyageur, photo du document comprise. Avant ce point, la
+     * réception imprimait un composant React totalement différent
+     * (`PoliceFiche.tsx`, retiré) : même établissement, même voyageur, deux
+     * documents qui ne se ressemblaient pas selon le bouton cliqué.
+     *
+     * `stream()` plutôt que `output()` : la réponse porte
+     * `Content-Disposition: inline`, donc le PDF s'ouvre directement dans le
+     * nouvel onglet — imprimer revient à utiliser le bouton du lecteur PDF du
+     * navigateur, comme pour n'importe quel PDF consulté en ligne.
+     */
+    public function policeFichePdf(string $id)
+    {
+        $checkIn = $this->findForTenant($id)->load(['hotel.address', 'room', 'guests.documents']);
+        $hotel = $checkIn->hotel;
+
+        $guests = $checkIn->guests->sortByDesc(fn ($g) => (bool) ($g->pivot->is_primary ?? false));
+
+        $fiches = [];
+        foreach ($guests as $guest) {
+            $fiche = FicheFormatter::fields($checkIn, $guest);
+            $fiche['photo'] = FicheScanImage::dataUri($checkIn, $guest);
+            $fiches[] = $fiche;
+        }
+
+        $fmt = fn ($d) => $d ? Carbon::parse($d)->format('d/m/Y') : '—';
+
+        $pdf = Pdf::loadView('pdf.police-fiches', [
+            'hotelName' => $hotel->name,
+            'hotelAddress' => trim(implode(', ', array_filter([
+                $hotel->address?->line1, $hotel->address?->city, $hotel->address?->governorate,
+            ]))) ?: '—',
+            'rangeLabel' => $fmt($checkIn->check_in_date).' – '.$fmt($checkIn->expected_check_out_date),
+            'count' => count($fiches),
+            'generatedAt' => Carbon::now('Africa/Tunis')->format('d/m/Y H:i'),
+            'fiches' => $fiches,
+        ])->setPaper('a4');
+
+        return $pdf->stream('fiche-police-'.$checkIn->reference.'.pdf');
     }
 
     public function update(Request $request, string $id): JsonResponse

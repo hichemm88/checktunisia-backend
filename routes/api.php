@@ -309,6 +309,9 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
             // Check-ins (read for all staff)
             Route::get('check-ins', [CheckInController::class, 'index']);
             Route::get('check-ins/{id}', [CheckInController::class, 'show']);
+            // Même format que l'export/WhatsApp (voir CheckInController::policeFichePdf) —
+            // les deux rôles impriment déjà la fiche depuis cet écran.
+            Route::get('check-ins/{id}/police-fiche', [CheckInController::class, 'policeFichePdf']);
 
             // OCR scan status
             Route::get('scans/{scan_id}/status', [ScanController::class, 'status']);
