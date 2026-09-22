@@ -139,6 +139,52 @@ class WhatsappCloudApi
     }
 
     /**
+     * Contenu d'un média REÇU (image, document… d'un agent), au moment de
+     * l'appel — jamais mis en cache ici, à l'appelant de décider s'il veut
+     * conserver quelque chose.
+     *
+     * Deux temps côté Meta : `GET /{media_id}` rend une URL de téléchargement
+     * TEMPORAIRE (et le type MIME), puis cette URL se télécharge avec le même
+     * jeton. Un `media_id` a une fenêtre de vie d'environ 30 jours ; au-delà,
+     * les deux appels échouent — ce n'est pas une panne, Meta a simplement
+     * purgé le fichier, d'où l'exception dédiée plutôt qu'une erreur générique.
+     *
+     * @return array{bytes:string,mime:?string}
+     *
+     * @throws WhatsappMediaUnavailable  média introuvable ou expiré côté Meta
+     * @throws \RuntimeException  autre échec (jeton invalide, réseau…)
+     */
+    public function fetchMedia(string $mediaId): array
+    {
+        $lookup = $this->client()->get($this->graph($mediaId));
+
+        if (! $lookup->successful()) {
+            if (in_array($lookup->status(), [400, 404], true)) {
+                throw new WhatsappMediaUnavailable(
+                    "Média $mediaId introuvable côté Meta (expiré ou déjà purgé)."
+                );
+            }
+
+            throw new \RuntimeException($this->describeFailure($lookup));
+        }
+
+        $fileUrl = $lookup->json('url');
+        $mime = $lookup->json('mime_type');
+
+        if (blank($fileUrl)) {
+            throw new WhatsappMediaUnavailable("Média $mediaId : Meta n'a rendu aucune URL de téléchargement.");
+        }
+
+        $file = $this->client()->get($fileUrl);
+
+        if (! $file->successful()) {
+            throw new WhatsappMediaUnavailable("Média $mediaId : téléchargement refusé par Meta (HTTP {$file->status()}).");
+        }
+
+        return ['bytes' => $file->body(), 'mime' => is_string($mime) ? $mime : null];
+    }
+
+    /**
      * Modèles déclarés sur le compte, indexés par « nom:langue ».
      *
      * @return array<string,array<string,mixed>>

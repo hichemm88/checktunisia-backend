@@ -9,9 +9,11 @@ use App\Models\WhatsappSendLog;
 use App\Services\Audit\AuditLogger;
 use App\Services\Whatsapp\ServiceWindowClosed;
 use App\Services\Whatsapp\WhatsappConversationService;
+use App\Services\Whatsapp\WhatsappMediaUnavailable;
 use App\Services\Whatsapp\WhatsappSendingDisabled;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Collection;
 
 /**
@@ -241,6 +243,48 @@ class WhatsappInboxController extends Controller
         }
 
         return response()->json(['data' => $this->message($message)], 201);
+    }
+
+    /**
+     * GET admin/whatsapp/inbox/{id}/messages/{messageId}/media
+     *
+     * Pièce jointe REÇUE d'un agent (image, document…), rapatriée à la
+     * demande — jamais stockée côté Qayed. Chaque appel retélécharge depuis
+     * Meta ; passé sa fenêtre de conservation (~30 jours), Meta ne la rend
+     * plus, ce que l'écran doit distinguer d'une panne (410, pas 500).
+     */
+    public function media(string $id, string $messageId): Response|JsonResponse
+    {
+        $message = WhatsappConversationMessage::where('conversation_id', $id)
+            ->where('id', $messageId)
+            ->firstOrFail();
+
+        if (blank($message->media_id)) {
+            abort(404);
+        }
+
+        try {
+            $media = $this->conversations->fetchMedia($message->media_id);
+        } catch (WhatsappMediaUnavailable $e) {
+            return response()->json([
+                'data' => null,
+                'errors' => [[
+                    'code' => 'MEDIA_UNAVAILABLE',
+                    'message' => 'Ce média n\'est plus disponible côté WhatsApp (expiré après ~30 jours, ou déjà purgé).',
+                    'field' => null,
+                ]],
+            ], 410);
+        }
+
+        $filename = $message->media_filename ?? 'media';
+
+        return response($media['bytes'])
+            ->header('Content-Type', $media['mime'] ?? $message->media_mime ?? 'application/octet-stream')
+            ->header('Content-Disposition', 'inline; filename="'.str_replace('"', '', $filename).'"')
+            // Une réponse rapatriée à la demande depuis un tiers dont l'URL
+            // est temporaire : rien à mettre en cache, et surtout pas de cache
+            // partagé (proxy) sur une pièce jointe de police.
+            ->header('Cache-Control', 'private, max-age=0, no-store');
     }
 
     // ── Interne ──────────────────────────────────────────────────────────────

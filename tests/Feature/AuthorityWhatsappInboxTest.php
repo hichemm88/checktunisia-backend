@@ -619,6 +619,106 @@ class AuthorityWhatsappInboxTest extends TestCase
         $this->assertSame('21620123456', $byNumber[0]['phone']);
     }
 
+    // ── Pièces jointes ───────────────────────────────────────────────────────
+
+    public function test_a_received_attachment_is_proxied_from_meta_never_stored(): void
+    {
+        $this->postSigned(['entry' => [['changes' => [['value' => [
+            'messages' => [[
+                'id' => 'wamid.MEDIA1',
+                'from' => '21620123456',
+                'type' => 'image',
+                'timestamp' => (string) now()->timestamp,
+                'image' => ['id' => 'meta-media-1', 'mime_type' => 'image/jpeg'],
+            ]],
+        ]]]]]])->assertOk();
+
+        Http::fake([
+            'https://graph.facebook.com/v21.0/meta-media-1' => Http::response([
+                'url' => 'https://lookaside.fbsbx.com/whatsapp_business/attachments/fake',
+                'mime_type' => 'image/jpeg',
+            ], 200),
+            'https://lookaside.fbsbx.com/*' => Http::response('FAKE-IMAGE-BYTES', 200),
+        ]);
+
+        $conversation = WhatsappConversation::sole();
+        $message = WhatsappConversationMessage::sole();
+        $admin = User::factory()->platformAdmin()->create();
+
+        $this->actingAs($admin)
+            ->get("/api/v1/admin/whatsapp/inbox/{$conversation->id}/messages/{$message->id}/media")
+            ->assertOk()
+            ->assertHeader('Content-Type', 'image/jpeg')
+            ->assertSee('FAKE-IMAGE-BYTES', false);
+
+        // Le proxy retélécharge à CHAQUE appel : rien n'est jamais écrit en
+        // base ni sur disque côté Qayed.
+        $this->assertDatabaseMissing('whatsapp_conversation_messages', ['media_id' => 'meta-media-1', 'body' => 'FAKE-IMAGE-BYTES']);
+    }
+
+    public function test_an_expired_attachment_says_so_rather_than_failing_like_a_bug(): void
+    {
+        $this->postSigned(['entry' => [['changes' => [['value' => [
+            'messages' => [[
+                'id' => 'wamid.MEDIA2',
+                'from' => '21620123456',
+                'type' => 'image',
+                'timestamp' => (string) now()->timestamp,
+                'image' => ['id' => 'meta-media-expired', 'mime_type' => 'image/jpeg'],
+            ]],
+        ]]]]]])->assertOk();
+
+        // Meta a purgé ce media_id (fenêtre d'environ 30 jours dépassée).
+        Http::fake([
+            'https://graph.facebook.com/v21.0/meta-media-expired' => Http::response(['error' => ['message' => 'Unsupported get request']], 400),
+        ]);
+
+        $conversation = WhatsappConversation::sole();
+        $message = WhatsappConversationMessage::sole();
+        $admin = User::factory()->platformAdmin()->create();
+
+        $this->actingAs($admin)
+            ->getJson("/api/v1/admin/whatsapp/inbox/{$conversation->id}/messages/{$message->id}/media")
+            ->assertStatus(410)
+            ->assertJsonPath('errors.0.code', 'MEDIA_UNAVAILABLE');
+    }
+
+    public function test_a_message_without_media_has_nothing_to_fetch(): void
+    {
+        $this->postSigned($this->inboundPayload('wamid.NOMEDIA', '21620123456', 'Bonjour'))->assertOk();
+
+        $conversation = WhatsappConversation::sole();
+        $message = WhatsappConversationMessage::sole();
+        $admin = User::factory()->platformAdmin()->create();
+
+        $this->actingAs($admin)
+            ->getJson("/api/v1/admin/whatsapp/inbox/{$conversation->id}/messages/{$message->id}/media")
+            ->assertNotFound();
+    }
+
+    public function test_attachment_endpoint_is_closed_to_anyone_but_a_platform_admin(): void
+    {
+        $this->postSigned(['entry' => [['changes' => [['value' => [
+            'messages' => [[
+                'id' => 'wamid.MEDIA3',
+                'from' => '21620123456',
+                'type' => 'image',
+                'timestamp' => (string) now()->timestamp,
+                'image' => ['id' => 'meta-media-3', 'mime_type' => 'image/jpeg'],
+            ]],
+        ]]]]]])->assertOk();
+
+        $conversation = WhatsappConversation::sole();
+        $message = WhatsappConversationMessage::sole();
+
+        $receptionist = User::factory()->create();
+        $receptionist->assignRole('receptionist');
+
+        $this->actingAs($receptionist)
+            ->getJson("/api/v1/admin/whatsapp/inbox/{$conversation->id}/messages/{$message->id}/media")
+            ->assertForbidden();
+    }
+
     // ── Accès ────────────────────────────────────────────────────────────────
 
     public function test_the_inbox_is_closed_to_anyone_but_a_platform_admin(): void

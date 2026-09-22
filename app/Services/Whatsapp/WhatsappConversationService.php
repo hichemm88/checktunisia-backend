@@ -450,6 +450,19 @@ class WhatsappConversationService
         return true;
     }
 
+    /**
+     * Contenu d'une pièce jointe reçue d'un agent, récupéré à la demande
+     * auprès de Meta — jamais stocké : voir `WhatsappCloudApi::fetchMedia()`.
+     *
+     * @return array{bytes:string,mime:?string}
+     *
+     * @throws WhatsappMediaUnavailable
+     */
+    public function fetchMedia(string $mediaId): array
+    {
+        return $this->api->fetchMedia($mediaId);
+    }
+
     /** L'administration a ouvert le fil : le compteur de non-lus retombe. */
     public function markRead(WhatsappConversation $conversation): void
     {

@@ -707,6 +707,7 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
             Route::get('whatsapp/inbox/{id}', [WhatsappInboxController::class, 'show']);
             Route::post('whatsapp/inbox/{id}/reply', [WhatsappInboxController::class, 'reply'])
                 ->middleware('throttle:10,1');
+            Route::get('whatsapp/inbox/{id}/messages/{messageId}/media', [WhatsappInboxController::class, 'media']);
 
             Route::get('whatsapp/health', [WhatsappAdminController::class, 'health']);
             Route::get('whatsapp/logs', [WhatsappAdminController::class, 'logs']);
