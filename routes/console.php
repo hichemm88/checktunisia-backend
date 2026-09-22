@@ -58,6 +58,14 @@ Schedule::command('police:daily-digest')
 // au-delà de la rétention (24 h). Minimisation des données.
 Schedule::command('whatsapp:purge-images')->hourly()->withoutOverlapping();
 
+// CRM de prospection — notifications push (§ Notifications push). Les deux
+// commandes tournent toutes les 15 minutes : le récap du matin compare
+// l'heure courante à `notif_digest_hour` (granularité :00/:15/:30/:45, voir
+// SendDigestCommand) et le rappel de démo cherche une fenêtre d'une heure —
+// une cadence plus lente manquerait des créneaux.
+Schedule::command('prospection:send-digest')->everyFifteenMinutes()->withoutOverlapping();
+Schedule::command('prospection:send-demo-reminders')->everyFifteenMinutes()->withoutOverlapping();
+
 // Transmission des fiches par la WhatsApp Cloud API.
 //
 // Le relais WhatsApp Web fonctionnait en PULL : un worker Node venait chercher

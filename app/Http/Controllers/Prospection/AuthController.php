@@ -45,6 +45,27 @@ class AuthController extends Controller
         ]);
     }
 
+    /**
+     * Préférences de notification (§ Réglages) : volontairement PAS derrière
+     * UserController::update, réservé aux admins pour gérer LES AUTRES
+     * comptes (rôle, activation...) — ici chacun règle uniquement ses
+     * propres notifications, sans droit d'admin nécessaire.
+     */
+    public function updateMe(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'notif_digest_enabled' => ['sometimes', 'boolean'],
+            'notif_digest_hour' => ['sometimes', 'date_format:H:i'],
+            'notif_demo_reminder_enabled' => ['sometimes', 'boolean'],
+            'notif_activity_enabled' => ['sometimes', 'boolean'],
+        ]);
+
+        $user = $request->user();
+        $user->update($data);
+
+        return response()->json(['data' => ProspectionSessionIssuer::userPayload($user->fresh())]);
+    }
+
     public function logout(Request $request): JsonResponse
     {
         $token = $request->attributes->get('prospection_access_token');

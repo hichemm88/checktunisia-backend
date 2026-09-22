@@ -108,13 +108,22 @@ class EstablishmentController extends Controller
 
         $newStatus = $request->input('status');
         $nextActionAt = $request->input('next_action_at');
+        $nextActionAtSubmitted = array_key_exists('next_action_at', $data);
 
-        DB::connection('prospection')->transaction(function () use ($establishment, $data, $newStatus, $nextActionAt, $request) {
+        DB::connection('prospection')->transaction(function () use ($establishment, $data, $newStatus, $nextActionAt, $nextActionAtSubmitted, $request) {
             $establishment->fill($data);
             $establishment->save();
 
             if ($newStatus && $newStatus !== $establishment->getOriginal('status')) {
                 EstablishmentStatusUpdater::apply($establishment, $newStatus, $nextActionAt, $request->user()->id);
+            }
+
+            // Une démo reportée doit être re-rappelée (§ Notifications push,
+            // SendDemoRemindersCommand) : sans ce reset, une démo déplacée à
+            // plus tard ne recevrait plus jamais son rappel, l'ancienne date
+            // ayant déjà marqué demo_reminder_sent_at.
+            if ($nextActionAtSubmitted && $establishment->status === 'demo_planifiee' && $establishment->demo_reminder_sent_at) {
+                $establishment->forceFill(['demo_reminder_sent_at' => null])->save();
             }
         });
 

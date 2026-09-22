@@ -34,6 +34,7 @@ class ProspectionUser extends Authenticatable
         'notif_digest_hour',
         'notif_demo_reminder_enabled',
         'notif_activity_enabled',
+        'last_digest_sent_at',
         'active',
         'last_login_at',
     ];
@@ -49,6 +50,7 @@ class ProspectionUser extends Authenticatable
             'notif_digest_enabled' => 'boolean',
             'notif_demo_reminder_enabled' => 'boolean',
             'notif_activity_enabled' => 'boolean',
+            'last_digest_sent_at' => 'date',
             'active' => 'boolean',
             'last_login_at' => 'datetime',
         ];
@@ -62,6 +64,11 @@ class ProspectionUser extends Authenticatable
     public function accessTokens(): HasMany
     {
         return $this->hasMany(ProspectionAccessToken::class, 'user_id');
+    }
+
+    public function pushSubscriptions(): HasMany
+    {
+        return $this->hasMany(PushSubscription::class, 'user_id');
     }
 
     public function establishmentsCreated(): HasMany

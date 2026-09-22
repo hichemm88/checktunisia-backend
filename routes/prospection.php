@@ -7,6 +7,7 @@ use App\Http\Controllers\Prospection\ExportController;
 use App\Http\Controllers\Prospection\ImportController;
 use App\Http\Controllers\Prospection\MessageTemplateController;
 use App\Http\Controllers\Prospection\ObjectionTagController;
+use App\Http\Controllers\Prospection\PushSubscriptionController;
 use App\Http\Controllers\Prospection\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -28,6 +29,7 @@ Route::post('auth/login', [AuthController::class, 'login'])->middleware('throttl
 
 Route::middleware('auth:prospection')->group(function () {
     Route::get('auth/me', [AuthController::class, 'me']);
+    Route::patch('auth/me', [AuthController::class, 'updateMe']);
     Route::post('auth/logout', [AuthController::class, 'logout']);
 
     Route::get('users', [UserController::class, 'index']);
@@ -50,6 +52,10 @@ Route::middleware('auth:prospection')->group(function () {
     Route::patch('objection-tags/{id}', [ObjectionTagController::class, 'update']);
 
     Route::get('message-templates', [MessageTemplateController::class, 'index']);
+
+    Route::post('push-subscriptions', [PushSubscriptionController::class, 'store']);
+    Route::delete('push-subscriptions', [PushSubscriptionController::class, 'destroy']);
+    Route::post('push-subscriptions/test', [PushSubscriptionController::class, 'test']);
 
     Route::post('import/preview', [ImportController::class, 'preview']);
     Route::post('import/commit', [ImportController::class, 'commit']);

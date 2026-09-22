@@ -64,4 +64,22 @@ final class PipelineStatus
     {
         return in_array($status, self::TERMINAL, true);
     }
+
+    /** Libellé FR — utilisé par les notifications push (texte, pas d'UI ici). */
+    public static function label(string $status): string
+    {
+        return match ($status) {
+            self::A_CONTACTER => 'à contacter',
+            self::CONTACTE => 'contacté',
+            self::RELANCE => 'relancé',
+            self::DEMO_PLANIFIEE => 'démo planifiée',
+            self::DEMO_FAITE => 'démo faite',
+            self::ESSAI_EN_COURS => 'essai en cours',
+            self::CLIENT => 'client',
+            self::REFUS => 'refus',
+            self::SANS_REPONSE => 'sans réponse',
+            self::HORS_PERIMETRE => 'hors périmètre',
+            default => $status,
+        };
+    }
 }
