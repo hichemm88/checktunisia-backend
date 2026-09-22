@@ -18,6 +18,12 @@ class DatabaseSeeder extends Seeder
             // DemoDataSeeder retire du cycle par defaut : ne jamais injecter de
             // donnees de demo en production (elles faussaient le tableau de bord).
             // A relancer manuellement en local si besoin : db:seed --class=DemoDataSeeder.
+
+            // CRM de prospection (crm.qayed.tn) — schéma Postgres séparé, voir
+            // config/database.php. Idempotents (firstOrCreate).
+            ProspectionUserSeeder::class,
+            ProspectionMessageTemplateSeeder::class,
+            ProspectionObjectionTagSeeder::class,
         ]);
     }
 }

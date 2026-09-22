@@ -18,12 +18,26 @@ return [
             'driver'   => 'session',
             'provider' => 'users',
         ],
+
+        // CRM de prospection interne — jeton porteur dédié, résolu par
+        // App\Providers\ProspectionServiceProvider (Auth::viaRequest).
+        // Volontairement PAS le guard Sanctum de production : voir le
+        // commentaire de la migration create_prospection_access_tokens_table.
+        'prospection' => [
+            'driver'   => 'prospection-token',
+            'provider' => 'prospection_users',
+        ],
     ],
 
     'providers' => [
         'users' => [
             'driver' => 'eloquent',
             'model'  => App\Models\User::class,
+        ],
+
+        'prospection_users' => [
+            'driver' => 'eloquent',
+            'model'  => App\Models\Prospection\ProspectionUser::class,
         ],
     ],
 

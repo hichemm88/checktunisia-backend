@@ -725,3 +725,13 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
             Route::post('emails/send-reminders', [EmailTemplateAdminController::class, 'sendReminders']);
         });
 });
+
+/*
+|--------------------------------------------------------------------------
+| CRM de prospection commerciale (interne, crm.qayed.tn)
+|--------------------------------------------------------------------------
+|
+| Fichier séparé : périmètre, auth (guard 'prospection') et données
+| totalement isolés du reste de l'API — voir routes/prospection.php.
+*/
+Route::prefix('prospection')->group(base_path('routes/prospection.php'));
