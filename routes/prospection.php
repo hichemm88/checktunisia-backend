@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Prospection\ActionController;
 use App\Http\Controllers\Prospection\AuthController;
+use App\Http\Controllers\Prospection\DashboardController;
 use App\Http\Controllers\Prospection\EstablishmentController;
 use App\Http\Controllers\Prospection\ExportController;
 use App\Http\Controllers\Prospection\ImportController;
@@ -20,8 +21,6 @@ use Illuminate\Support\Facades\Route;
 | voir bootstrap/app.php. Outil interne : guard 'prospection' dédié (voir
 | config/auth.php), jamais le guard Sanctum de production.
 |
-| Le CRUD complet des templates (§ Écran 5) arrive avec l'écran Templates ;
-| seule la lecture est exposée ici (nécessaire au bouton WhatsApp).
 */
 
 Route::post('auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
@@ -50,6 +49,11 @@ Route::middleware('auth:prospection')->group(function () {
     Route::patch('objection-tags/{id}', [ObjectionTagController::class, 'update']);
 
     Route::get('message-templates', [MessageTemplateController::class, 'index']);
+    Route::post('message-templates', [MessageTemplateController::class, 'store']);
+    Route::patch('message-templates/{id}', [MessageTemplateController::class, 'update']);
+    Route::delete('message-templates/{id}', [MessageTemplateController::class, 'destroy']);
+
+    Route::get('dashboard', [DashboardController::class, 'index']);
 
     Route::post('import/preview', [ImportController::class, 'preview']);
     Route::post('import/commit', [ImportController::class, 'commit']);
