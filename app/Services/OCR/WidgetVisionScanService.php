@@ -196,6 +196,27 @@ class WidgetVisionScanService
             }
         }
 
+        /*
+         * Garde-fou sur la FORME du nom — après la fusion MRZ ci-dessus, sur
+         * le résultat final quelle que soit sa source (lecture libre du
+         * modèle, ou décodage déterministe MRZ).
+         *
+         * Ni la lecture libre ni MrzParser ne portent de contrôle sur le nom :
+         * la ligne 1 de la MRZ n'a AUCUN chiffre de contrôle protégeant ce
+         * champ. Un nom qui ressemble à une légende imprimée happée par erreur
+         * (« Autoridade/Authority », « Date of Issue »...) est mis à null
+         * plutôt que transmis tel quel — le formulaire du widget exige déjà
+         * ces deux champs, donc les vider force une saisie manuelle au lieu
+         * d'un envoi silencieux vers la police.
+         */
+        $identical = NamePlausibility::same($extracted['first_name'], $extracted['last_name']);
+        if ($identical || NamePlausibility::isSuspicious($extracted['first_name'])) {
+            $extracted['first_name'] = null;
+        }
+        if ($identical || NamePlausibility::isSuspicious($extracted['last_name'])) {
+            $extracted['last_name'] = null;
+        }
+
         return $extracted;
     }
 
