@@ -42,6 +42,7 @@ class Establishment extends Model
         'qualification_notes',
         'target_plan',
         'next_action_at',
+        'demo_reminder_sent_at',
         'out_of_scope',
         'archived',
         'created_by',
@@ -51,6 +52,7 @@ class Establishment extends Model
     {
         return [
             'next_action_at' => 'datetime',
+            'demo_reminder_sent_at' => 'datetime',
             'out_of_scope' => 'boolean',
             'archived' => 'boolean',
         ];
