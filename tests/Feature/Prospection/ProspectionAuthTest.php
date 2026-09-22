@@ -38,6 +38,39 @@ class ProspectionAuthTest extends TestCase
         $this->assertSame(1, ProspectionAccessToken::count());
     }
 
+    /**
+     * Régression : un User-Agent de navigateur réel (110-150+ caractères
+     * pour Chrome desktop) dépassait la colonne device_label(100), Postgres
+     * rejetait l'insertion et /auth/login répondait 500 en production —
+     * jamais détecté avant parce que le client de test HTTP de Laravel
+     * n'envoie par défaut aucun User-Agent réaliste.
+     */
+    public function test_login_with_a_realistic_long_user_agent_does_not_500(): void
+    {
+        ProspectionUser::create([
+            'name' => 'Hichem',
+            'email' => 'hichem@qayed.tn',
+            'password' => Hash::make('un-mot-de-passe-solide'),
+            'role' => 'admin',
+        ]);
+
+        $chromeUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            .'(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+        $this->assertGreaterThan(100, strlen($chromeUserAgent));
+
+        $this->withHeader('User-Agent', $chromeUserAgent)
+            ->postJson('/api/v1/prospection/auth/login', [
+                'email' => 'hichem@qayed.tn',
+                'password' => 'un-mot-de-passe-solide',
+            ])
+            ->assertOk();
+
+        $this->assertSame(
+            substr($chromeUserAgent, 0, 100),
+            ProspectionAccessToken::first()->device_label,
+        );
+    }
+
     public function test_login_with_wrong_password_is_rejected(): void
     {
         ProspectionUser::create([

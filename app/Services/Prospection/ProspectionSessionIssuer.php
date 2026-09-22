@@ -27,7 +27,12 @@ class ProspectionSessionIssuer
         $accessToken = ProspectionAccessToken::create([
             'user_id' => $user->id,
             'token_hash' => hash('sha256', $plainTextToken),
-            'device_label' => $deviceLabel,
+            // Colonne limitée à 100 caractères (migration
+            // create_prospection_access_tokens_table) ; un User-Agent Chrome
+            // moderne en fait couramment 110-150 — sans troncature, Postgres
+            // rejette l'insertion ("value too long for type character
+            // varying(100)") et /auth/login répond 500 en production.
+            'device_label' => $deviceLabel ? Str::limit($deviceLabel, 100, '') : null,
             'expires_at' => now()->addDays(self::TOKEN_LIFETIME_DAYS),
         ]);
 
