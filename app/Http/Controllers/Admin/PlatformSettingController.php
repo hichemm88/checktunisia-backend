@@ -44,6 +44,17 @@ class PlatformSettingController extends Controller
             'timbre_fiscal'        => ['sometimes', 'numeric', 'min:0', 'max:100'],
         ]);
 
+        // Un identifiant se COLLE, et un copier-coller emporte volontiers un
+        // espace ou un retour à la ligne. Invisibles à l'écran, ils partent
+        // pourtant dans l'en-tête d'authentification, et la passerelle rejette
+        // la clé — « Invalid Api Key » pour une clé pourtant juste. Personne ne
+        // trouve ça en regardant son écran : le caractère fautif ne se voit pas.
+        foreach (['konnect_api_key', 'konnect_wallet_id', 'flouci_app_token', 'flouci_app_secret'] as $secret) {
+            if (isset($v[$secret]) && is_string($v[$secret])) {
+                $v[$secret] = trim($v[$secret]);
+            }
+        }
+
         $s = PlatformSetting::get();
 
         // On n'ouvre pas un canal de règlement qu'on n'a pas configuré.
