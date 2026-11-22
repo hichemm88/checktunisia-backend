@@ -75,11 +75,13 @@
 
 <script>
 (function () {
-  // Origine exacte du widget Qayed — à adapter si vous utilisez un
-  // environnement de test dédié. C'est CETTE valeur qui doit être comparée
-  // à event.origin ci-dessous, jamais une correspondance partielle/regex
+  // Origine exacte du widget Qayed : https://api.qayed.tn (et non
+  // https://qayed.tn, qui redirige vers le site vitrine). Le plus sûr est de
+  // la dériver de widget_url à l'ouverture (voir openQayedWidget) :
+  // new URL(widgetUrl).origin. C'est CETTE valeur qui doit être comparée à
+  // event.origin ci-dessous, jamais une correspondance partielle/regex
   // permissive.
-  var QAYED_ORIGIN = 'https://qayed.tn';
+  var QAYED_ORIGIN = 'https://api.qayed.tn';
 
   var overlay = document.getElementById('qayed-widget-overlay');
   var frame = document.getElementById('qayed-widget-frame');
@@ -89,9 +91,10 @@
   /**
    * Ouvre le widget dans la modale.
    * @param {string} widgetUrl La valeur `widget_url` reçue de votre backend
-   *   suite à POST /v1/fiche-sessions (ex. https://qayed.tn/widget/fiche?token=...).
+   *   suite à POST /v1/fiche-sessions (ex. https://api.qayed.tn/widget/fiche?token=...).
    */
   function openQayedWidget(widgetUrl) {
+    QAYED_ORIGIN = new URL(widgetUrl).origin;
     frame.src = widgetUrl;
     overlay.classList.add('is-open');
     document.body.style.overflow = 'hidden';
@@ -117,9 +120,12 @@
       .then(function (data) { openQayedWidget(data.widget_url); });
   });
 
-  // Écoute des événements postMessage émis par le widget. TOUJOURS vérifier
-  // event.origin avant de faire confiance au contenu du message : n'importe
-  // quelle page peut envoyer un postMessage à votre fenêtre.
+  // Écoute des événements postMessage émis par le widget. Le widget les envoie
+  // avec targetOrigin '*' : TOUJOURS vérifier event.origin avant de faire
+  // confiance au contenu du message, n'importe quelle page peut envoyer un
+  // postMessage à votre fenêtre. Ce sont des signaux d'interface ; la source
+  // de vérité reste le webhook signé (live) ou GET /v1/fiche-sessions/{id}
+  // (test et live : en mode test, fiche.submitted n'est pas envoyé).
   window.addEventListener('message', function (event) {
     if (event.origin !== QAYED_ORIGIN) {
       return;
@@ -134,7 +140,10 @@
     // `payload`) : { type: 'qayed:submitted', session_id, fiche_id, guest_count }.
     switch (msg.type) {
       case 'qayed:submitted':
-        // { session_id, fiche_id, guest_count }
+        // { session_id, fiche_id, guest_count } — guest_count peut être
+        // inférieur au nombre attendu (validation partielle « 2 sur 3 ») :
+        // pour compléter, recréez une session pour le même booking_ref
+        // (mode amend, même fiche).
         console.log('Fiche soumise :', msg.fiche_id, msg.guest_count);
         closeQayedWidget();
         // -> Rafraîchissez votre UI (ex. marquer la réservation comme

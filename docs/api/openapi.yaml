@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Qayed — API publique v1
-  version: "1.0.0"
+  version: "1.1.0"
   summary: API partenaires + widget embarqué pour la fiche de police Qayed.
   description: |
     API publique v1 permettant à une plateforme tierce (PMS, moteur de réservation…)
@@ -21,6 +21,15 @@ info:
     4. Le widget notifie sa fenêtre parente via `postMessage`, et Qayed notifie le
        partenaire via un **webhook** signé (`fiche.submitted`, `fiche.failed`,
        `session.expired`).
+
+    ### Hôte
+
+    L'API et le widget sont servis par **`https://api.qayed.tn`** : `/v1/*`,
+    `/widget/fiche` et `/widget/v1/*`. N'utilisez jamais `https://qayed.tn` comme hôte
+    d'API : il redirige (308) vers le site vitrine `www.qayed.tn`, qui ne sert aucune
+    route d'API. `widget_url` pointe directement sur
+    `https://api.qayed.tn/widget/fiche?token=...` (aucune redirection), et l'origine à
+    vérifier dans vos écouteurs `postMessage` est exactement `https://api.qayed.tn`.
 
     ### Emplacement des routes
 
@@ -50,6 +59,69 @@ info:
     `fiche.submitted` envoyé aux webhooks configurés (`fiche.failed` et
     `session.expired` restent envoyés).
 
+    Comme `fiche.submitted` n'est **pas** envoyé en mode test, validez votre
+    intégration de bout en bout en relisant le statut avec
+    `GET /v1/fiche-sessions/{session_id}` ou `GET /v1/fiche-sessions/by-booking-ref` :
+    `status`, `fiche_id`, `guest_count` et `expected_guest_count` y sont renvoyés à
+    l'identique en mode test et en mode live.
+
+    ### Séjours et départs automatiques (1.1.0)
+
+    Pour les fiches créées par l'API, votre logiciel est la source de vérité des
+    séjours : tenez `departure_date` à jour avec `PATCH /v1/fiches/{fiche_id}`
+    (prolongation, départ anticipé, changement de chambre).
+
+    - Chaque jour à **05:30 (heure de Tunis)**, les séjours créés via l'API dont la
+      date de départ prévue est atteinte sont clos à cette date, avec exactement les
+      effets d'un départ saisi dans Qayed (journal d'audit, notification au manager ;
+      rien n'est envoyé à l'autorité, aucun quota n'est décompté). Les séjours saisis
+      dans Qayed ne sont pas concernés.
+    - L'occupation d'une chambre est dérivée des séjours ouverts : une chambre reste
+      occupée tant qu'un autre séjour y est ouvert.
+    - Une nouvelle fiche le jour J sur une chambre dont le séjour précédent se termine
+      le jour J ou avant n'est jamais refusée ni retardée. Plus généralement, un
+      `room_id` visant une chambre où un séjour est encore ouvert n'est jamais refusé :
+      ce séjour est d'abord clos (à sa date de départ prévue si elle est passée,
+      sinon à la date du jour).
+
+    ### Parcours du widget (1.1.0)
+
+    Le widget s'ouvre directement sur l'écran de scan du premier voyageur, avec un
+    bandeau pré-rempli (dates, chambre, noms), un seul bouton principal par écran et un
+    compteur « 2 sur 3 ». La validation partielle est permise (« Valider avec 2
+    voyageurs sur 3 ») ; les voyageurs manquants se complètent plus tard en recréant une
+    session pour le même `booking_ref` (mode `amend`, toujours la même fiche unique).
+    L'iframe doit porter `allow="camera"`.
+
+    ### Messages postMessage du widget
+
+    Le widget envoie à sa fenêtre parente trois messages (schémas
+    `WidgetMessageSubmitted`, `WidgetMessageClosed` et `WidgetMessageError`, résumés
+    dans l'extension `x-widget-messages`). Ils sont émis avec `targetOrigin: '*'` :
+    vérifiez toujours `event.origin === 'https://api.qayed.tn'` (ou l'origine de
+    `widget_url`, via `new URL(widget_url).origin`) avant de les lire. Ce sont des
+    signaux d'interface ; la source de vérité reste le webhook signé (live) ou
+    `GET /v1/fiche-sessions/...` (test et live).
+
+    ### Nouveautés 1.1.0
+
+    Ajouts optionnels uniquement, aucun changement incompatible :
+
+    - Hôte documenté corrigé : `https://api.qayed.tn` (API, `widget_url` et origine
+      `postMessage`).
+    - `GET /v1/operators` : utilisateurs des hébergeurs liés, pour relier vos comptes
+      aux comptes Qayed.
+    - `POST /v1/fiche-sessions` : champs `operator` et `locale`, réponse
+      `operator_matched` ; un `room_id` dont la chambre est occupée n'est plus jamais
+      refusé.
+    - `GET /v1/fiche-sessions/...` : `guest_count` et `expected_guest_count`.
+    - `PATCH /v1/fiches/{fiche_id}` : prolongation, départ anticipé, changement de
+      chambre ; `GET /v1/fiches/{fiche_id}` renvoie aussi le séjour (`arrival_date`,
+      `departure_date`, `checked_out_at`, `room_id`, `stay_status`).
+    - Départs automatiques quotidiens des séjours créés via l'API.
+    - Widget : ouverture directe sur le scan du premier voyageur, validation
+      partielle, messages `postMessage` documentés.
+
     ### Limite de débit
 
     Toutes les routes `/v1/*` sont limitées à **120 requêtes/minute par clé API**
@@ -71,8 +143,10 @@ info:
     applicative dessus, jamais sur le texte de `message` (en français, susceptible
     d'évoluer).
 servers:
-  - url: https://qayed.tn
-    description: Production (chemins déjà préfixés par /v1 ou /widget/v1)
+  - url: https://api.qayed.tn
+    description: |
+      Production (chemins déjà préfixés par /v1 ou /widget/v1). Ne pas utiliser
+      https://qayed.tn, qui redirige vers le site vitrine et ne sert aucune API.
 tags:
   - name: Liaison établissement
     description: Échange du code de liaison propriétaire↔partenaire.
@@ -81,7 +155,7 @@ tags:
   - name: Sessions de fiche
     description: Création et consultation des sessions de fiche (modèle Stripe Checkout).
   - name: Fiches
-    description: Consultation d'une fiche déjà soumise.
+    description: Consultation d'une fiche et mise à jour de son séjour (départ, chambre).
   - name: Widget
     description: |
       Endpoints du widget embarqué, appelés par l'iframe elle-même — jamais
@@ -174,6 +248,44 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
 
+  /v1/operators:
+    get:
+      tags: [Établissements]
+      summary: Lister les utilisateurs Qayed des hébergeurs liés (1.1.0)
+      description: |
+        Utilisateurs **actifs** des hébergeurs (organisations) propriétaires de vos
+        établissements liés. Sert au manager côté partenaire à relier **à la main**
+        ses propres comptes (réceptionnistes) aux comptes Qayed, puis à envoyer
+        `operator.user_id` dans `POST /v1/fiche-sessions` pour que la fiche soit
+        attribuée au bon utilisateur. Ni e-mail ni téléphone ne sont jamais renvoyés ;
+        l'utilisateur technique « Intégration API » est exclu.
+      operationId: listOperators
+      responses:
+        '200':
+          description: Utilisateurs actifs, triés par prénom puis nom.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Operator'
+                required: [data]
+              example:
+                data:
+                  - id: "7d3e2c1b-0a9f-4e8d-b7c6-5a4b3c2d1e0f"
+                    name: "Sami Ben Ali"
+                    role: "receptionist"
+                  - id: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+                    name: "Leila Haddad"
+                    role: "hotel_admin"
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
   /v1/establishments/{hotel_id}/rooms:
     get:
       tags: [Établissements]
@@ -246,6 +358,21 @@ paths:
         appel — un dépassement peut être facturé après coup mais ne bloque jamais la
         création. Le seul blocage commercial possible est `api_access_disabled`
         (fonctionnalité API non activée sur le plan/l'établissement).
+
+        **Opérateur (1.1.0)** : si `operator.user_id` désigne un utilisateur actif du
+        même hébergeur que l'établissement (voir `GET /v1/operators`), la fiche lui est
+        attribuée exactement comme s'il l'avait saisie dans Qayed (historique, journal
+        d'audit, statistiques par utilisateur) et `operator_matched` vaut `true`.
+        Absent, inconnu, désactivé, d'un autre hébergeur ou mal formé : jamais
+        d'erreur, la fiche est attribuée à l'utilisateur d'intégration,
+        `operator.name` est conservé dans le journal d'audit de la fiche et
+        `operator_matched` vaut `false`. Un utilisateur désactivé entre la création de
+        la session et la soumission retombe aussi sur l'utilisateur d'intégration.
+        Sur une session réutilisée, la dernière demande fait foi.
+
+        **Chambre occupée** : un `room_id` visant une chambre où un séjour est encore
+        ouvert n'est jamais refusé ; ce séjour est clos (à sa date de départ prévue si
+        elle est passée, sinon à la date du jour) et la session est créée.
       operationId: createFicheSession
       requestBody:
         required: true
@@ -284,10 +411,12 @@ paths:
                   description: |
                     Chambre RÉELLE de l'établissement (voir
                     `GET /v1/establishments/{hotel_id}/rooms`). Si fournie, doit
-                    appartenir à `establishment_id` et être libre (aucune fiche
-                    draft/active en cours) — sinon `422 validation_error`. Peut être
-                    ajouté sur un appel ultérieur tant que la fiche est encore un
-                    brouillon jamais soumis (jamais modifiable après soumission).
+                    appartenir à `establishment_id` — sinon `422 validation_error`.
+                    Une chambre où un séjour est encore ouvert n'est jamais refusée :
+                    ce séjour est clos d'abord (voir la description ci-dessus). Peut
+                    être ajouté sur un appel ultérieur tant que la fiche est encore un
+                    brouillon jamais soumis ; après soumission, changez de chambre
+                    avec `PATCH /v1/fiches/{fiche_id}`.
                 guests:
                   type: array
                   maxItems: 20
@@ -309,18 +438,41 @@ paths:
                   nullable: true
                   additionalProperties: true
                   description: Renvoyé tel quel dans l'événement webhook fiche.submitted.
+                operator:
+                  type: object
+                  nullable: true
+                  description: |
+                    (1.1.0, optionnel) Réceptionniste qui ouvre le widget côté
+                    partenaire. `user_id` : identifiant choisi dans
+                    `GET /v1/operators`. `name` : nom affiché côté partenaire, conservé
+                    dans le journal d'audit si `user_id` ne correspond à aucun
+                    utilisateur valide. Jamais de refus, voir `operator_matched`.
+                  properties:
+                    user_id: { type: string, maxLength: 64, nullable: true }
+                    name: { type: string, maxLength: 150, nullable: true }
+                locale:
+                  type: string
+                  enum: [fr, ar, en]
+                  default: fr
+                  nullable: true
+                  description: (1.1.0, optionnel) Langue du widget.
             example:
               establishment_id: "0f2e6b8a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
               booking_ref: "DIAR-88213"
               arrival_date: "2026-09-20"
               departure_date: "2026-09-23"
               room: "204"
+              room_id: "3c1a9e7a-2b4d-4f6a-8c0e-1a2b3c4d5e6f"
               guests:
                 - first_name: "Amine"
                   last_name: "Trabelsi"
                   nationality: "TUN"
               metadata:
                 pms_booking_id: "88213"
+              operator:
+                user_id: "7d3e2c1b-0a9f-4e8d-b7c6-5a4b3c2d1e0f"
+                name: "Sami"
+              locale: "fr"
       responses:
         '201':
           description: Nouvelle session créée.
@@ -382,6 +534,13 @@ paths:
                   booking_ref: { type: string }
                   created_at: { type: string, format: date-time }
                   expires_at: { type: string, format: date-time }
+                  guest_count:
+                    type: integer
+                    description: (1.1.0) Voir `GET /v1/fiche-sessions/{session_id}`.
+                  expected_guest_count:
+                    type: integer
+                    minimum: 1
+                    description: (1.1.0) Voir `GET /v1/fiche-sessions/{session_id}`.
                 required: [session_id, status, fiche_id, booking_ref, created_at, expires_at]
         '401':
           $ref: '#/components/responses/InvalidApiKey'
@@ -424,6 +583,21 @@ paths:
                   booking_ref: { type: string }
                   created_at: { type: string, format: date-time }
                   expires_at: { type: string, format: date-time }
+                  guest_count:
+                    type: integer
+                    description: |
+                      (1.1.0) Voyageurs effectivement déclarés sur la fiche ; 0 tant
+                      qu'elle est encore un brouillon. Renvoyé en mode test comme en
+                      live : c'est ce champ (avec `status`) qui permet de valider une
+                      intégration en mode test, où `fiche.submitted` n'est pas envoyé.
+                  expected_guest_count:
+                    type: integer
+                    minimum: 1
+                    description: |
+                      (1.1.0) Nombre de voyageurs passés dans `guests` à la création
+                      de la session (minimum 1). Un écart avec `guest_count` signale
+                      une validation partielle, à compléter en recréant une session
+                      pour le même `booking_ref`.
                 required: [session_id, status, fiche_id, booking_ref, created_at, expires_at]
               example:
                 session_id: "5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e"
@@ -432,6 +606,8 @@ paths:
                 booking_ref: "DIAR-88213"
                 created_at: "2026-09-16T09:00:00+00:00"
                 expires_at: "2026-09-16T09:15:00+00:00"
+                guest_count: 2
+                expected_guest_count: 3
         '401':
           $ref: '#/components/responses/InvalidApiKey'
         '404':
@@ -448,37 +624,13 @@ paths:
       summary: Consulter une fiche soumise
       operationId: getFiche
       parameters:
-        - name: fiche_id
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/FicheId'
       responses:
         '200':
           description: Détail de la fiche.
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  fiche_id: { type: string, format: uuid }
-                  booking_ref: { type: string }
-                  establishment_id: { type: string, format: uuid }
-                  guest_count: { type: integer }
-                  submitted_at: { type: string, format: date-time, nullable: true }
-                  authority_status:
-                    type: string
-                    enum: [pending, relayed, unavailable]
-                    description: |
-                      **Important** : ceci N'EST PAS un accusé de réception gouvernemental —
-                      aucune intégration directe avec le Ministère de l'Intérieur n'existe à
-                      ce jour. Cette valeur est dérivée de l'état du relais WhatsApp
-                      provisoire utilisé pour la transmission aux autorités :
-                      `pending` (transmission pas encore confirmée), `relayed` (message
-                      délivré/lu sur le canal de transmission), `unavailable` (toutes les
-                      tentatives de relais ont échoué). Ce champ est susceptible de changer
-                      de sémantique le jour où une homologation officielle sera en place.
-                  reference_number: { type: string, nullable: true }
-                required: [fiche_id, booking_ref, establishment_id, guest_count, authority_status]
+              schema: { $ref: '#/components/schemas/Fiche' }
               example:
                 fiche_id: "a1b2c3d4-e5f6-4789-90ab-cdef01234567"
                 booking_ref: "DIAR-88213"
@@ -487,6 +639,11 @@ paths:
                 submitted_at: "2026-09-16T09:14:32+00:00"
                 authority_status: "relayed"
                 reference_number: "QY-2026-004821"
+                arrival_date: "2026-09-20"
+                departure_date: "2026-09-23"
+                checked_out_at: null
+                room_id: "3c1a9e7a-2b4d-4f6a-8c0e-1a2b3c4d5e6f"
+                stay_status: "active"
         '401':
           $ref: '#/components/responses/InvalidApiKey'
         '403':
@@ -496,6 +653,80 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         '404':
           description: Fiche introuvable ou n'appartenant pas à ce partenaire (`fiche_not_found`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    patch:
+      tags: [Fiches]
+      summary: Mettre à jour le séjour d'une fiche (1.1.0)
+      description: |
+        Prolongation, départ anticipé et changement de chambre, sans rouvrir le
+        widget. Envoyez au moins un des champs `departure_date`, `room_id`, `room`.
+
+        - `departure_date` ne peut pas précéder la date d'arrivée.
+        - Un changement de chambre (`room_id`) clôt tout séjour encore ouvert dans la
+          chambre cible.
+        - Prolonger jusqu'à aujourd'hui ou plus tard un séjour déjà clos
+          automatiquement le rouvre. Si sa chambre a été réattribuée entre-temps,
+          indiquez aussi `room_id` (sinon `422 validation_error`).
+        - Chaque modification est tracée dans le journal d'audit de la fiche.
+
+        Tenez `departure_date` à jour : les séjours créés via l'API sont clos
+        automatiquement chaque jour à 05:30 (heure de Tunis) à leur date de départ
+        prévue (voir « Séjours et départs automatiques » en tête de cette spec).
+      operationId: updateFiche
+      parameters:
+        - $ref: '#/components/parameters/FicheId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                departure_date:
+                  type: string
+                  format: date
+                  description: Nouvelle date de départ prévue (prolongation ou départ anticipé).
+                room_id:
+                  type: string
+                  format: uuid
+                  description: Chambre de l'établissement, issue de `GET /v1/establishments/{hotel_id}/rooms`.
+                room:
+                  type: string
+                  maxLength: 100
+                  nullable: true
+                  description: Libellé partenaire de la chambre, pour affichage uniquement.
+            example:
+              departure_date: "2026-09-25"
+              room_id: "3c1a9e7a-2b4d-4f6a-8c0e-1a2b3c4d5e6f"
+      responses:
+        '200':
+          description: Fiche mise à jour — même contenu que `GET /v1/fiches/{fiche_id}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Fiche' }
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '403':
+          description: Établissement révoqué depuis (`establishment_not_linked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Fiche introuvable ou non créée par ce partenaire (`fiche_not_found`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: |
+            `validation_error` : corps vide, `departure_date` antérieure à la date
+            d'arrivée, `room_id` inconnu pour cet établissement, fiche annulée, ou
+            prolongation d'un séjour clos dont la chambre a été réattribuée sans
+            `room_id`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -553,6 +784,14 @@ paths:
                         last_name: { type: string }
                         nationality_code: { type: string }
                         is_primary: { type: boolean }
+                  expected_guest_count:
+                    type: integer
+                    minimum: 1
+                    description: (1.1.0) Nombre de voyageurs attendus (compteur « 2 sur 3 » du widget).
+                  locale:
+                    type: string
+                    enum: [fr, ar, en]
+                    description: (1.1.0) Langue du widget demandée à la création de la session.
                 required: [session_id, widget_token, mode, establishment_name, booking_ref, arrival_date, departure_date, prefill_guests, existing_guests]
         '401':
           description: JWT invalide ou signature incorrecte (`invalid_signature`).
@@ -746,6 +985,10 @@ paths:
         /widget/v1/guests` avant cet appel. Déclenche (hors mode test) le webhook
         `fiche.submitted` et, en mode `create`, le décompte de quota ainsi que le
         relais WhatsApp de transmission, exactement comme une fiche saisie nativement.
+
+        La validation peut être partielle (1.1.0) : « Valider avec 2 voyageurs sur 3 ».
+        Les voyageurs manquants s'ajoutent plus tard en recréant une session pour le
+        même `booking_ref` (mode `amend`, toujours la même fiche unique).
       operationId: widgetSubmit
       security:
         - widgetSession: []
@@ -809,6 +1052,11 @@ components:
   parameters:
     SessionId:
       name: session_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    FicheId:
+      name: fiche_id
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -915,7 +1163,12 @@ components:
         widget_url:
           type: string
           format: uri
-          description: "URL à ouvrir dans une iframe : https://qayed.tn/widget/fiche?token={jwt}."
+          description: |
+            URL à ouvrir dans une iframe (avec `allow="camera"`) :
+            https://api.qayed.tn/widget/fiche?token={jwt}, servie directement, sans
+            redirection. Son origine (`new URL(widget_url).origin`, soit
+            https://api.qayed.tn) est celle à comparer à `event.origin` dans vos
+            écouteurs `postMessage`.
         expires_at:
           type: string
           format: date-time
@@ -927,7 +1180,87 @@ components:
             create = nouvelle fiche ; amend = une fiche existe déjà pour ce séjour
             (booking_ref), le widget permettra de la compléter/corriger sans en créer
             une seconde.
+        operator_matched:
+          type: boolean
+          description: |
+            (1.1.0) `true` si `operator.user_id` désigne un utilisateur actif du même
+            hébergeur : la fiche lui sera attribuée. `false` sinon (absent, inconnu,
+            désactivé, autre hébergeur, mal formé) : repli sur l'utilisateur
+            d'intégration, jamais d'erreur.
       required: [session_id, widget_url, expires_at, mode]
+    Operator:
+      type: object
+      description: (1.1.0) Utilisateur Qayed d'un hébergeur lié. Jamais d'e-mail ni de téléphone.
+      properties:
+        id: { type: string, format: uuid, description: "À envoyer dans operator.user_id." }
+        name: { type: string, description: Prénom et nom. }
+        role: { type: string, description: "Rôle Qayed, par exemple hotel_admin ou receptionist." }
+      required: [id, name, role]
+    Fiche:
+      type: object
+      properties:
+        fiche_id: { type: string, format: uuid }
+        booking_ref: { type: string }
+        establishment_id: { type: string, format: uuid }
+        guest_count: { type: integer }
+        submitted_at: { type: string, format: date-time, nullable: true }
+        authority_status:
+          type: string
+          enum: [pending, relayed, unavailable]
+          description: |
+            **Important** : ceci N'EST PAS un accusé de réception gouvernemental —
+            aucune intégration directe avec le Ministère de l'Intérieur n'existe à
+            ce jour. Cette valeur est dérivée de l'état du relais WhatsApp
+            provisoire utilisé pour la transmission aux autorités :
+            `pending` (transmission pas encore confirmée), `relayed` (message
+            délivré/lu sur le canal de transmission), `unavailable` (toutes les
+            tentatives de relais ont échoué). Ce champ est susceptible de changer
+            de sémantique le jour où une homologation officielle sera en place.
+        reference_number: { type: string, nullable: true }
+        arrival_date: { type: string, format: date, nullable: true, description: (1.1.0) Date d'arrivée. }
+        departure_date: { type: string, format: date, nullable: true, description: (1.1.0) Date de départ prévue. }
+        checked_out_at:
+          type: string
+          format: date
+          nullable: true
+          description: (1.1.0) Date de départ réelle, null tant que le séjour est ouvert.
+        room_id: { type: string, format: uuid, nullable: true, description: (1.1.0) Chambre Qayed rattachée. }
+        stay_status:
+          type: string
+          enum: [draft, active, completed, cancelled]
+          description: |
+            (1.1.0) État du séjour : `draft` (fiche pas encore validée), `active`
+            (séjour en cours), `completed` (départ enregistré, manuel ou automatique),
+            `cancelled` (fiche annulée).
+      required: [fiche_id, booking_ref, establishment_id, guest_count, authority_status]
+    WidgetMessageSubmitted:
+      type: object
+      description: |
+        (postMessage, widget vers fenêtre parente) Fiche validée. Signal d'interface
+        uniquement : la source de vérité est le webhook `fiche.submitted` (live) ou
+        `GET /v1/fiche-sessions/{session_id}` (test et live).
+      properties:
+        type: { type: string, const: "qayed:submitted" }
+        session_id: { type: string, format: uuid }
+        fiche_id: { type: string, format: uuid }
+        guest_count: { type: integer }
+      required: [type, session_id, fiche_id, guest_count]
+    WidgetMessageClosed:
+      type: object
+      description: (postMessage) L'utilisateur a fermé le widget sans valider.
+      properties:
+        type: { type: string, const: "qayed:closed" }
+        session_id: { type: string, format: uuid }
+      required: [type, session_id]
+    WidgetMessageError:
+      type: object
+      description: (postMessage) Erreur bloquante à l'ouverture du widget (lien expiré, origine refusée…).
+      properties:
+        type: { type: string, const: "qayed:error" }
+        code:
+          type: string
+          description: Un code de `ErrorCode` (ex. `session_expired`), ou `unknown` pour une erreur réseau ou inattendue.
+      required: [type, code]
     WidgetGuestInput:
       type: object
       description: Schéma strict utilisé par le widget lui-même — plus contraignant que le pré-remplissage libre de POST /v1/fiche-sessions.
@@ -1021,3 +1354,23 @@ x-webhooks-signature:
     Backoff exponentiel après le premier échec (HTTP non 2xx ou exception réseau),
     au moins 5 tentatives réparties sur 24h. Un endpoint est désactivé automatiquement
     après 20 échecs consécutifs par défaut (réactivable côté admin Qayed).
+x-widget-messages:
+  description: |
+    Messages envoyés par le widget (iframe `widget_url`) à sa fenêtre parente via
+    `window.parent.postMessage(message, '*')`. Les champs sont portés à plat sur le
+    message (pas de sous-objet `payload`). Comme `targetOrigin` vaut `'*'`, la page
+    parente DOIT vérifier `event.origin === 'https://api.qayed.tn'` (de préférence
+    `new URL(widget_url).origin`) avant de lire `event.data`. Ce sont des signaux
+    d'interface : la source de vérité est le webhook signé `fiche.submitted` (live) ou
+    `GET /v1/fiche-sessions/{session_id}` (test et live).
+  origin: https://api.qayed.tn
+  messages:
+    qayed:submitted:
+      schema: { $ref: '#/components/schemas/WidgetMessageSubmitted' }
+      example: { type: "qayed:submitted", session_id: "5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e", fiche_id: "a1b2c3d4-e5f6-4789-90ab-cdef01234567", guest_count: 2 }
+    qayed:closed:
+      schema: { $ref: '#/components/schemas/WidgetMessageClosed' }
+      example: { type: "qayed:closed", session_id: "5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e" }
+    qayed:error:
+      schema: { $ref: '#/components/schemas/WidgetMessageError' }
+      example: { type: "qayed:error", code: "session_expired" }

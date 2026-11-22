@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Route;
 | Ce fichier vit délibérément hors du préfixe /api/v1 appliqué à routes/api.php
 | (voir bootstrap/app.php, apiPrefix), sur le même principe que routes/public.php :
 | c'est un contrat public tiers, versionné indépendamment de l'API interne, à
-| l'adresse annoncée dans la doc développeurs (https://qayed.tn/v1/…).
+| l'adresse annoncée dans la doc développeurs (https://api.qayed.tn/v1/…).
 |
 | Authentification : clé API partenaire (Bearer qyd_live_…/qyd_test_…), jamais
 | de session Sanctum. Enveloppe d'erreur dédiée {error:{code,message,doc_url}} —
