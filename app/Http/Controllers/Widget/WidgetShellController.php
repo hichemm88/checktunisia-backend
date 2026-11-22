@@ -45,12 +45,31 @@ class WidgetShellController extends Controller
         // de repli, qui ne révèle rien de l'erreur réelle.
         try {
             return response()
-                ->view('widget-shell', ['token' => $token])
-                ->header('Content-Security-Policy', "frame-ancestors {$directive}");
+                ->view('widget-shell', ['token' => $token, 'assetVersion' => $this->assetVersion()])
+                ->header('Content-Security-Policy', "frame-ancestors {$directive}")
+                // Page porteuse d'un jeton : jamais mise en cache.
+                ->header('Cache-Control', 'no-store');
         } catch (\Throwable $e) {
             report($e);
 
             return response('', 500)->header('Content-Security-Policy', "frame-ancestors {$directive}");
         }
+    }
+
+    /**
+     * Empreinte du bundle, ajoutée en ?v= aux URL des assets (v1.2).
+     *
+     * Cause de l'écran « liste » vu au premier test réel du 22/11/2026 : les
+     * fichiers widget-main.js/.css ont des noms FIXES et étaient servis sans
+     * Cache-Control. Chrome Android a gardé l'ancien bundle du 16/09 en cache
+     * (fraîcheur heuristique : 10 % de l'âge du fichier, soit environ une
+     * semaine) et l'a réutilisé après la publication de la V1.1. Une URL qui
+     * change à chaque nouveau bundle rend ce cache inoffensif.
+     */
+    private function assetVersion(): string
+    {
+        $hash = @md5_file(public_path('widget-assets/widget-main.js'));
+
+        return $hash ? substr($hash, 0, 12) : '0';
     }
 }

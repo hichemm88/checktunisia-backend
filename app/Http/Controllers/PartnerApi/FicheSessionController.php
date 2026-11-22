@@ -5,14 +5,19 @@ namespace App\Http\Controllers\PartnerApi;
 use App\Http\Controllers\Controller;
 use App\Models\ApiKey;
 use App\Models\ApiPartner;
+use App\Models\CheckIn;
 use App\Models\FicheSession;
+use App\Services\PartnerApi\FicheDeliveryStatus;
 use App\Services\PartnerApi\FicheSessionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class FicheSessionController extends Controller
 {
-    public function __construct(private FicheSessionService $sessions) {}
+    public function __construct(
+        private FicheSessionService $sessions,
+        private FicheDeliveryStatus $deliveryStatus,
+    ) {}
 
     public function store(Request $request): JsonResponse
     {
@@ -109,6 +114,21 @@ class FicheSessionController extends Controller
             // fiche (un brouillon jamais validé n'en déclare aucun).
             'guest_count' => $this->sessions->declaredGuestCount($session),
             'expected_guest_count' => $session->expectedGuestCount(),
+            // v1.2 — statut d'envoi à l'autorité de la fiche rattachée (voir
+            // FicheDeliveryStatus) ; not_applicable en mode test, pour un
+            // brouillon, ou sans fiche rattachée.
+            'delivery_status' => $this->deliveryStatusFor($session),
         ];
+    }
+
+    private function deliveryStatusFor(FicheSession $session): string
+    {
+        if ($session->is_test || ! $session->check_in_id) {
+            return FicheDeliveryStatus::NOT_APPLICABLE;
+        }
+
+        $checkIn = CheckIn::with('hotel.organization')->find($session->check_in_id);
+
+        return $checkIn ? $this->deliveryStatus->forCheckIn($checkIn) : FicheDeliveryStatus::NOT_APPLICABLE;
     }
 }

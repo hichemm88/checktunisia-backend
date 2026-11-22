@@ -672,6 +672,8 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
             Route::get('partners/{id}/linkable-hotels', [PartnerAdminController::class, 'linkableHotels']);
             Route::post('partners/{id}/links', [PartnerAdminController::class, 'storeLink']);
             Route::get('partners/{id}/metrics', [PartnerAdminController::class, 'metrics']);
+            // Purge des données de test (aperçu dry_run puis exécution avec jeton de confirmation).
+            Route::post('partners/{id}/purge-test-data', \App\Http\Controllers\Admin\PartnerTestDataPurgeController::class);
             Route::get('partners/{id}/webhooks', [PartnerWebhookAdminController::class, 'index']);
             Route::post('partners/{id}/webhooks', [PartnerWebhookAdminController::class, 'store']);
             Route::patch('partners/{id}/webhooks/{endpointId}', [PartnerWebhookAdminController::class, 'update']);

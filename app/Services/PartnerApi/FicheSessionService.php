@@ -37,7 +37,9 @@ class FicheSessionService
     public function createOrReuse(ApiPartner $partner, ApiKey $apiKey, array $data): array
     {
         $result = $this->createOrReuseSession($partner, $apiKey, $data);
-        $result['operator_matched'] = $result['session']->operator_user_id !== null;
+        // Opérateur de CETTE demande (et non celui qui tient éventuellement la
+        // saisie en cours, voir FicheSession::isHeldByAnother()).
+        $result['operator_matched'] = $result['session']->requested_operator_user_id !== null;
 
         return $result;
     }
@@ -78,23 +80,36 @@ class FicheSessionService
                 // "usage unique" porte sur le JWT effectivement remis à
                 // l'appelant, pas sur la session : une nouvelle demande de
                 // widget_url doit toujours pouvoir en obtenir un utilisable.
+                //
+                // v1.2 : si une AUTRE personne a la fiche ouverte en ce moment,
+                // sa saisie n'est pas coupée (son token de session reste
+                // valable) ; le nouveau lien affichera « Fiche en cours de
+                // saisie par … » tant qu'elle n'a pas fini ou abandonné.
+                $heldByAnother = $existing->isHeldByAnother($data['operator_user_id'], $data['operator_name']);
+
                 if ($existing->jwt_consumed_at !== null) {
-                    $existing->update([
+                    $existing->update(array_merge([
                         'jwt_jti' => WidgetTokenService::newJti(),
                         'jwt_consumed_at' => null,
+                        'expires_at' => now()->addMinutes((int) config('partner_api.jwt.ttl_minutes', 15)),
+                    ], $heldByAnother ? [] : [
                         'widget_session_token_hash' => null,
                         'widget_session_expires_at' => null,
-                        'expires_at' => now()->addMinutes((int) config('partner_api.jwt.ttl_minutes', 15)),
-                    ]);
+                    ]));
                 }
 
                 // Le réceptionniste qui rouvre la fiche peut être un autre que
-                // celui de la première demande : la dernière demande fait foi.
-                $existing->update([
+                // celui de la première demande : la dernière demande fait foi,
+                // sauf pendant qu'une autre personne tient la saisie (il ne
+                // devient l'opérateur qu'en ouvrant le widget, au bootstrap).
+                $existing->update(array_merge([
+                    'requested_operator_user_id' => $data['operator_user_id'],
+                    'requested_operator_name' => $data['operator_name'],
+                    'locale' => $data['locale'] ?? $existing->locale,
+                ], $heldByAnother ? [] : [
                     'operator_user_id' => $data['operator_user_id'],
                     'operator_name' => $data['operator_name'],
-                    'locale' => $data['locale'] ?? $existing->locale,
-                ]);
+                ]));
 
                 if ($existing->mode === FicheSession::MODE_CREATE) {
                     $this->maybeAssignRoom($hotel, $existing->check_in_id, $data);
@@ -261,6 +276,8 @@ class FicheSessionService
             'jwt_jti' => $jti,
             'operator_user_id' => $data['operator_user_id'] ?? null,
             'operator_name' => $data['operator_name'] ?? null,
+            'requested_operator_user_id' => $data['operator_user_id'] ?? null,
+            'requested_operator_name' => $data['operator_name'] ?? null,
             'locale' => $data['locale'] ?? 'fr',
             'expires_at' => now()->addMinutes((int) config('partner_api.jwt.ttl_minutes', 15)),
         ]);

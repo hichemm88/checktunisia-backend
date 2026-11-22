@@ -35,7 +35,13 @@ class WidgetSubmissionService
     public function removeGuest(FicheSession $session, string $guestId): void
     {
         $checkIn = $this->sessions->checkInFor($session);
-        $guest = $checkIn->guests()->where('guests.id', $guestId)->firstOrFail();
+        $query = $checkIn->guests()->where('guests.id', $guestId);
+        // Fiche déjà transmise (amend) : seuls les voyageurs ajoutés par CETTE
+        // session peuvent être retirés, jamais ceux déjà déclarés.
+        if ($session->mode === FicheSession::MODE_AMEND) {
+            $query->wherePivot('added_at', '>=', $session->created_at);
+        }
+        $guest = $query->firstOrFail();
 
         $this->checkInService->removeGuest($checkIn, $guest);
     }

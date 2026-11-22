@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\PartnerApi\FicheDeliveryWebhookNotifier;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -109,6 +110,20 @@ class WhatsappSendLog extends Model
         static::creating(function (self $job) {
             if (blank($job->public_token)) {
                 $job->public_token = (string) Str::ulid();
+            }
+        });
+
+        /*
+         * API partenaire v1.2 : un envoi qui atteint une issue définitive peut
+         * rendre définitif le statut d'envoi de toute la fiche, et déclencher
+         * fiche.delivered / fiche.delivery_failed. Branché ici plutôt que dans
+         * chaque appelant : markSent, markFailed, l'accusé de livraison Meta,
+         * les annulations admin et le blocage à l'enfilage passent tous par
+         * une sauvegarde Eloquent de cette ligne. Le notifieur ne lève jamais.
+         */
+        static::saved(function (self $job) {
+            if ($job->wasRecentlyCreated || $job->wasChanged('status')) {
+                app(FicheDeliveryWebhookNotifier::class)->onSendLogSettled($job);
             }
         });
     }

@@ -44,6 +44,8 @@ class FicheSession extends Model
         'submitted_at',
         'operator_user_id',
         'operator_name',
+        'requested_operator_user_id',
+        'requested_operator_name',
         'locale',
     ];
 
@@ -101,6 +103,59 @@ class FicheSession extends Model
     public function isPendingAndUsable(): bool
     {
         return $this->status === self::STATUS_PENDING && ! $this->expires_at->isPast();
+    }
+
+    /**
+     * Une personne a le widget ouvert sur cette fiche et s'en est servie
+     * récemment : token de session vivant et dernière action (chaque appel
+     * prolonge le TTL) datant de moins de `widget_session.lock_minutes`.
+     */
+    public function hasActiveHolder(): bool
+    {
+        // Pas de test sur jwt_consumed_at : une nouvelle demande de widget_url
+        // le remet à null (nouveau JWT) sans retirer la main à celui qui saisit.
+        if ($this->widget_session_token_hash === null || $this->widget_session_expires_at === null || $this->widget_session_expires_at->isPast()) {
+            return false;
+        }
+
+        $ttl = (int) config('partner_api.widget_session.ttl_minutes', 20);
+        $lock = (int) config('partner_api.widget_session.lock_minutes', 10);
+        $lastActivity = $this->widget_session_expires_at->copy()->subMinutes($ttl);
+
+        return $lastActivity->isAfter(now()->subMinutes($lock));
+    }
+
+    /**
+     * La saisie en cours est tenue par quelqu'un d'autre que ce réceptionniste.
+     * Même personne = même compte Qayed, ou à défaut même nom transmis par le
+     * partenaire. Sans aucune identité connue de part et d'autre, on ne peut
+     * pas distinguer : pas de verrou (comportement v1.1, reprise de la main).
+     */
+    public function isHeldByAnother(?string $userId, ?string $name): bool
+    {
+        if (! $this->hasActiveHolder()) {
+            return false;
+        }
+
+        if ($this->operator_user_id !== null || $userId !== null) {
+            return $this->operator_user_id !== $userId;
+        }
+
+        $norm = fn (?string $n) => mb_strtolower(trim((string) $n));
+        if ($norm($this->operator_name) === '') {
+            return false;
+        }
+
+        return $norm($this->operator_name) !== $norm($name);
+    }
+
+    /** Nom affichable de la personne qui tient la saisie, null si inconnu. */
+    public function holderName(): ?string
+    {
+        $user = $this->operator_user_id ? $this->operator()->first() : null;
+        $full = $user ? trim($user->first_name.' '.$user->last_name) : '';
+
+        return $full !== '' ? $full : ($this->operator_name ?: null);
     }
 
     /** Statut public tel qu'exposé dans GET /v1/fiche-sessions/{id} (reflète l'expiration réelle). */

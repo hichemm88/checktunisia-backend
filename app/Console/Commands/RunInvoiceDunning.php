@@ -14,6 +14,6 @@ class RunInvoiceDunning extends Command
     {
         $stats = $billing->runDunning();
 
-        $this->info("{$stats['overdue']} facture(s) passée(s) en retard, {$stats['reminded']} relance(s) envoyée(s), {$stats['suspended']} abonnement(s) suspendu(s).");
+        $this->info("{$stats['overdue']} facture(s) passée(s) en retard, {$stats['reminded']} relance(s) envoyée(s), {$stats['suspended']} abonnement(s) suspendu(s), {$stats['withheld']} suspension(s) retenue(s) (accès API en service).");
     }
 }

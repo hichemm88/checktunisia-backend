@@ -201,6 +201,16 @@ secret généré une seule fois). Vous recevrez un `POST` signé à chaque
   `metadata` renvoyé tel quel depuis l'étape 2).
 - `fiche.failed` — la soumission a échoué côté widget.
 - `session.expired` — le lien du widget a expiré sans soumission.
+- `fiche.delivered` (1.2.0) — tous les envois de la fiche à l'autorité ont
+  abouti (`delivery_status` = `sent`). Live uniquement, une seule fois par fiche.
+- `fiche.delivery_failed` (1.2.0) — un envoi de la fiche à l'autorité est en
+  échec définitif (`reason` : `transmission_failed` ou
+  `transmission_cancelled`). Live uniquement, une seule fois par fiche.
+
+Les deux événements 1.2.0 ne portent aucune donnée personnelle (`fiche_id`,
+`session_id`, `booking_ref`, `establishment_id`, `delivery_status`,
+`occurred_at`). Ils sont souscrits par défaut sur tout nouvel endpoint ; pour un
+endpoint existant, demandez leur ajout à l'équipe Qayed.
 
 En-têtes reçus :
 
@@ -275,6 +285,50 @@ séjours saisis dans Qayed ne sont pas concernés. L'occupation d'une chambre
 ouvert. Une nouvelle fiche le jour J sur une chambre dont le séjour précédent se
 termine le jour J ou avant n'est jamais refusée ni retardée. Conséquence : tenez
 `departure_date` exacte avec `PATCH`.
+
+---
+
+## 6. Lister les fiches d'un établissement (1.2.0)
+
+`GET /v1/fiches` renvoie les fiches validées d'un établissement lié, qu'elles
+aient été créées par votre intégration (`source: api`) ou saisies directement
+dans Qayed (`source: qayed`) — utile pour réconcilier votre registre :
+
+```bash
+curl "https://api.qayed.tn/v1/fiches?establishment_id=0f2e6b8a-1c3d-4e5f-9a0b-1c2d3e4f5a6b&arrival_from=2026-09-01&arrival_to=2026-09-30&limit=50" \
+  -H "Authorization: Bearer qyd_live_xxxxxxxxxxxx"
+```
+
+- Réponse : `{ "data": [...], "next_cursor": "...", "has_more": true }`. Tant
+  que `has_more` vaut `true`, rappelez la même URL avec `cursor=<next_cursor>`.
+- Filtres : `arrival_from`, `arrival_to` (dates d'arrivée incluses) et
+  `updated_since` (ISO 8601) pour une synchronisation incrémentale — une fiche
+  dont seul l'envoi à l'autorité a progressé compte aussi comme modifiée.
+- Chaque élément : `fiche_id`, `booking_ref` (null pour une saisie dans Qayed),
+  `room_id`, `room`, `arrival_date`, `departure_date`, `guest_count`,
+  `primary_guest_name`, `status`, `source`, `operator_user_id`,
+  `submitted_at`, `delivery_status`. Jamais de numéro de document, de date de
+  naissance ni d'image.
+- Les brouillons ne sont pas listés. Une clé test ne liste que les fiches créées
+  en mode test par votre intégration ; une clé live, les fiches réelles.
+- `403 establishment_not_linked` pour un établissement non lié à votre clé.
+
+`delivery_status` (également renvoyé par `GET /v1/fiches/{fiche_id}` et
+`GET /v1/fiche-sessions/...`) vaut `sent`, `pending`, `failed` ou
+`not_applicable` (mode test, brouillon, module d'envoi inactif). Pour une fiche
+à plusieurs voyageurs : `failed` dès qu'un envoi est en échec définitif, sinon
+`pending` tant qu'un envoi est en cours, sinon `sent`.
+
+---
+
+## Nouveautés 1.2.0
+
+Ajouts uniquement, aucun changement incompatible :
+
+- `GET /v1/fiches` : liste paginée par curseur des fiches d'un établissement
+  lié (API et saisies dans Qayed), filtres de dates et `updated_since`.
+- `delivery_status` sur les fiches et les sessions.
+- Webhooks `fiche.delivered` et `fiche.delivery_failed` (live uniquement).
 
 ---
 

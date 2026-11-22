@@ -6,6 +6,7 @@ use App\Models\Subscription;
 use App\Models\SubscriptionEvent;
 use App\Services\Audit\AuditLogger;
 use App\Services\Email\SystemMailer;
+use App\Services\Subscription\ApiAccessGuard;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 
@@ -26,6 +27,7 @@ class SuspendExpiredSubscriptions extends Command
             ->get();
 
         $spared = 0;
+        $withheld = 0;
 
         foreach ($subscriptions as $sub) {
             // Garde de fond, en plus du filtre amont : un compte interne ne
@@ -51,6 +53,18 @@ class SuspendExpiredSubscriptions extends Command
             if ($sub->isInGracePeriod()) {
                 $spared++;
                 $this->line("Grace period for {$sub->id} until ".$sub->graceEndsAt()->format('d/m/Y').'.');
+                continue;
+            }
+
+            // Grâce écoulée sur un abonnement reconduit tacitement = facture de
+            // renouvellement impayée. Si l'accès API partenaire est en service,
+            // on ne coupe pas : alerte admin à la place (une fois par
+            // échéance), décision manuelle. Ne concerne ni un essai ni une
+            // résiliation choisie par le client (auto_renew désactivé).
+            if ($sub->status === 'active' && $sub->auto_renew
+                && ApiAccessGuard::withholdsAutomaticSuspension($sub, 'subscription_expired_unpaid', 'expiry:'.$sub->expires_at->toDateString())) {
+                $withheld++;
+                $this->line("Expiry withheld for {$sub->id}: API access in service, admin alerted.");
                 continue;
             }
 
@@ -115,6 +129,6 @@ class SuspendExpiredSubscriptions extends Command
             $this->line(($wasTrial ? 'Trial ended' : 'Expired subscription') . " {$sub->id} ({$name}).");
         }
 
-        $this->info((count($subscriptions) - $spared).' subscription(s) expired, '.$spared.' in grace period.');
+        $this->info((count($subscriptions) - $spared - $withheld).' subscription(s) expired, '.$spared.' in grace period, '.$withheld.' withheld (API access in service).');
     }
 }

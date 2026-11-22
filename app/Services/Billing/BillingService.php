@@ -301,11 +301,16 @@ class BillingService
      * et suspend l'abonnement à J+21. Idempotent : chaque relance n'est
      * envoyée qu'une fois (trace dans invoice.metadata.dunning_sent).
      *
-     * @return array{overdue:int,reminded:int,suspended:int}
+     * Un compte dont l'accès API partenaire est en service n'est JAMAIS
+     * suspendu ici : la suspension est retenue et remplacée par une alerte
+     * admin (voir suspendForNonPayment / ApiAccessGuard). Les relances au
+     * client partent normalement.
+     *
+     * @return array{overdue:int,reminded:int,suspended:int,withheld:int}
      */
     public function runDunning(): array
     {
-        $stats = ['overdue' => 0, 'reminded' => 0, 'suspended' => 0];
+        $stats = ['overdue' => 0, 'reminded' => 0, 'suspended' => 0, 'withheld' => 0];
 
         // 1. sent + échue → overdue. Les factures d'un compte interne sont
         // laissées telles quelles : aucune créance ne court contre nous-mêmes.
@@ -357,9 +362,17 @@ class BillingService
             }
 
             if ($daysLate >= self::DUNNING_SUSPEND_DAYS && empty($meta['dunning_suspended'])) {
-                $this->suspendForNonPayment($invoice);
-                $meta['dunning_suspended'] = true;
-                $stats['suspended']++;
+                // Rejoué chaque jour tant que la coupure est retenue : si
+                // l'accès API cesse (liaison révoquée), le recouvrement
+                // reprend son cours normal au passage suivant.
+                $outcome = $this->suspendForNonPayment($invoice);
+                if ($outcome === 'withheld') {
+                    $meta['dunning_suspension_withheld'] = true;
+                    $stats['withheld']++;
+                } else {
+                    $meta['dunning_suspended'] = true;
+                    $stats['suspended'] += $outcome === 'suspended' ? 1 : 0;
+                }
             }
 
             $meta['dunning_sent'] = $sent;
@@ -430,11 +443,23 @@ class BillingService
         AuditLogger::log('invoice.reminder_sent', $invoice, newValues: ['days_late' => $daysLate]);
     }
 
-    private function suspendForNonPayment(Invoice $invoice): void
+    /**
+     * @return string 'suspended' | 'withheld' (accès API en service, alerte
+     *                admin à la place) | 'noop' (rien à suspendre)
+     */
+    private function suspendForNonPayment(Invoice $invoice): string
     {
         $sub = $invoice->subscription;
         if (!$sub || in_array($sub->status, ['suspended', 'cancelled'], true)) {
-            return;
+            return 'noop';
+        }
+
+        // Garde de SERVICE (pas seulement de la commande) : un hébergeur dont
+        // l'accès API partenaire est en service n'est jamais coupé
+        // automatiquement pour un impayé — ses fiches de police partent par
+        // le PMS du partenaire et s'arrêteraient sans que personne ne le voie.
+        if (\App\Services\Subscription\ApiAccessGuard::withholdsAutomaticSuspension($sub, 'invoice_overdue', 'invoice:'.$invoice->id)) {
+            return 'withheld';
         }
 
         $previous = $sub->status;
@@ -461,6 +486,8 @@ class BillingService
             'name'   => $org?->name ?? $sub->hotel?->name ?? 'Client Qayed',
             'reason' => $reason,
         ], $locale);
+
+        return 'suspended';
     }
 
     // ─── Paiement confirmé (tous canaux) ─────────────────────────────────────

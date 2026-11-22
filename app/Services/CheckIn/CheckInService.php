@@ -162,6 +162,10 @@ class CheckInService
             // partait jamais. On l'enfile ici, pour ce voyageur uniquement.
             // Sur un check-in encore en draft on ne fait rien : la finalisation
             // enfilera tout le monde (sinon doublon).
+            // API partenaire v1.2 (GET /v1/fiches?updated_since=) : une fiche
+            // dont la liste de voyageurs change est une fiche modifiée.
+            $checkIn->touch();
+
             // Fiche API en mode test (voir complete()) : même isolation pour un
             // voyageur ajouté après coup (mode amend).
             $isTestFiche = (bool) ($checkIn->metadata['test_mode'] ?? false);
@@ -231,6 +235,9 @@ class CheckInService
 
             AuditLogger::log('guest.updated', $guest, $old, $guest->fresh()->toArray(), hotelId: $checkIn->hotel_id);
 
+            // Voir addGuestWithin() : alimente updated_since de l'API partenaire.
+            $checkIn->touch();
+
             return $guest->load(['documents']);
         });
     }
@@ -266,6 +273,9 @@ class CheckInService
                 'check_in_id' => $checkIn->id,
                 'first_name' => $guest->first_name, 'last_name' => $guest->last_name,
             ], [], hotelId: $checkIn->hotel_id);
+
+            // Voir addGuestWithin() : alimente updated_since de l'API partenaire.
+            $checkIn->touch();
         });
     }
 

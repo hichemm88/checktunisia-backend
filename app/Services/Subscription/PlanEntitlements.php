@@ -74,7 +74,18 @@ class PlanEntitlements
      */
     public static function resolve(Organization $org): array
     {
-        $sub  = $org->activeSubscription()->with('plan')->first();
+        return self::resolveForSubscription($org->activeSubscription()->with('plan')->first());
+    }
+
+    /**
+     * Même résolution, mais pour UN abonnement donné quel que soit son statut.
+     *
+     * Sert aux traitements qui statuent sur un abonnement précis (échéance,
+     * recouvrement) : à ce moment-là il peut déjà ne plus être « actif » au
+     * sens de activeSubscription(), et resolve() retomberait sur les défauts.
+     */
+    public static function resolveForSubscription(?\App\Models\Subscription $sub): array
+    {
         $plan = $sub?->plan;
 
         // Plafond d'établissements dérivé de la TARIFICATION : un pack sans

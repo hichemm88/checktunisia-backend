@@ -9,6 +9,11 @@ use Illuminate\Support\Facades\Schedule;
 // Notify hotel admins about expiring subscriptions — runs daily at 8:00 AM
 Schedule::command('subscriptions:notify-expiring')->dailyAt('08:00');
 
+// Comptes à accès API partenaire en service : alerte ADMIN à J-15 de
+// l'échéance, comptes internes compris (exclus des relances commerciales
+// ci-dessus). Idempotente — une alerte par abonnement et par échéance.
+Schedule::command('subscriptions:alert-api-expiring')->dailyAt('08:05')->withoutOverlapping();
+
 // Sync watchlist with OpenSanctions (Interpol Red Notices + UN Sanctions) — runs daily at 02:00 AM
 // OpenSanctions refreshes their data daily; running at 02:00 ensures we pick up overnight updates.
 Schedule::command('watchlist:sync-opensanctions')->dailyAt('02:00');

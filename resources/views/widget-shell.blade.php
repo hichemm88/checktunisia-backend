@@ -11,10 +11,11 @@
         `frontend` (entrée widget-main.tsx) et publié sous ce chemin par le
         pipeline de déploiement.
     --}}
-    <link rel="stylesheet" href="/widget-assets/widget-main.css">
+    <style>html,body{margin:0;padding:0;height:100%;width:100%}#qayed-widget-root{height:100%;width:100%}</style>
+    <link rel="stylesheet" href="/widget-assets/widget-main.css?v={{ $assetVersion ?? 0 }}">
 </head>
 <body>
     <div id="qayed-widget-root" data-widget-token="{{ $token }}"></div>
-    <script type="module" src="/widget-assets/widget-main.js"></script>
+    <script type="module" src="/widget-assets/widget-main.js?v={{ $assetVersion ?? 0 }}"></script>
 </body>
 </html>

@@ -19,7 +19,13 @@ class PartnerWebhookOutboxService
 {
     private const CLAIM_LOCK_SECONDS = 120;
 
-    public function enqueueForSession(FicheSession $session, string $event, array $payload): void
+    /**
+     * @param  string|null  $idempotencyKey  par défaut l'identifiant de session ; les
+     *         événements portant sur la fiche elle-même (v1.2 : fiche.delivered,
+     *         fiche.delivery_failed) passent le fiche_id, pour rester uniques par
+     *         fiche quelle que soit la session (create puis amend) qui l'a touchée.
+     */
+    public function enqueueForSession(FicheSession $session, string $event, array $payload, ?string $idempotencyKey = null): void
     {
         $endpoints = PartnerWebhookEndpoint::where('partner_id', $session->partner_id)
             ->where('active', true)
@@ -27,7 +33,7 @@ class PartnerWebhookOutboxService
             ->filter(fn (PartnerWebhookEndpoint $e) => $e->subscribesTo($event));
 
         foreach ($endpoints as $endpoint) {
-            $this->enqueue($endpoint, $event, $payload, $session->id);
+            $this->enqueue($endpoint, $event, $payload, $idempotencyKey ?? $session->id);
         }
     }
 

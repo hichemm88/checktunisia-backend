@@ -47,6 +47,8 @@ Route::prefix('v1')
         Route::get('fiche-sessions/by-booking-ref', [FicheSessionController::class, 'showByBookingRef']);
         Route::get('fiche-sessions/{session_id}', [FicheSessionController::class, 'show']);
 
+        // v1.2 — fiches d'un établissement lié (API + saisies dans Qayed).
+        Route::get('fiches', [PartnerFicheController::class, 'index']);
         Route::get('fiches/{fiche_id}', [PartnerFicheController::class, 'show']);
         Route::patch('fiches/{fiche_id}', [PartnerFicheController::class, 'update']);
     });

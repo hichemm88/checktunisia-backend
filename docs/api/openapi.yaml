@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Qayed — API publique v1
-  version: "1.1.0"
+  version: "1.2.0"
   summary: API partenaires + widget embarqué pour la fiche de police Qayed.
   description: |
     API publique v1 permettant à une plateforme tierce (PMS, moteur de réservation…)
@@ -20,7 +20,7 @@ info:
        `widget-integration.html` et le guide `quickstart.md`).
     4. Le widget notifie sa fenêtre parente via `postMessage`, et Qayed notifie le
        partenaire via un **webhook** signé (`fiche.submitted`, `fiche.failed`,
-       `session.expired`).
+       `session.expired`, et depuis 1.2.0 `fiche.delivered` / `fiche.delivery_failed`).
 
     ### Hôte
 
@@ -57,7 +57,14 @@ info:
     l'exception de deux effets de bord toujours désactivés en mode test : aucun envoi
     réel via le relais WhatsApp de transmission aux autorités, et aucun événement
     `fiche.submitted` envoyé aux webhooks configurés (`fiche.failed` et
-    `session.expired` restent envoyés).
+    `session.expired` restent envoyés). Une fiche créée en mode test n'étant jamais
+    transmise, son `delivery_status` vaut toujours `not_applicable` et elle ne donne
+    lieu à aucun `fiche.delivered` / `fiche.delivery_failed` (1.2.0).
+
+    `GET /v1/fiches` (1.2.0) respecte la même séparation : une clé test ne liste que
+    les fiches créées en mode test par votre intégration ; une clé live liste les
+    fiches réelles (saisies via votre intégration en live et saisies dans Qayed),
+    jamais les fiches de test.
 
     Comme `fiche.submitted` n'est **pas** envoyé en mode test, validez votre
     intégration de bout en bout en relisant le statut avec
@@ -122,6 +129,21 @@ info:
     - Widget : ouverture directe sur le scan du premier voyageur, validation
       partielle, messages `postMessage` documentés.
 
+    ### Nouveautés 1.2.0
+
+    Ajouts uniquement, aucun changement incompatible :
+
+    - `GET /v1/fiches` : liste paginée (curseur) des fiches d'un établissement lié,
+      saisies via votre intégration **ou directement dans Qayed** (`source`), avec
+      filtres `arrival_from`, `arrival_to` et `updated_since`.
+    - `delivery_status` (`sent` | `pending` | `failed` | `not_applicable`) : statut
+      d'envoi de la fiche à l'autorité, dans `GET /v1/fiches`, `GET /v1/fiches/{fiche_id}`
+      et les réponses `GET /v1/fiche-sessions/...`. Voir le schéma `DeliveryStatus`.
+    - Webhooks `fiche.delivered` et `fiche.delivery_failed` (live uniquement, fiches
+      créées via l'API). Un endpoint existant ne les reçoit qu'après ajout à sa liste
+      d'événements (demande à l'équipe Qayed) ; ils sont souscrits par défaut sur
+      tout nouvel endpoint.
+
     ### Limite de débit
 
     Toutes les routes `/v1/*` sont limitées à **120 requêtes/minute par clé API**
@@ -155,7 +177,7 @@ tags:
   - name: Sessions de fiche
     description: Création et consultation des sessions de fiche (modèle Stripe Checkout).
   - name: Fiches
-    description: Consultation d'une fiche et mise à jour de son séjour (départ, chambre).
+    description: Liste et consultation des fiches, mise à jour du séjour d'une fiche (départ, chambre).
   - name: Widget
     description: |
       Endpoints du widget embarqué, appelés par l'iframe elle-même — jamais
@@ -541,6 +563,8 @@ paths:
                     type: integer
                     minimum: 1
                     description: (1.1.0) Voir `GET /v1/fiche-sessions/{session_id}`.
+                  delivery_status:
+                    $ref: '#/components/schemas/DeliveryStatus'
                 required: [session_id, status, fiche_id, booking_ref, created_at, expires_at]
         '401':
           $ref: '#/components/responses/InvalidApiKey'
@@ -598,6 +622,8 @@ paths:
                       de la session (minimum 1). Un écart avec `guest_count` signale
                       une validation partielle, à compléter en recréant une session
                       pour le même `booking_ref`.
+                  delivery_status:
+                    $ref: '#/components/schemas/DeliveryStatus'
                 required: [session_id, status, fiche_id, booking_ref, created_at, expires_at]
               example:
                 session_id: "5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e"
@@ -608,10 +634,143 @@ paths:
                 expires_at: "2026-09-16T09:15:00+00:00"
                 guest_count: 2
                 expected_guest_count: 3
+                delivery_status: "pending"
         '401':
           $ref: '#/components/responses/InvalidApiKey'
         '404':
           description: Session introuvable pour ce partenaire (`session_not_found`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/fiches:
+    get:
+      tags: [Fiches]
+      summary: Lister les fiches d'un établissement lié (1.2.0)
+      description: |
+        Fiches de l'établissement, qu'elles aient été saisies via votre intégration
+        (`source: api`) ou directement dans Qayed par l'hébergeur (`source: qayed`).
+        Permet de réconcilier votre registre avec celui de Qayed, y compris pour les
+        clients arrivés sans passer par votre logiciel.
+
+        Règles de périmètre :
+
+        - **Brouillons exclus** : une fiche n'apparaît qu'une fois validée (même règle
+          que `GET /v1/fiche-sessions/...`, où `fiche_id` n'est renvoyé qu'après
+          soumission). Les fiches annulées (`cancelled`) ou non venues (`no_show`)
+          restent listées, avec leur `status`.
+        - **Mode de la clé** : une clé live liste les fiches réelles (saisies dans
+          Qayed, et celles de votre intégration en live) ; une clé test ne liste que
+          les fiches créées en mode test par votre intégration. Les deux registres ne
+          se mélangent jamais.
+        - Les fiches créées via l'API par un **autre** logiciel partenaire lié au même
+          établissement ne sont pas listées.
+        - **Aucune donnée d'identité** au-delà du nom du voyageur principal : ni numéro
+          de document, ni date de naissance, ni image.
+
+        Pagination par **curseur** : ordre de création décroissant (les plus récentes
+        d'abord). Tant que `has_more` vaut `true`, rappelez la route avec les mêmes
+        filtres et `cursor` = `next_cursor` de la réponse précédente. Le curseur est
+        opaque : ne le construisez pas, ne le modifiez pas.
+
+        Synchronisation incrémentale : passez dans `updated_since` l'heure de début de
+        votre synchronisation précédente (avec une petite marge). Une fiche est
+        considérée modifiée si son séjour ou ses voyageurs ont changé, **ou** si son
+        envoi à l'autorité a progressé (`delivery_status`).
+      operationId: listFiches
+      parameters:
+        - name: establishment_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+          description: Établissement lié à votre clé (`GET /v1/establishments`).
+        - name: arrival_from
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: Date d'arrivée minimale incluse (AAAA-MM-JJ).
+        - name: arrival_to
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: Date d'arrivée maximale incluse (AAAA-MM-JJ), postérieure ou égale à `arrival_from`.
+        - name: updated_since
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Ne renvoyer que les fiches modifiées depuis cet instant (ISO 8601 avec fuseau, par ex. `2026-11-22T08:00:00+01:00`).
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+          description: Valeur `next_cursor` d'une réponse précédente.
+      responses:
+        '200':
+          description: Une page de fiches.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/FicheListItem' }
+                  next_cursor:
+                    type: string
+                    nullable: true
+                    description: Curseur de la page suivante ; null sur la dernière page.
+                  has_more: { type: boolean }
+                required: [data, next_cursor, has_more]
+              example:
+                data:
+                  - fiche_id: "a1b2c3d4-e5f6-4789-90ab-cdef01234567"
+                    establishment_id: "0f2e6b8a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
+                    booking_ref: "DIAR-88213"
+                    room_id: "3c1a9e7a-2b4d-4f6a-8c0e-1a2b3c4d5e6f"
+                    room: "101"
+                    arrival_date: "2026-09-20"
+                    departure_date: "2026-09-23"
+                    guest_count: 2
+                    primary_guest_name: "Ahmed Ben Salah"
+                    status: "active"
+                    source: "api"
+                    operator_user_id: "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a"
+                    submitted_at: "2026-09-20T14:02:11+01:00"
+                    delivery_status: "sent"
+                  - fiche_id: "b2c3d4e5-f6a7-4890-91bc-def012345678"
+                    establishment_id: "0f2e6b8a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
+                    booking_ref: null
+                    room_id: null
+                    room: null
+                    arrival_date: "2026-09-19"
+                    departure_date: "2026-09-21"
+                    guest_count: 1
+                    primary_guest_name: "Sami Trabelsi"
+                    status: "completed"
+                    source: "qayed"
+                    operator_user_id: "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a"
+                    submitted_at: "2026-09-19T21:40:00+01:00"
+                    delivery_status: "pending"
+                next_cursor: "eyJjIjoiMjAyNi0wOS0xOSAyMTozOTo1NSIsImkiOiJiMmMzZDRlNS1mNmE3LTQ4OTAtOTFiYy1kZWYwMTIzNDU2NzgifQ"
+                has_more: true
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '403':
+          description: Établissement non lié à votre clé, ou liaison révoquée (`establishment_not_linked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: |
+            `validation_error` : `establishment_id` absent ou mal formé, date mal
+            formée, `arrival_to` antérieure à `arrival_from`, `limit` hors bornes,
+            ou `cursor` invalide.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -644,6 +803,7 @@ paths:
                 checked_out_at: null
                 room_id: "3c1a9e7a-2b4d-4f6a-8c0e-1a2b3c4d5e6f"
                 stay_status: "active"
+                delivery_status: "sent"
         '401':
           $ref: '#/components/responses/InvalidApiKey'
         '403':
@@ -1232,6 +1392,8 @@ components:
             (1.1.0) État du séjour : `draft` (fiche pas encore validée), `active`
             (séjour en cours), `completed` (départ enregistré, manuel ou automatique),
             `cancelled` (fiche annulée).
+        delivery_status:
+          $ref: '#/components/schemas/DeliveryStatus'
       required: [fiche_id, booking_ref, establishment_id, guest_count, authority_status]
     WidgetMessageSubmitted:
       type: object
@@ -1327,6 +1489,115 @@ components:
         session_id: { type: string, format: uuid }
         booking_ref: { type: string }
       required: [session_id, booking_ref]
+    DeliveryStatus:
+      type: string
+      enum: [sent, pending, failed, not_applicable]
+      description: |
+        (1.2.0) Statut d'envoi de la fiche à l'autorité, par le circuit de
+        transmission actuel de Qayed (un envoi par voyageur et par destinataire).
+        Comme `authority_status`, ce n'est **pas** un accusé de réception
+        gouvernemental : `sent` signifie que le canal de transmission a accepté
+        tous les envois.
+
+        Agrégation sur l'ensemble des envois de la fiche (fiche multi-voyageurs) :
+
+        - `failed` : au moins un envoi est en échec définitif (abandonné après
+          reprises, refusé par le canal, ou bloqué avant envoi) ;
+        - sinon `pending` : au moins un envoi est en file ou en reprise, ou la fiche
+          est validée et ses envois ne sont pas encore créés ;
+        - sinon `sent` : tous les envois ont abouti.
+
+        `not_applicable` : fiche créée en mode test (jamais transmise), brouillon
+        (rien n'est transmis avant validation), fiche annulée ou non venue sans
+        envoi, ou module d'envoi inactif pour cet établissement (aucun envoi
+        n'existe).
+
+        La valeur peut évoluer : un échec signalé après acceptation par le canal
+        repasse la fiche en `pending` ou `failed` ; un renvoi décidé par l'équipe
+        Qayed peut faire passer une fiche `failed` à `pending` puis `sent`.
+    FicheListItem:
+      type: object
+      description: (1.2.0) Élément de `GET /v1/fiches`. Aucun numéro de document, aucune date de naissance, aucune image.
+      properties:
+        fiche_id: { type: string, format: uuid }
+        establishment_id: { type: string, format: uuid }
+        booking_ref:
+          type: string
+          nullable: true
+          description: Référence de réservation transmise par votre intégration ; null pour une fiche saisie dans Qayed.
+        room_id: { type: string, format: uuid, nullable: true, description: Chambre Qayed rattachée. }
+        room:
+          type: string
+          nullable: true
+          description: "Libellé de chambre envoyé par votre intégration (`source: api`), sinon numéro de la chambre Qayed."
+        arrival_date: { type: string, format: date, nullable: true }
+        departure_date: { type: string, format: date, nullable: true, description: Date de départ prévue. }
+        guest_count: { type: integer, description: Voyageurs déclarés sur la fiche. }
+        primary_guest_name:
+          type: string
+          nullable: true
+          description: Prénom et nom du voyageur principal.
+        status:
+          type: string
+          enum: [active, completed, cancelled, no_show]
+          description: |
+            État de la fiche (même sens que `stay_status` dans `GET /v1/fiches/{fiche_id}`) :
+            `active` (séjour en cours), `completed` (départ enregistré), `cancelled`
+            (annulée), `no_show` (client non venu). Les brouillons ne sont jamais listés.
+        source:
+          type: string
+          enum: [api, qayed]
+          description: "`api` : créée via votre intégration ; `qayed` : saisie directement dans Qayed."
+        operator_user_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            Utilisateur Qayed ayant validé la fiche (identifiants de `GET /v1/operators`) ;
+            null si la fiche a été validée par l'utilisateur technique d'intégration.
+        submitted_at: { type: string, format: date-time, nullable: true, description: Date de validation de la fiche. }
+        delivery_status:
+          $ref: '#/components/schemas/DeliveryStatus'
+      required: [fiche_id, establishment_id, booking_ref, room_id, room, arrival_date, departure_date, guest_count, primary_guest_name, status, source, operator_user_id, submitted_at, delivery_status]
+    WebhookEventFicheDelivered:
+      type: object
+      description: |
+        (1.2.0) Événement Qayed-Event = fiche.delivered. Émis une seule fois par fiche
+        quand tous ses envois à l'autorité ont abouti (`delivery_status` passe à
+        `sent`). Live uniquement, fiches créées via l'API uniquement. Si des voyageurs
+        sont ajoutés ensuite (mode `amend`), aucun second `fiche.delivered` n'est
+        émis : relisez `GET /v1/fiches/{fiche_id}`.
+      properties:
+        fiche_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid, description: Dernière session live rattachée à la fiche. }
+        booking_ref: { type: string }
+        establishment_id: { type: string, format: uuid }
+        delivery_status: { type: string, const: "sent" }
+        occurred_at: { type: string, format: date-time }
+      required: [fiche_id, session_id, booking_ref, establishment_id, delivery_status, occurred_at]
+    WebhookEventFicheDeliveryFailed:
+      type: object
+      description: |
+        (1.2.0) Événement Qayed-Event = fiche.delivery_failed. Émis une seule fois par
+        fiche, au premier échec DÉFINITIF d'un de ses envois à l'autorité (les échecs
+        temporaires, repris automatiquement, ne le déclenchent pas). Live uniquement,
+        fiches créées via l'API uniquement. L'équipe Qayed est alertée de son côté ;
+        si l'envoi est ensuite relancé avec succès, `fiche.delivered` suit.
+      properties:
+        fiche_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid, description: Dernière session live rattachée à la fiche. }
+        booking_ref: { type: string }
+        establishment_id: { type: string, format: uuid }
+        delivery_status: { type: string, const: "failed" }
+        reason:
+          type: string
+          enum: [transmission_failed, transmission_cancelled]
+          description: |
+            Motif technique générique : `transmission_failed` (refus du canal ou
+            reprises épuisées), `transmission_cancelled` (envoi bloqué ou annulé avant
+            transmission, par exemple identité du voyageur incomplète).
+        occurred_at: { type: string, format: date-time }
+      required: [fiche_id, session_id, booking_ref, establishment_id, delivery_status, reason, occurred_at]
     WebhookEnvelopeExample:
       type: object
       description: |
@@ -1336,7 +1607,8 @@ components:
 x-webhooks-signature:
   description: |
     Chaque livraison porte deux en-têtes :
-    - `Qayed-Event`: le nom de l'événement (fiche.submitted | fiche.failed | session.expired).
+    - `Qayed-Event`: le nom de l'événement (fiche.submitted | fiche.failed | session.expired
+      | fiche.delivered | fiche.delivery_failed).
     - `Qayed-Signature`: `t={unix_timestamp},v1={hex}` où `hex` =
       `hash_hmac('sha256', "{timestamp}.{corps_brut_json}", secret_endpoint)`.
 

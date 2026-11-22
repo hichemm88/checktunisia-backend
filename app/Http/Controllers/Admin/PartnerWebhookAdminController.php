@@ -13,6 +13,19 @@ use Illuminate\Http\Request;
 /** Endpoints webhook + journal de livraison — vue platform_admin. */
 class PartnerWebhookAdminController extends Controller
 {
+    /**
+     * Événements acceptés, et souscrits par défaut à la création d'un endpoint.
+     * v1.2 : fiche.delivered / fiche.delivery_failed. Un endpoint existant ne
+     * les reçoit qu'après ajout explicite dans sa liste `events`.
+     */
+    public const EVENTS = [
+        'fiche.submitted',
+        'fiche.failed',
+        'session.expired',
+        'fiche.delivered',
+        'fiche.delivery_failed',
+    ];
+
     public function __construct(private PartnerWebhookOutboxService $outbox) {}
 
     public function index(string $partnerId): JsonResponse
@@ -27,14 +40,14 @@ class PartnerWebhookAdminController extends Controller
         $v = $request->validate([
             'url' => ['required', 'url', 'max:500'],
             'events' => ['nullable', 'array'],
-            'events.*' => ['string', 'in:fiche.submitted,fiche.failed,session.expired'],
+            'events.*' => ['string', 'in:'.implode(',', self::EVENTS)],
         ]);
 
         $endpoint = PartnerWebhookEndpoint::create([
             'partner_id' => $partnerId,
             'url' => $v['url'],
             'secret' => bin2hex(random_bytes(32)),
-            'events' => $v['events'] ?? ['fiche.submitted', 'fiche.failed', 'session.expired'],
+            'events' => $v['events'] ?? self::EVENTS,
             'active' => true,
         ]);
 

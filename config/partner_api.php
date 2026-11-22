@@ -24,6 +24,9 @@ return [
     // porte la saisie du réceptionniste.
     'widget_session' => [
         'ttl_minutes' => (int) env('WIDGET_SESSION_TTL_MINUTES', 20),
+        // v1.2 : une seconde personne qui ouvre la même fiche voit « en cours
+        // de saisie par … » si la première a agi depuis moins de N minutes.
+        'lock_minutes' => (int) env('WIDGET_SESSION_LOCK_MINUTES', 10),
     ],
 
     'link_code' => [

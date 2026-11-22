@@ -19,7 +19,11 @@ class WidgetSessionService
 {
     public function __construct(private WidgetTokenService $tokens) {}
 
-    /** @return array{session: FicheSession, widget_token: string} */
+    /**
+     * @return array{session: FicheSession, widget_token: ?string, locked_by?: ?string}
+     *         widget_token null = fiche tenue par une autre personne : rien
+     *         n'est consommé, le même lien pourra être réessayé plus tard.
+     */
     public function bootstrap(string $jwt): array
     {
         $claims = $this->tokens->decode($jwt);
@@ -47,14 +51,27 @@ class WidgetSessionService
                 throw new PartnerApiException(ErrorCodes::SESSION_EXPIRED);
             }
 
+            // v1.2 : une autre personne a cette fiche ouverte en ce moment.
+            // Ni erreur ni prise de main : le widget affiche « Fiche en cours
+            // de saisie par … » et propose de réessayer avec ce même lien.
+            if ($session->isHeldByAnother($session->requested_operator_user_id, $session->requested_operator_name)) {
+                return ['session' => $session, 'widget_token' => null, 'locked_by' => $session->holderName()];
+            }
+
             $token = Str::random(48);
             $ttl = (int) config('partner_api.widget_session.ttl_minutes', 20);
 
-            $session->update([
+            $requested = $session->requested_operator_user_id !== null || $session->requested_operator_name !== null;
+
+            $session->update(array_merge([
                 'jwt_consumed_at' => now(),
                 'widget_session_token_hash' => hash('sha256', $token),
                 'widget_session_expires_at' => now()->addMinutes($ttl),
-            ]);
+            ], $requested ? [
+                // Celui qui ouvre réellement le widget devient l'opérateur.
+                'operator_user_id' => $session->requested_operator_user_id,
+                'operator_name' => $session->requested_operator_name,
+            ] : []));
 
             return ['session' => $session, 'widget_token' => $token];
         });
