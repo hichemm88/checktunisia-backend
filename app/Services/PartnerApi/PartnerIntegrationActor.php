@@ -2,6 +2,7 @@
 
 namespace App\Services\PartnerApi;
 
+use App\Models\FicheSession;
 use App\Models\Hotel;
 use App\Models\Organization;
 use App\Models\User;
@@ -38,6 +39,48 @@ class PartnerIntegrationActor
         }
 
         return $user;
+    }
+
+    /**
+     * Réceptionniste désigné par le partenaire (operator.user_id), à
+     * condition qu'il soit un vrai utilisateur ACTIF de l'hébergeur
+     * propriétaire de l'établissement. Tout autre cas (absent, inconnu, autre
+     * hébergeur, désactivé, supprimé, compte système) renvoie null : le
+     * partenaire ne peut ni attribuer une fiche à un tiers ni sonder les
+     * comptes d'un autre hébergeur, et la déclaration n'est jamais bloquée.
+     */
+    public function operatorFor(Hotel $hotel, ?string $userId): ?User
+    {
+        if ($userId === null || $userId === '' || ! Str::isUuid($userId)) {
+            return null;
+        }
+
+        return User::whereKey($userId)
+            ->where('organization_id', $hotel->organization_id)
+            ->where('status', 'active')
+            ->where('is_system_actor', false)
+            ->first();
+    }
+
+    /**
+     * Utilisateur pour le compte duquel la session agit : le réceptionniste
+     * désigné s'il est toujours valide, sinon l'utilisateur d'intégration.
+     * Revérifié à chaque appel : un compte désactivé entre la création de la
+     * session et la soumission retombe sur l'intégration.
+     */
+    public function forSession(FicheSession $session): User
+    {
+        $hotel = $session->hotel;
+
+        $operator = $this->operatorFor($hotel, $session->operator_user_id);
+        if ($operator) {
+            return $operator;
+        }
+
+        $actor = $this->forOrganization($hotel->organization);
+        $this->ensureAttachedTo($actor, $hotel);
+
+        return $actor;
     }
 
     /**

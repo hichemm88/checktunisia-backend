@@ -29,7 +29,7 @@ class WidgetBootstrapController extends Controller
         $this->assertOriginAllowed($partner, $request);
 
         ['session' => $session, 'widget_token' => $widgetToken] = $this->sessions->bootstrap($jwt);
-        $session->loadMissing(['hotel', 'checkIn.guests.documents']);
+        $session->loadMissing(['hotel', 'checkIn.room', 'checkIn.guests.documents']);
 
         $existingGuests = $session->mode === FicheSession::MODE_AMEND
             ? $session->checkIn?->guests->map(fn ($g) => [
@@ -47,11 +47,15 @@ class WidgetBootstrapController extends Controller
             'mode' => $session->mode,
             'establishment_name' => $session->hotel->name,
             'booking_ref' => $session->booking_reference,
-            'arrival_date' => $session->arrival_date,
-            'departure_date' => $session->departure_date,
-            'room' => $session->room_label,
+            'arrival_date' => $session->arrival_date?->toDateString(),
+            'departure_date' => $session->departure_date?->toDateString(),
+            // Chambre Qayed réellement rattachée (room_id) en priorité, sinon
+            // le libellé brut du partenaire.
+            'room' => $session->checkIn?->room?->number ?? $session->room_label,
             'prefill_guests' => $session->prefill_guests,
             'existing_guests' => $existingGuests,
+            'expected_guest_count' => $session->expectedGuestCount(),
+            'locale' => $session->locale ?? 'fr',
         ]);
     }
 

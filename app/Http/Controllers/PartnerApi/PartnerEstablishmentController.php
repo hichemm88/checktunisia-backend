@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ApiPartner;
 use App\Models\Hotel;
 use App\Models\Room;
+use App\Models\User;
 use App\Services\PartnerApi\ErrorCodes;
 use App\Services\PartnerApi\EstablishmentLinkService;
 use App\Services\Subscription\CheckinQuota;
@@ -41,6 +42,36 @@ class PartnerEstablishmentController extends Controller
         });
 
         return response()->json(['data' => $data]);
+    }
+
+    /**
+     * v1.1 — utilisateurs actifs des hébergeurs propriétaires des
+     * établissements liés, pour que le manager côté partenaire relie à la
+     * main ses comptes aux comptes Qayed (operator.user_id). Ni e-mail ni
+     * téléphone : rien qui permette de contacter ou d'identifier hors Qayed.
+     * L'utilisateur technique d'intégration est exclu.
+     */
+    public function operators(): JsonResponse
+    {
+        $partner = app(ApiPartner::class);
+
+        $orgIds = Hotel::whereIn('id', $partner->establishmentLinks()->active()->select('hotel_id'))
+            ->pluck('organization_id')
+            ->unique();
+
+        $users = User::whereIn('organization_id', $orgIds)
+            ->where('status', 'active')
+            ->where('is_system_actor', false)
+            ->with('roles')
+            ->orderBy('first_name')
+            ->orderBy('last_name')
+            ->get();
+
+        return response()->json(['data' => $users->map(fn (User $u) => [
+            'id' => $u->id,
+            'name' => trim("{$u->first_name} {$u->last_name}"),
+            'role' => $u->primary_role,
+        ])->values()]);
     }
 
     /**

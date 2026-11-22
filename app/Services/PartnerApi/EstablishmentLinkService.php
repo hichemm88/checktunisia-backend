@@ -60,23 +60,33 @@ class EstablishmentLinkService
 
             $code->update(['consumed_at' => now(), 'consumed_by_partner_id' => $partner->id]);
 
-            $link = EstablishmentPartnerLink::query()
-                ->where('hotel_id', $code->hotel_id)
-                ->where('partner_id', $partner->id)
-                ->first();
-
-            if ($link) {
-                $link->update(['linked_at' => now(), 'revoked_at' => null, 'revoked_by' => null]);
-
-                return $link;
-            }
-
-            return EstablishmentPartnerLink::create([
-                'hotel_id' => $code->hotel_id,
-                'partner_id' => $partner->id,
-                'linked_at' => now(),
-            ]);
+            return $this->link($partner, $code->hotel_id);
         });
+    }
+
+    /**
+     * Crée (ou réactive) la liaison. Appelé par l'échange de code, et
+     * directement par l'admin plateforme pour un partenaire interne (v1.1),
+     * pour qui le code à usage unique n'apporte rien.
+     */
+    public function link(ApiPartner $partner, string $hotelId): EstablishmentPartnerLink
+    {
+        $link = EstablishmentPartnerLink::query()
+            ->where('hotel_id', $hotelId)
+            ->where('partner_id', $partner->id)
+            ->first();
+
+        if ($link) {
+            $link->update(['linked_at' => now(), 'revoked_at' => null, 'revoked_by' => null]);
+
+            return $link;
+        }
+
+        return EstablishmentPartnerLink::create([
+            'hotel_id' => $hotelId,
+            'partner_id' => $partner->id,
+            'linked_at' => now(),
+        ]);
     }
 
     public function revoke(EstablishmentPartnerLink $link, User $revokedBy): void

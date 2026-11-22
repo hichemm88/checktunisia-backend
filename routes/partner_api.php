@@ -38,6 +38,7 @@ Route::prefix('v1')
             ->middleware('throttle:establishment-link-exchange');
 
         Route::get('establishments', [PartnerEstablishmentController::class, 'index']);
+        Route::get('operators', [PartnerEstablishmentController::class, 'operators']);
         Route::get('establishments/{hotel_id}/rooms', [PartnerEstablishmentController::class, 'rooms']);
 
         Route::post('fiche-sessions', [FicheSessionController::class, 'store']);
@@ -47,4 +48,5 @@ Route::prefix('v1')
         Route::get('fiche-sessions/{session_id}', [FicheSessionController::class, 'show']);
 
         Route::get('fiches/{fiche_id}', [PartnerFicheController::class, 'show']);
+        Route::patch('fiches/{fiche_id}', [PartnerFicheController::class, 'update']);
     });

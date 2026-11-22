@@ -669,6 +669,8 @@ Route::middleware(['auth:sanctum', 'otp.device', 'audit'])->group(function () {
             Route::post('partners/{id}/keys/{keyId}/revoke', [PartnerAdminController::class, 'revokeKey']);
             Route::get('partners/{id}/links', [PartnerAdminController::class, 'links']);
             Route::post('partners/{id}/links/{linkId}/revoke', [PartnerAdminController::class, 'revokeLink']);
+            Route::get('partners/{id}/linkable-hotels', [PartnerAdminController::class, 'linkableHotels']);
+            Route::post('partners/{id}/links', [PartnerAdminController::class, 'storeLink']);
             Route::get('partners/{id}/metrics', [PartnerAdminController::class, 'metrics']);
             Route::get('partners/{id}/webhooks', [PartnerWebhookAdminController::class, 'index']);
             Route::post('partners/{id}/webhooks', [PartnerWebhookAdminController::class, 'store']);

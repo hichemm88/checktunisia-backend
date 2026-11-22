@@ -24,6 +24,12 @@ class WidgetShellControllerTest extends TestCase
     use RefreshDatabase;
     use InteractsWithPartnerApi;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->seedWidgetJwtSecret();
+    }
+
     /** @return string widget_url créé via le vrai endpoint POST /v1/fiche-sessions */
     private function createWidgetUrl(ApiPartner $partner, string $plaintext, Hotel $hotel, string $bookingRef): string
     {

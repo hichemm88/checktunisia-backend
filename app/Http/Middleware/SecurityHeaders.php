@@ -22,7 +22,13 @@ class SecurityHeaders
         $response = $next($request);
 
         $response->headers->set('X-Content-Type-Options', 'nosniff');
-        $response->headers->set('X-Frame-Options', 'DENY');
+        // Seule exception : une réponse qui pose elle-même sa CSP
+        // frame-ancestors (page du widget partenaire, autorisée à être
+        // encadrée par les origines déclarées du partenaire). Y ajouter
+        // X-Frame-Options: DENY contredirait cette politique.
+        if (! str_contains((string) $response->headers->get('Content-Security-Policy'), 'frame-ancestors')) {
+            $response->headers->set('X-Frame-Options', 'DENY');
+        }
         $response->headers->set('Referrer-Policy', 'no-referrer');
         $response->headers->set('X-Permitted-Cross-Domain-Policies', 'none');
         $response->headers->remove('X-Powered-By');

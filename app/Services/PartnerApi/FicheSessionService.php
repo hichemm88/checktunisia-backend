@@ -11,6 +11,7 @@ use App\Models\Hotel;
 use App\Models\Room;
 use App\Services\CheckIn\CheckInService;
 use App\Services\Subscription\PlanEntitlements;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -29,10 +30,20 @@ class FicheSessionService
         private EstablishmentLinkService $links,
         private PartnerIntegrationActor $actor,
         private WidgetTokenService $tokens,
+        private PartnerStayService $stays,
     ) {}
 
-    /** @return array{session: FicheSession, created: bool} */
+    /** @return array{session: FicheSession, created: bool, operator_matched: bool} */
     public function createOrReuse(ApiPartner $partner, ApiKey $apiKey, array $data): array
+    {
+        $result = $this->createOrReuseSession($partner, $apiKey, $data);
+        $result['operator_matched'] = $result['session']->operator_user_id !== null;
+
+        return $result;
+    }
+
+    /** @return array{session: FicheSession, created: bool} */
+    private function createOrReuseSession(ApiPartner $partner, ApiKey $apiKey, array $data): array
     {
         $this->links->assertLinked($partner, $data['establishment_id']);
 
@@ -43,7 +54,14 @@ class FicheSessionService
             throw new PartnerApiException(ErrorCodes::API_ACCESS_DISABLED);
         }
 
-        return DB::transaction(function () use ($partner, $apiKey, $hotel, $data) {
+        // Réceptionniste désigné par le partenaire (operator.user_id, choisi
+        // dans GET /v1/operators). Inconnu, désactivé ou d'un autre hébergeur :
+        // null, repli silencieux sur l'utilisateur d'intégration.
+        $operator = $this->actor->operatorFor($hotel, $data['operator']['user_id'] ?? null);
+        $data['operator_user_id'] = $operator?->id;
+        $data['operator_name'] = $data['operator']['name'] ?? null;
+
+        return DB::transaction(function () use ($partner, $apiKey, $hotel, $data, $operator) {
             // Verrou applicatif : deux requêtes concurrentes pour le même
             // (établissement, booking_ref) ne doivent jamais produire deux
             // sessions "create" distinctes (double-clic côté PMS partenaire).
@@ -69,6 +87,14 @@ class FicheSessionService
                         'expires_at' => now()->addMinutes((int) config('partner_api.jwt.ttl_minutes', 15)),
                     ]);
                 }
+
+                // Le réceptionniste qui rouvre la fiche peut être un autre que
+                // celui de la première demande : la dernière demande fait foi.
+                $existing->update([
+                    'operator_user_id' => $data['operator_user_id'],
+                    'operator_name' => $data['operator_name'],
+                    'locale' => $data['locale'] ?? $existing->locale,
+                ]);
 
                 if ($existing->mode === FicheSession::MODE_CREATE) {
                     $this->maybeAssignRoom($hotel, $existing->check_in_id, $data);
@@ -114,10 +140,22 @@ class FicheSessionService
             }
 
             $isTest = $apiKey->isTestMode();
-            $actor = $this->actor->forOrganization($org = $hotel->organization);
-            $this->actor->ensureAttachedTo($actor, $hotel);
+            if ($operator) {
+                $actor = $operator;
+            } else {
+                $actor = $this->actor->forOrganization($hotel->organization);
+                $this->actor->ensureAttachedTo($actor, $hotel);
+            }
+            // Journal d'audit de la création attribué au même utilisateur
+            // qu'une fiche saisie dans Qayed (aucune session Sanctum ici).
+            Auth::setUser($actor);
 
             $room = empty($data['room_id']) ? null : $this->resolveRoom($hotel, $data['room_id']);
+            if ($room) {
+                // Filet de sécurité (v1.1) : un séjour resté ouvert dans cette
+                // chambre est clos, jamais un refus.
+                $this->stays->closeOpenStaysInRoom($room, null, $actor);
+            }
 
             $checkIn = $this->checkInService->create($hotel, $actor, [
                 'room_id' => $room?->id,
@@ -156,33 +194,25 @@ class FicheSessionService
             return;
         }
 
-        $room = $this->resolveRoom($hotel, $data['room_id'], excludeCheckInId: $checkIn->id);
+        $room = $this->resolveRoom($hotel, $data['room_id']);
+        $this->stays->closeOpenStaysInRoom($room, $checkIn->id, $this->actor->forOrganization($hotel->organization));
         $checkIn->update(['room_id' => $room->id]);
     }
 
     /**
-     * Valide `room_id` (appartient bien à cet établissement), verrouille et
-     * refuse un conflit — même discipline que CheckInController::store()
-     * côté natif : deux fiches (API ou native) ne doivent jamais partager
-     * une chambre sur des dates qui se chevauchent.
+     * Valide `room_id` (appartient bien à cet établissement). Volontairement
+     * AUCUN refus pour chambre « occupée » (v1.1) : côté API, l'occupation
+     * vient le plus souvent d'un séjour précédent jamais clôturé dans Qayed,
+     * et une déclaration réglementaire ne doit jamais être bloquée par un
+     * état interne. Le PMS partenaire reste la source de vérité de ses
+     * chambres.
      */
-    private function resolveRoom(Hotel $hotel, string $roomId, ?string $excludeCheckInId = null): Room
+    private function resolveRoom(Hotel $hotel, string $roomId): Room
     {
         $room = Room::where('hotel_id', $hotel->id)->where('id', $roomId)->first();
 
         if (! $room) {
             throw new PartnerApiException(ErrorCodes::VALIDATION_ERROR, "room_id inconnu pour cet établissement : {$roomId}.");
-        }
-
-        Room::whereKey($room->id)->lockForUpdate()->first();
-
-        $occupied = CheckIn::where('room_id', $room->id)
-            ->whereIn('status', ['draft', 'active'])
-            ->when($excludeCheckInId, fn ($q) => $q->where('id', '!=', $excludeCheckInId))
-            ->exists();
-
-        if ($occupied) {
-            throw new PartnerApiException(ErrorCodes::VALIDATION_ERROR, 'Cette chambre a déjà une fiche en cours.');
         }
 
         return $room;
@@ -229,6 +259,9 @@ class FicheSessionService
             'metadata' => $data['metadata'] ?? [],
             'is_test' => $apiKey->isTestMode(),
             'jwt_jti' => $jti,
+            'operator_user_id' => $data['operator_user_id'] ?? null,
+            'operator_name' => $data['operator_name'] ?? null,
+            'locale' => $data['locale'] ?? 'fr',
             'expires_at' => now()->addMinutes((int) config('partner_api.jwt.ttl_minutes', 15)),
         ]);
     }
@@ -238,6 +271,13 @@ class FicheSessionService
         $jwt = $this->tokens->issue($session);
 
         return rtrim((string) config('app.url'), '/')."/widget/fiche?token={$jwt}";
+    }
+
+    public function declaredGuestCount(FicheSession $session): int
+    {
+        $checkIn = CheckIn::find($session->check_in_id);
+
+        return $checkIn && $checkIn->status !== 'draft' ? $checkIn->guests()->count() : 0;
     }
 
     public function findForPartner(ApiPartner $partner, string $sessionId): FicheSession

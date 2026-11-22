@@ -7,6 +7,7 @@ use App\Models\ApiKey;
 use App\Models\ApiPartner;
 use App\Models\EstablishmentPartnerLink;
 use App\Models\FicheSession;
+use App\Models\Hotel;
 use App\Models\PartnerWebhookDelivery;
 use App\Services\Audit\AuditLogger;
 use App\Services\PartnerApi\ApiKeyService;
@@ -134,6 +135,46 @@ class PartnerAdminController extends Controller
             'linked_at' => $l->linked_at,
             'revoked_at' => $l->revoked_at,
         ])]);
+    }
+
+    /** Établissements pas (ou plus) liés à ce partenaire, filtrés par nom. */
+    public function linkableHotels(Request $request, string $id): JsonResponse
+    {
+        $partner = ApiPartner::findOrFail($id);
+        $q = trim((string) $request->query('q', ''));
+
+        $hotels = Hotel::query()
+            ->whereNotIn('id', EstablishmentPartnerLink::active()->where('partner_id', $partner->id)->select('hotel_id'))
+            ->when($q !== '', fn ($query) => $query->where('name', 'ilike', '%'.addcslashes($q, '%_\\').'%'))
+            ->with('organization:id,name')
+            ->orderBy('name')
+            ->limit(50)
+            ->get(['id', 'name', 'organization_id']);
+
+        return response()->json(['data' => $hotels->map(fn (Hotel $h) => [
+            'id' => $h->id,
+            'name' => $h->name,
+            'organization_name' => $h->organization?->name,
+        ])]);
+    }
+
+    /** Liaison directe en un clic (partenaire interne), sans code de liaison. */
+    public function storeLink(Request $request, string $id): JsonResponse
+    {
+        $partner = ApiPartner::findOrFail($id);
+        $data = $request->validate(['hotel_id' => ['required', 'uuid', 'exists:hotels,id']]);
+
+        $link = $this->links->link($partner, $data['hotel_id']);
+
+        AuditLogger::log('partner.link_created', $link, [], ['hotel_id' => $link->hotel_id, 'via' => 'admin']);
+
+        return response()->json(['data' => [
+            'id' => $link->id,
+            'hotel_id' => $link->hotel_id,
+            'hotel_name' => $link->hotel->name,
+            'linked_at' => $link->linked_at,
+            'revoked_at' => null,
+        ]], 201);
     }
 
     public function revokeLink(Request $request, string $id, string $linkId): JsonResponse

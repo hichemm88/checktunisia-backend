@@ -5,6 +5,7 @@ namespace App\Services\PartnerApi;
 use App\Exceptions\PartnerApi\PartnerApiException;
 use App\Models\FicheSession;
 use App\Models\Guest;
+use App\Services\Audit\AuditLogger;
 use App\Services\CheckIn\CheckInService;
 use Illuminate\Support\Facades\DB;
 
@@ -39,15 +40,30 @@ class WidgetSubmissionService
         $this->checkInService->removeGuest($checkIn, $guest);
     }
 
-    /** @return array{fiche_id:string, guest_count:int} */
-    public function submit(FicheSession $session): array
+    /**
+     * @param  array{arrival_date?:string, departure_date?:string}  $stay  dates corrigées
+     *         dans le widget (lien « Modifier ») — appliquées uniquement à un brouillon.
+     * @return array{fiche_id:string, guest_count:int}
+     */
+    public function submit(FicheSession $session, array $stay = []): array
     {
         $checkIn = $this->sessions->checkInFor($session);
         $actor = $this->actorFor($session);
 
         try {
-            $result = DB::transaction(function () use ($session, $checkIn, $actor) {
+            $result = DB::transaction(function () use ($session, $checkIn, $actor, $stay) {
                 if ($session->mode === FicheSession::MODE_CREATE) {
+                    if ($stay !== [] && $checkIn->status === 'draft') {
+                        $checkIn->update(array_filter([
+                            'check_in_date' => $stay['arrival_date'] ?? null,
+                            'expected_check_out_date' => $stay['departure_date'] ?? null,
+                        ]));
+                        $session->update(array_filter([
+                            'arrival_date' => $stay['arrival_date'] ?? null,
+                            'departure_date' => $stay['departure_date'] ?? null,
+                        ]));
+                    }
+
                     // complete() exige >= 1 voyageur : le widget doit en avoir
                     // ajouté via addGuest() avant d'appeler submit.
                     $checkIn = $this->checkInService->complete($checkIn, $actor);
@@ -57,6 +73,16 @@ class WidgetSubmissionService
                     // leur propre relais WhatsApp individuel — pas de complete()
                     // à rejouer, pas de second décompte de quota.
                     $checkIn = $checkIn->fresh()->load('guests');
+                }
+
+                // Opérateur nommé par le partenaire mais sans compte Qayed
+                // rattachable : la fiche reste attribuée à l'intégration, et le
+                // nom déclaré est conservé dans le journal d'audit de la fiche.
+                if ($session->operator_name !== null && $actor->is_system_actor) {
+                    AuditLogger::log('check_in.partner_operator', $checkIn, [], [
+                        'operator_name' => $session->operator_name,
+                        'partner' => $session->partner?->name,
+                    ], $actor, $checkIn->hotel_id);
                 }
 
                 $session->update([
@@ -93,10 +119,6 @@ class WidgetSubmissionService
 
     private function actorFor(FicheSession $session): \App\Models\User
     {
-        $hotel = $session->hotel;
-        $actor = $this->actor->forOrganization($hotel->organization);
-        $this->actor->ensureAttachedTo($actor, $hotel);
-
-        return $actor;
+        return $this->actor->forSession($session);
     }
 }

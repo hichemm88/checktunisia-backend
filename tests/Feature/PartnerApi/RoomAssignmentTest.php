@@ -72,19 +72,6 @@ class RoomAssignmentTest extends TestCase
         $this->assertSame(0, CheckIn::where('booking_reference', 'BK-ROOM-2')->count());
     }
 
-    public function test_fiche_session_with_an_already_occupied_room_is_rejected_and_creates_nothing(): void
-    {
-        $fixture = $this->setUpLinkedPartner();
-        $room = Room::factory()->for($fixture['hotel'])->create();
-        CheckIn::factory()->for($fixture['hotel'])->create(['room_id' => $room->id, 'status' => 'active']);
-
-        $response = $this->withHeaders($this->bearer($fixture['plaintext']))
-            ->postJson('/v1/fiche-sessions', $this->fichePayload($fixture['hotel'], 'BK-ROOM-3', [], ['room_id' => $room->id]));
-
-        $response->assertStatus(422)->assertJsonPath('error.code', 'validation_error');
-        $this->assertSame(0, CheckIn::where('booking_reference', 'BK-ROOM-3')->count());
-    }
-
     public function test_a_room_id_added_on_a_later_call_updates_the_still_draft_check_in(): void
     {
         $fixture = $this->setUpLinkedPartner();

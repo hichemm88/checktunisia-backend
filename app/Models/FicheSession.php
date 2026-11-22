@@ -42,6 +42,9 @@ class FicheSession extends Model
         'widget_session_expires_at',
         'expires_at',
         'submitted_at',
+        'operator_user_id',
+        'operator_name',
+        'locale',
     ];
 
     protected function casts(): array
@@ -72,6 +75,17 @@ class FicheSession extends Model
     public function apiKey(): BelongsTo
     {
         return $this->belongsTo(ApiKey::class, 'api_key_id');
+    }
+
+    public function operator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'operator_user_id');
+    }
+
+    /** Voyageurs attendus = ceux passés par le partenaire à la création (au moins 1). */
+    public function expectedGuestCount(): int
+    {
+        return max(1, count($this->prefill_guests ?? []));
     }
 
     public function checkIn(): BelongsTo

@@ -34,7 +34,7 @@ class WidgetScanController extends Controller
             'document_type' => ['nullable', 'in:cin,passport'],
         ]);
 
-        $actor = app(PartnerIntegrationActor::class)->forOrganization($checkIn->hotel->organization);
+        $actor = app(PartnerIntegrationActor::class)->forSession($session);
 
         $scan = $this->service->uploadScan($checkIn, $actor, $request->file('passport_image'), runOcr: false);
 

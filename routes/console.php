@@ -36,6 +36,10 @@ Schedule::command('quota:close-month')->monthlyOn(1, '04:00');
 // Notify managers of check-ins left unvalidated for >30 min (scan done, not finalised)
 Schedule::command('checkins:notify-pending')->everyTenMinutes()->withoutOverlapping();
 
+// Départs des séjours issus de l'API partenaire (le PMS fait foi, personne ne
+// saisit ces départs dans Qayed) — 05:30 Tunis, avant les arrivées du jour.
+Schedule::command('partner-stays:auto-checkout')->dailyAt('05:30')->timezone('Africa/Tunis')->withoutOverlapping();
+
 // Remind staff about active stays due to depart today with no check-out — 14:00 Tunis (§8)
 Schedule::command('checkins:notify-departures-due')->dailyAt('14:00')->timezone('Africa/Tunis');
 
