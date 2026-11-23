@@ -2,15 +2,18 @@
 
 namespace App\Http\Controllers\PartnerApi;
 
+use App\Exceptions\PartnerApi\PartnerApiException;
 use App\Http\Controllers\Controller;
 use App\Models\ApiKey;
 use App\Models\ApiPartner;
 use App\Models\CheckIn;
 use App\Models\FicheSession;
+use App\Services\PartnerApi\ErrorCodes;
 use App\Services\PartnerApi\FicheDeliveryStatus;
 use App\Services\PartnerApi\FicheSessionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 
 class FicheSessionController extends Controller
 {
@@ -79,6 +82,25 @@ class FicheSessionController extends Controller
         $session = $this->sessions->findForPartner($partner, $sessionId);
 
         return response()->json($this->statusPayload($session));
+    }
+
+    /**
+     * Libère le verrou de saisie d'une session (le partenaire a fermé sa
+     * modale) : une autre personne peut ouvrir la fiche tout de suite. La
+     * saisie déjà faite est conservée. Idempotent. Une clé de test n'agit que
+     * sur ses sessions de test, une clé live que sur les sessions live.
+     */
+    public function releaseLock(string $sessionId): Response
+    {
+        $session = $this->sessions->findForPartner(app(ApiPartner::class), $sessionId);
+
+        if ($session->is_test !== app(ApiKey::class)->isTestMode()) {
+            throw new PartnerApiException(ErrorCodes::SESSION_NOT_FOUND);
+        }
+
+        $session->releaseLock();
+
+        return response()->noContent();
     }
 
     /**

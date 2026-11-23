@@ -81,35 +81,24 @@ class FicheSessionService
                 // l'appelant, pas sur la session : une nouvelle demande de
                 // widget_url doit toujours pouvoir en obtenir un utilisable.
                 //
-                // v1.2 : si une AUTRE personne a la fiche ouverte en ce moment,
-                // sa saisie n'est pas coupée (son token de session reste
-                // valable) ; le nouveau lien affichera « Fiche en cours de
-                // saisie par … » tant qu'elle n'a pas fini ou abandonné.
-                $heldByAnother = $existing->isHeldByAnother($data['operator_user_id'], $data['operator_name']);
-
+                // Le token de session de celui qui saisit n'est jamais coupé
+                // ici : c'est l'ouverture effective du nouveau lien (bootstrap)
+                // qui décide — verrou vivant, reprise explicite, et celui qui
+                // ouvre devient l'opérateur. Cette demande ne fait que noter
+                // qui la fait (requested_operator_*).
                 if ($existing->jwt_consumed_at !== null) {
-                    $existing->update(array_merge([
+                    $existing->update([
                         'jwt_jti' => WidgetTokenService::newJti(),
                         'jwt_consumed_at' => null,
                         'expires_at' => now()->addMinutes((int) config('partner_api.jwt.ttl_minutes', 15)),
-                    ], $heldByAnother ? [] : [
-                        'widget_session_token_hash' => null,
-                        'widget_session_expires_at' => null,
-                    ]));
+                    ]);
                 }
 
-                // Le réceptionniste qui rouvre la fiche peut être un autre que
-                // celui de la première demande : la dernière demande fait foi,
-                // sauf pendant qu'une autre personne tient la saisie (il ne
-                // devient l'opérateur qu'en ouvrant le widget, au bootstrap).
-                $existing->update(array_merge([
+                $existing->update([
                     'requested_operator_user_id' => $data['operator_user_id'],
                     'requested_operator_name' => $data['operator_name'],
                     'locale' => $data['locale'] ?? $existing->locale,
-                ], $heldByAnother ? [] : [
-                    'operator_user_id' => $data['operator_user_id'],
-                    'operator_name' => $data['operator_name'],
-                ]));
+                ]);
 
                 if ($existing->mode === FicheSession::MODE_CREATE) {
                     $this->maybeAssignRoom($hotel, $existing->check_in_id, $data);

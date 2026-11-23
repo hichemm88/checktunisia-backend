@@ -17,6 +17,8 @@ class PartnerApiException extends Exception
         public readonly string $errorCode,
         ?string $message = null,
         public readonly ?string $field = null,
+        /** Champs supplémentaires de l'objet error (ex. taken_over_by). */
+        public readonly array $extra = [],
     ) {
         parent::__construct($message ?? ErrorCodes::MESSAGES[$errorCode] ?? $errorCode);
     }
@@ -34,11 +36,11 @@ class PartnerApiException extends Exception
     public function toResponseArray(): array
     {
         return [
-            'error' => [
+            'error' => array_merge([
                 'code' => $this->errorCode,
                 'message' => $this->getMessage(),
                 'doc_url' => $this->docUrl(),
-            ],
+            ], $this->extra),
         ];
     }
 }

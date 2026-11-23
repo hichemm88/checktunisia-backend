@@ -22,7 +22,11 @@ class VerifyWidgetSessionToken
 
     public function handle(Request $request, Closure $next): Response
     {
-        $session = $this->sessions->resolve((string) $request->bearerToken());
+        // GET/DELETE /lock = simple vérification d'état ou libération : ni le
+        // token ni le verrou ne sont prolongés. Tout le reste est une action
+        // réelle du réceptionniste et renouvelle le verrou.
+        $passive = $request->is('widget/v1/lock') && ! $request->isMethod('post');
+        $session = $this->sessions->resolve((string) $request->bearerToken(), ! $passive);
 
         app()->instance(FicheSession::class, $session);
         app()->instance(ApiPartner::class, $session->partner);

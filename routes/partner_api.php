@@ -46,6 +46,8 @@ Route::prefix('v1')
         // comme un {session_id} et tomberait sur show().
         Route::get('fiche-sessions/by-booking-ref', [FicheSessionController::class, 'showByBookingRef']);
         Route::get('fiche-sessions/{session_id}', [FicheSessionController::class, 'show']);
+        // Libère le verrou de saisie (modale fermée côté partenaire).
+        Route::delete('fiche-sessions/{session_id}/lock', [FicheSessionController::class, 'releaseLock']);
 
         // v1.2 — fiches d'un établissement lié (API + saisies dans Qayed).
         Route::get('fiches', [PartnerFicheController::class, 'index']);

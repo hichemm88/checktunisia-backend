@@ -24,9 +24,11 @@ return [
     // porte la saisie du réceptionniste.
     'widget_session' => [
         'ttl_minutes' => (int) env('WIDGET_SESSION_TTL_MINUTES', 20),
-        // v1.2 : une seconde personne qui ouvre la même fiche voit « en cours
-        // de saisie par … » si la première a agi depuis moins de N minutes.
-        'lock_minutes' => (int) env('WIDGET_SESSION_LOCK_MINUTES', 10),
+        // Verrou de saisie vivant : une seconde personne voit « … est en train
+        // de saisir cette fiche » seulement si la première a fait une action
+        // réelle (scan, saisie, navigation) depuis moins de N secondes. Levé
+        // immédiatement à la fermeture du widget.
+        'lock_seconds' => (int) env('WIDGET_SESSION_LOCK_SECONDS', 120),
     ],
 
     'link_code' => [

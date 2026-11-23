@@ -46,6 +46,8 @@ class FicheSession extends Model
         'operator_name',
         'requested_operator_user_id',
         'requested_operator_name',
+        'lock_renewed_at',
+        'superseded_token_hash',
         'locale',
     ];
 
@@ -61,6 +63,7 @@ class FicheSession extends Model
             'widget_session_expires_at' => 'datetime',
             'expires_at' => 'datetime',
             'submitted_at' => 'datetime',
+            'lock_renewed_at' => 'datetime',
         ];
     }
 
@@ -106,23 +109,31 @@ class FicheSession extends Model
     }
 
     /**
-     * Une personne a le widget ouvert sur cette fiche et s'en est servie
-     * récemment : token de session vivant et dernière action (chaque appel
-     * prolonge le TTL) datant de moins de `widget_session.lock_minutes`.
+     * Verrou de saisie vivant : quelqu'un a le widget ouvert (token de session
+     * valide) ET y a fait une action réelle depuis moins de
+     * `widget_session.lock_seconds`. Libéré (lock_renewed_at null) dès la
+     * fermeture du widget ou par DELETE /v1/fiche-sessions/{id}/lock.
      */
     public function hasActiveHolder(): bool
     {
-        // Pas de test sur jwt_consumed_at : une nouvelle demande de widget_url
-        // le remet à null (nouveau JWT) sans retirer la main à celui qui saisit.
-        if ($this->widget_session_token_hash === null || $this->widget_session_expires_at === null || $this->widget_session_expires_at->isPast()) {
+        if ($this->widget_session_token_hash === null || $this->lock_renewed_at === null) {
+            return false;
+        }
+        if ($this->widget_session_expires_at === null || $this->widget_session_expires_at->isPast()) {
             return false;
         }
 
-        $ttl = (int) config('partner_api.widget_session.ttl_minutes', 20);
-        $lock = (int) config('partner_api.widget_session.lock_minutes', 10);
-        $lastActivity = $this->widget_session_expires_at->copy()->subMinutes($ttl);
+        $lock = (int) config('partner_api.widget_session.lock_seconds', 120);
 
-        return $lastActivity->isAfter(now()->subMinutes($lock));
+        return $this->lock_renewed_at->isAfter(now()->subSeconds($lock));
+    }
+
+    /** Lève le verrou sans toucher à la saisie (voyageurs déjà enregistrés conservés). */
+    public function releaseLock(): void
+    {
+        if ($this->lock_renewed_at !== null) {
+            $this->forceFill(['lock_renewed_at' => null])->saveQuietly();
+        }
     }
 
     /**

@@ -174,6 +174,22 @@ permise (« Valider avec 2 voyageurs sur 3 ») ; les voyageurs manquants se
 complètent plus tard en recréant une session pour le même `booking_ref` (mode
 `amend`, toujours la même fiche unique).
 
+**Verrou de saisie (1.2.0).** Pendant qu'une personne saisit une fiche, une
+autre personne qui l'ouvre voit « {nom} est en train de saisir cette fiche » et
+un bouton « Reprendre la saisie » : la reprise lui transfère la fiche avec tout
+ce qui est déjà saisi, et le premier écran affiche « Saisie reprise par {nom} ».
+Le même compte n'est jamais bloqué par son propre verrou, quel que soit
+l'appareil. Le verrou tombe après 2 minutes sans action dans le widget et se
+lève dès la fermeture du widget. Si vous retirez l'iframe vous-même (fermeture
+de votre modale), libérez-le explicitement :
+
+```bash
+curl -X DELETE https://api.qayed.tn/v1/fiche-sessions/5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e/lock \
+  -H "Authorization: Bearer qyd_test_xxxxxxxxxxxx"
+```
+
+Réponse `204`, même si aucun verrou n'était posé.
+
 Vous pouvez suivre l'état d'une session côté serveur à tout moment, en
 complément des événements `postMessage` (qui ne sont qu'un signal UX
 immédiat, pas la source de vérité) :
@@ -357,6 +373,9 @@ Ajouts uniquement, aucun changement incompatible :
   déclaré, rien d'autre.
 - `PATCH /v1/fiches/{fiche_id}` accepte `booking_ref` pour rattacher une fiche
   saisie dans Qayed (section 7).
+- `DELETE /v1/fiche-sessions/{session_id}/lock` : libère le verrou de saisie
+  quand vous fermez la modale du widget (section 3). Verrou de 2 minutes sans
+  action, levé à la fermeture, reprise possible par un collègue.
 
 ---
 

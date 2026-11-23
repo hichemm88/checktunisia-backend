@@ -645,6 +645,37 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
 
+  /v1/fiche-sessions/{session_id}/lock:
+    delete:
+      tags: [Sessions de fiche]
+      summary: Libérer le verrou de saisie d'une fiche
+      description: |
+        (1.2.0) Pendant qu'une personne saisit une fiche dans le widget, une autre
+        personne qui l'ouvre voit « {nom} est en train de saisir cette fiche » et peut
+        reprendre la saisie. Ce verrou est vivant : il tombe après 2 minutes sans
+        action dans le widget et se lève dès que le widget est fermé.
+
+        Appelez cette route quand vous fermez vous-même la modale du widget, pour que
+        la fiche soit immédiatement disponible pour un collègue. Les voyageurs déjà
+        enregistrés restent sur la fiche. Idempotent : 204 même si aucun verrou n'était
+        posé. Une clé de test n'agit que sur les sessions de test, une clé live que sur
+        les sessions live (sinon 404).
+      operationId: releaseFicheSessionLock
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '204':
+          description: Verrou levé (ou déjà libre).
+        '401':
+          $ref: '#/components/responses/InvalidApiKey'
+        '404':
+          description: Session introuvable pour ce partenaire et ce mode de clé (`session_not_found`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
   /v1/fiches:
     get:
       tags: [Fiches]
@@ -944,9 +975,21 @@ paths:
           required: true
           schema: { type: string }
           description: JWT émis dans widget_url.
+        - name: takeover
+          in: query
+          required: false
+          schema: { type: boolean }
+          description: |
+            (1.2.0) « Reprendre la saisie » : transfère le verrou d'une fiche qu'une autre
+            personne est en train de saisir. Tout ce qui est déjà saisi est conservé ;
+            l'autre écran affiche « Saisie reprise par {nom} » et ne peut plus soumettre.
       responses:
         '200':
-          description: Session widget initialisée.
+          description: |
+            Session widget initialisée. Si une autre personne saisit cette fiche en ce
+            moment (action dans le widget il y a moins de 2 minutes) et que `takeover`
+            n'est pas demandé, `widget_token` est null, `locked_by` donne son nom et le
+            JWT n'est pas consommé.
           content:
             application/json:
               schema:
@@ -955,7 +998,12 @@ paths:
                   session_id: { type: string, format: uuid }
                   widget_token:
                     type: string
-                    description: Jeton opaque à envoyer en Authorization Bearer sur tous les appels suivants.
+                    nullable: true
+                    description: Jeton opaque à envoyer en Authorization Bearer sur tous les appels suivants. Null si la fiche est verrouillée (voir locked_by).
+                  locked_by:
+                    type: string
+                    nullable: true
+                    description: (1.2.0) Nom de la personne qui saisit la fiche en ce moment ('' si inconnu) ; null si la fiche est libre.
                   mode: { type: string, enum: [create, amend] }
                   establishment_name: { type: string }
                   booking_ref: { type: string }
@@ -967,7 +1015,7 @@ paths:
                     items: { type: object, additionalProperties: true }
                   existing_guests:
                     type: array
-                    description: Non vide uniquement en mode amend.
+                    description: Voyageurs déjà enregistrés sur la fiche (brouillon repris ou fiche transmise).
                     items:
                       type: object
                       properties:
@@ -1168,6 +1216,45 @@ paths:
         '404':
           description: Scan introuvable pour cette session.
 
+  /widget/v1/lock:
+    get:
+      tags: [Widget]
+      summary: "[Widget uniquement] Vérifier que la saisie n'a pas été reprise"
+      description: Ne renouvelle pas le verrou. 409 `session_taken_over` si un collègue a repris la saisie.
+      operationId: widgetLockStatus
+      security:
+        - widgetSession: []
+      responses:
+        '200':
+          description: La saisie est toujours tenue par ce widget.
+        '409':
+          $ref: '#/components/responses/SessionTakenOver'
+    post:
+      tags: [Widget]
+      summary: "[Widget uniquement] Signaler une action (renouvelle le verrou)"
+      description: |
+        Envoyé par le widget lors d'une action réelle (saisie, navigation). Le scan,
+        l'ajout et le retrait de voyageur renouvellent aussi le verrou. Sans action
+        pendant 2 minutes, le verrou tombe.
+      operationId: widgetLockTouch
+      security:
+        - widgetSession: []
+      responses:
+        '200':
+          description: Verrou renouvelé.
+        '409':
+          $ref: '#/components/responses/SessionTakenOver'
+    delete:
+      tags: [Widget]
+      summary: "[Widget uniquement] Libérer le verrou à la fermeture"
+      description: Widget fermé sans soumettre. Les voyageurs déjà enregistrés restent sur la fiche.
+      operationId: widgetLockRelease
+      security:
+        - widgetSession: []
+      responses:
+        '204':
+          description: Verrou levé.
+
   /widget/v1/submit:
     post:
       tags: [Widget]
@@ -1267,6 +1354,17 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+    SessionTakenOver:
+      description: (1.2.0) Saisie reprise par un collègue (`session_taken_over`) ; `error.taken_over_by` donne son nom.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error:
+              code: session_taken_over
+              message: "Saisie reprise par Amel Ben Salah."
+              doc_url: "https://qayed.tn/docs/api#session_taken_over"
+              taken_over_by: "Amel Ben Salah"
   schemas:
     Error:
       type: object
@@ -1314,6 +1412,7 @@ components:
         - validation_error
         - booking_ref_conflict
         - booking_ref_already_set
+        - session_taken_over
       x-error-details:
         invalid_api_key: { http_status: 401, message: "Clé API invalide ou révoquée." }
         invalid_link_code: { http_status: 422, message: "Code de liaison invalide." }
@@ -1338,6 +1437,12 @@ components:
         validation_error: { http_status: 422, message: "Erreur de validation." }
         booking_ref_conflict: { http_status: 409, message: "Ce booking_ref est déjà porté par une autre fiche de cet établissement." }
         booking_ref_already_set: { http_status: 409, message: "Cette fiche est déjà rattachée à une autre référence de réservation." }
+        session_taken_over:
+          http_status: 409
+          message: "La saisie de cette fiche a été reprise par une autre personne."
+          note: >-
+            Widget uniquement. L'objet error porte en plus taken_over_by (nom de la
+            personne qui a repris la saisie, ou null).
     Establishment:
       type: object
       properties:

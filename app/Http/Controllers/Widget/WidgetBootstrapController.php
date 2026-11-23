@@ -29,7 +29,9 @@ class WidgetBootstrapController extends Controller
         $partner = ApiPartner::findOrFail($claims->partner_id);
         $this->assertOriginAllowed($partner, $request);
 
-        $boot = $this->sessions->bootstrap($jwt);
+        // takeover=1 : « Reprendre la saisie » depuis l'écran « … est en train
+        // de saisir cette fiche » — le verrou est transféré, rien n'est perdu.
+        $boot = $this->sessions->bootstrap($jwt, $request->boolean('takeover'));
         $session = $boot['session'];
         $session->loadMissing(['hotel', 'checkIn.room', 'checkIn.guests']);
 

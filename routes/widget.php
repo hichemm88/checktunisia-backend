@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Widget\WidgetBootstrapController;
 use App\Http\Controllers\Widget\WidgetGuestController;
+use App\Http\Controllers\Widget\WidgetLockController;
 use App\Http\Controllers\Widget\WidgetScanController;
 use App\Http\Controllers\Widget\WidgetShellController;
 use App\Http\Controllers\Widget\WidgetSubmitController;
@@ -34,5 +35,10 @@ Route::prefix('widget/v1')->middleware('throttle:widget-session')->group(functio
         Route::post('scan', [WidgetScanController::class, 'store']);
         Route::get('scan/{scanId}/status', [WidgetScanController::class, 'status']);
         Route::post('submit', [WidgetSubmitController::class, 'store']);
+        // Verrou de saisie : POST = action réelle (renouvelle), GET = état
+        // (détecte une reprise par un collègue), DELETE = fermeture du widget.
+        Route::get('lock', [WidgetLockController::class, 'show']);
+        Route::post('lock', [WidgetLockController::class, 'touch']);
+        Route::delete('lock', [WidgetLockController::class, 'release']);
     });
 });

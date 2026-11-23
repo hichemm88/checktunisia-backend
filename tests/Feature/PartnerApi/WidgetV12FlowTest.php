@@ -114,7 +114,7 @@ class WidgetV12FlowTest extends TestCase
         $this->assertNull($session->jwt_consumed_at, 'Le lien de Bob n\'est pas consommé : il pourra réessayer.');
 
         // Alice abandonne : passé le délai de verrou, Bob reprend avec le même lien.
-        $this->travel((int) config('partner_api.widget_session.lock_minutes') + 1)->minutes();
+        $this->travel((int) config('partner_api.widget_session.lock_seconds') + 1)->seconds();
         $boot = $this->getJson('/widget/v1/bootstrap?token='.$bobJwt)->assertOk();
 
         $this->assertNotEmpty($boot->json('widget_token'));

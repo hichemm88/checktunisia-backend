@@ -31,6 +31,8 @@ class ErrorCodes
     // v1.2 — rattachement d'une fiche à une réservation partenaire (PATCH booking_ref).
     public const BOOKING_REF_CONFLICT = 'booking_ref_conflict';
     public const BOOKING_REF_ALREADY_SET = 'booking_ref_already_set';
+    // Widget : la saisie a été reprise par un collègue (verrou transféré).
+    public const SESSION_TAKEN_OVER = 'session_taken_over';
 
     /** Libellés FR par défaut — surchageables au cas par cas dans PartnerApiException::make(). */
     public const MESSAGES = [
@@ -50,6 +52,7 @@ class ErrorCodes
         self::VALIDATION_ERROR => 'Erreur de validation.',
         self::BOOKING_REF_CONFLICT => 'Ce booking_ref est déjà porté par une autre fiche de cet établissement.',
         self::BOOKING_REF_ALREADY_SET => 'Cette fiche est déjà rattachée à une autre référence de réservation.',
+        self::SESSION_TAKEN_OVER => 'La saisie de cette fiche a été reprise par une autre personne.',
     ];
 
     public const HTTP_STATUS = [
@@ -69,5 +72,6 @@ class ErrorCodes
         self::VALIDATION_ERROR => 422,
         self::BOOKING_REF_CONFLICT => 409,
         self::BOOKING_REF_ALREADY_SET => 409,
+        self::SESSION_TAKEN_OVER => 409,
     ];
 }
