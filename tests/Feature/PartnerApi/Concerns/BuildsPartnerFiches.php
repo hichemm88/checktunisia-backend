@@ -39,7 +39,7 @@ trait BuildsPartnerFiches
     }
 
     /** Fiche « créée via l'API » par $partner, posée en base. */
-    protected function makeApiFiche(Hotel $hotel, ApiPartner $partner, string $bookingRef, bool $testMode = false, array $attrs = []): CheckIn
+    protected function makeApiFiche(Hotel $hotel, ApiPartner $partner, string $bookingRef, bool $testMode = false, array $attrs = [], ?Guest $primary = null): CheckIn
     {
         return $this->makeNativeFiche($hotel, array_merge([
             'booking_reference' => $bookingRef,
@@ -51,7 +51,7 @@ trait BuildsPartnerFiches
                 'room_label' => 'Suite Jasmin',
                 'test_mode' => $testMode,
             ],
-        ], $attrs));
+        ], $attrs), $primary);
     }
 
     protected function attachGuest(CheckIn $checkIn, Guest $guest, bool $primary = false): Guest

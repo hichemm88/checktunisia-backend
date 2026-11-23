@@ -11,11 +11,13 @@ use App\Models\WhatsappSendLog;
 use App\Services\PartnerApi\ErrorCodes;
 use App\Services\PartnerApi\EstablishmentLinkService;
 use App\Services\PartnerApi\FicheDeliveryStatus;
+use App\Services\Audit\AuditLogger;
 use App\Services\PartnerApi\PartnerStayService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class PartnerFicheController extends Controller
@@ -173,13 +175,15 @@ class PartnerFicheController extends Controller
     private function listItem(CheckIn $checkIn, string $deliveryStatus): array
     {
         $fromApi = ($checkIn->metadata['source'] ?? null) === 'api';
+        // Fiche saisie dans Qayed puis rattachée à une réservation de CE partenaire.
+        $attached = ! $fromApi && ($checkIn->metadata['partner_id'] ?? null) === app(ApiPartner::class)->id;
         $primary = $checkIn->guests->first(fn ($g) => (bool) ($g->pivot->is_primary ?? false)) ?? $checkIn->guests->first();
         $operator = $checkIn->completedBy ?? $checkIn->creator;
 
         return [
             'fiche_id' => $checkIn->id,
             'establishment_id' => $checkIn->hotel_id,
-            'booking_ref' => $fromApi ? $checkIn->booking_reference : null,
+            'booking_ref' => $fromApi || $attached ? $checkIn->booking_reference : null,
             'room_id' => $checkIn->room_id,
             'room' => $fromApi
                 ? ($checkIn->metadata['room_label'] ?? $checkIn->room?->number)
@@ -213,10 +217,21 @@ class PartnerFicheController extends Controller
             'departure_date' => ['sometimes', 'date'],
             'room_id' => ['sometimes', 'uuid'],
             'room' => ['sometimes', 'nullable', 'string', 'max:100'],
+            // v1.2 — rattacher une fiche saisie dans Qayed à la réservation.
+            'booking_ref' => ['sometimes', 'string', 'min:1', 'max:100'],
         ]);
 
         if ($data === []) {
-            throw new PartnerApiException(ErrorCodes::VALIDATION_ERROR, 'Indiquez au moins departure_date, room_id ou room.');
+            throw new PartnerApiException(ErrorCodes::VALIDATION_ERROR, 'Indiquez au moins departure_date, room_id, room ou booking_ref.');
+        }
+
+        if (array_key_exists('booking_ref', $data)) {
+            $checkIn = $this->attachBookingRef($ficheId, trim($data['booking_ref']));
+            unset($data['booking_ref']);
+
+            if ($data === []) {
+                return response()->json($this->payload($checkIn->load('guests')));
+            }
         }
 
         if (isset($data['departure_date'])) {
@@ -226,6 +241,79 @@ class PartnerFicheController extends Controller
         $checkIn = $stays->update($this->findForPartner($ficheId), $data);
 
         return response()->json($this->payload($checkIn->load('guests')));
+    }
+
+    /**
+     * v1.2 — rattache une fiche à une réservation du partenaire : une fiche
+     * saisie dans Qayed et sans booking_ref (clé live uniquement, jamais un
+     * brouillon), ou rejoue sans effet un rattachement identique. Ensuite,
+     * POST /v1/fiche-sessions avec ce booking_ref rouvre CETTE fiche en
+     * complément (FicheSessionService) au lieu d'en créer une seconde. La
+     * fiche garde son origine (« qayed ») : seuls booking_reference et le
+     * partenaire propriétaire sont posés. Refus si un autre check-in du même
+     * établissement porte déjà ce booking_ref.
+     */
+    private function attachBookingRef(string $ficheId, string $ref): CheckIn
+    {
+        $partner = app(ApiPartner::class);
+        $apiKey = app(ApiKey::class);
+
+        if ($ref === '') {
+            throw new PartnerApiException(ErrorCodes::VALIDATION_ERROR, 'booking_ref ne peut pas être vide.');
+        }
+
+        return DB::transaction(function () use ($partner, $apiKey, $ficheId, $ref) {
+            $checkIn = CheckIn::whereKey($ficheId)->lockForUpdate()->first();
+            $meta = $checkIn?->metadata ?? [];
+            $owner = $meta['partner_id'] ?? null;
+            $fromApi = ($meta['source'] ?? null) === 'api';
+
+            $visible = $checkIn
+                && ($owner === null || $owner === $partner->id)
+                && ($fromApi || ! $apiKey->isTestMode())
+                && ($owner !== null || $checkIn->status !== 'draft')
+                && $this->links->isLinked($partner, $checkIn->hotel_id);
+
+            if (! $visible) {
+                throw new PartnerApiException(ErrorCodes::FICHE_NOT_FOUND);
+            }
+
+            if (filled($checkIn->booking_reference)) {
+                if ($owner === $partner->id && $checkIn->booking_reference === $ref) {
+                    return $checkIn;
+                }
+
+                throw new PartnerApiException(ErrorCodes::BOOKING_REF_ALREADY_SET);
+            }
+
+            // Sérialise les rattachements et créations concurrents pour ce couple.
+            DB::select('select pg_advisory_xact_lock(hashtext(?))', ["booking_ref|{$checkIn->hotel_id}|{$ref}"]);
+
+            $taken = CheckIn::where('hotel_id', $checkIn->hotel_id)
+                ->where('booking_reference', $ref)
+                ->whereKeyNot($checkIn->id)
+                ->exists();
+
+            if ($taken) {
+                throw new PartnerApiException(ErrorCodes::BOOKING_REF_CONFLICT);
+            }
+
+            $checkIn->update([
+                'booking_reference' => $ref,
+                'metadata' => array_merge($meta, [
+                    'partner_id' => $partner->id,
+                    'partner_name' => $partner->name,
+                    'partner_attached_at' => now()->toIso8601String(),
+                ]),
+            ]);
+
+            AuditLogger::log('check_in.partner_booking_ref_attached', $checkIn, [], [
+                'partner_id' => $partner->id,
+                'booking_ref' => $ref,
+            ], hotelId: $checkIn->hotel_id);
+
+            return $checkIn;
+        });
     }
 
     private function findForPartner(string $ficheId): CheckIn
@@ -252,6 +340,12 @@ class PartnerFicheController extends Controller
             'booking_ref' => $checkIn->booking_reference,
             'establishment_id' => $checkIn->hotel_id,
             'guest_count' => $checkIn->guests->count(),
+            // v1.2 — voyageurs déclarés : prénom et nom UNIQUEMENT (jamais de
+            // document, de date de naissance ni d'image). Principal en tête.
+            'guests' => $checkIn->guests->map(fn ($g) => [
+                'first_name' => $g->first_name,
+                'last_name' => $g->last_name,
+            ])->values()->all(),
             'submitted_at' => $checkIn->completed_at?->toIso8601String(),
             'authority_status' => $this->authorityStatusFor($checkIn),
             'reference_number' => $checkIn->reference,

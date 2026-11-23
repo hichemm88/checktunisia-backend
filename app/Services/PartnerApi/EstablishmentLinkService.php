@@ -94,6 +94,15 @@ class EstablishmentLinkService
         $link->update(['revoked_at' => now(), 'revoked_by' => $revokedBy->id]);
     }
 
+    /** Variante sans exception (ne révèle pas l'existence d'une fiche d'un établissement non lié). */
+    public function isLinked(ApiPartner $partner, string $hotelId): bool
+    {
+        return EstablishmentPartnerLink::active()
+            ->where('partner_id', $partner->id)
+            ->where('hotel_id', $hotelId)
+            ->exists();
+    }
+
     /** Établissement actif et bien lié à ce partenaire — lève establishment_not_linked sinon. */
     public function assertLinked(ApiPartner $partner, string $hotelId): EstablishmentPartnerLink
     {

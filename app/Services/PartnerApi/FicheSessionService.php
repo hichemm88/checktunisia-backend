@@ -130,9 +130,18 @@ class FicheSessionService
             //                       sans reconsommer de quota ni renvoyer de
             //                       WhatsApp (rien de tout ça n'a encore eu lieu) ;
             //  - sinon (aucune)   → vraie création.
+            //
+            // v1.2 : aussi une fiche saisie dans Qayed que CE partenaire a
+            // rattachée à sa réservation (PATCH /v1/fiches/{id} booking_ref) —
+            // elle est rouverte en complément, jamais doublée.
+            DB::select('select pg_advisory_xact_lock(hashtext(?))', ["booking_ref|{$hotel->id}|{$data['booking_ref']}"]);
+
             $existingCheckIn = CheckIn::where('hotel_id', $hotel->id)
                 ->where('booking_reference', $data['booking_ref'])
-                ->where('metadata->source', 'api')
+                ->where(fn ($q) => $q->where('metadata->source', 'api')
+                    // Une clé de test ne rouvre jamais une fiche réelle rattachée.
+                    ->when(! $apiKey->isTestMode(), fn ($w) => $w->orWhere('metadata->partner_id', $partner->id)))
+                ->orderByRaw("CASE WHEN metadata->>'source' = 'api' THEN 0 ELSE 1 END")
                 ->first();
 
             if ($existingCheckIn && in_array($existingCheckIn->status, ['active', 'completed'], true)) {

@@ -820,10 +820,20 @@ paths:
           $ref: '#/components/responses/RateLimited'
     patch:
       tags: [Fiches]
-      summary: Mettre à jour le séjour d'une fiche (1.1.0)
+      summary: Mettre à jour le séjour d'une fiche (1.1.0) ou la rattacher à une réservation (1.2.0)
       description: |
         Prolongation, départ anticipé et changement de chambre, sans rouvrir le
-        widget. Envoyez au moins un des champs `departure_date`, `room_id`, `room`.
+        widget. Envoyez au moins un des champs `departure_date`, `room_id`, `room`,
+        `booking_ref`.
+
+        **Rattachement (1.2.0)** : `booking_ref` rattache à votre réservation une
+        fiche saisie directement dans Qayed (`source: qayed` dans `GET /v1/fiches`)
+        qui n'a pas encore de référence. Ensuite, `POST /v1/fiche-sessions` avec ce
+        `booking_ref` rouvre cette fiche en mode `amend` (complément) au lieu d'en
+        créer une seconde. La fiche garde `source: qayed` et devient lisible par
+        `GET /v1/fiches/{fiche_id}`. Clé live uniquement ; un brouillon, une fiche
+        d'un établissement non lié ou déjà rattachée à un autre partenaire renvoie
+        `404 fiche_not_found`. Rejouer la même valeur est sans effet.
 
         - `departure_date` ne peut pas précéder la date d'arrivée.
         - Un changement de chambre (`room_id`) clôt tout séjour encore ouvert dans la
@@ -860,9 +870,23 @@ paths:
                   maxLength: 100
                   nullable: true
                   description: Libellé partenaire de la chambre, pour affichage uniquement.
-            example:
-              departure_date: "2026-09-25"
-              room_id: "3c1a9e7a-2b4d-4f6a-8c0e-1a2b3c4d5e6f"
+                booking_ref:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  description: |
+                    (1.2.0) Votre référence de réservation, posée sur une fiche saisie dans
+                    Qayed qui n'en a pas encore. Voir la description de l'opération.
+            examples:
+              sejour:
+                summary: Prolongation et changement de chambre
+                value:
+                  departure_date: "2026-09-25"
+                  room_id: "3c1a9e7a-2b4d-4f6a-8c0e-1a2b3c4d5e6f"
+              rattachement:
+                summary: Rattacher une fiche saisie dans Qayed (1.2.0)
+                value:
+                  booking_ref: "RES-2026-0042"
       responses:
         '200':
           description: Fiche mise à jour — même contenu que `GET /v1/fiches/{fiche_id}`.
@@ -878,6 +902,14 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         '404':
           description: Fiche introuvable ou non créée par ce partenaire (`fiche_not_found`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: |
+            (1.2.0) `booking_ref_conflict` : une autre fiche du même établissement porte
+            déjà ce `booking_ref`. `booking_ref_already_set` : la fiche a déjà une autre
+            référence de réservation.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -1280,6 +1312,8 @@ components:
         - frame_disallowed
         - rate_limited
         - validation_error
+        - booking_ref_conflict
+        - booking_ref_already_set
       x-error-details:
         invalid_api_key: { http_status: 401, message: "Clé API invalide ou révoquée." }
         invalid_link_code: { http_status: 422, message: "Code de liaison invalide." }
@@ -1302,6 +1336,8 @@ components:
         frame_disallowed: { http_status: 403, message: "Origine non autorisée à charger ce widget." }
         rate_limited: { http_status: 429, message: "Trop de requêtes." }
         validation_error: { http_status: 422, message: "Erreur de validation." }
+        booking_ref_conflict: { http_status: 409, message: "Ce booking_ref est déjà porté par une autre fiche de cet établissement." }
+        booking_ref_already_set: { http_status: 409, message: "Cette fiche est déjà rattachée à une autre référence de réservation." }
     Establishment:
       type: object
       properties:
@@ -1363,6 +1399,18 @@ components:
         booking_ref: { type: string }
         establishment_id: { type: string, format: uuid }
         guest_count: { type: integer }
+        guests:
+          type: array
+          description: |
+            (1.2.0) Voyageurs déclarés sur la fiche, voyageur principal en tête : prénom et
+            nom uniquement. Aucun document, aucune date de naissance, aucune image.
+          items:
+            type: object
+            additionalProperties: false
+            required: [first_name, last_name]
+            properties:
+              first_name: { type: string }
+              last_name: { type: string }
         submitted_at: { type: string, format: date-time, nullable: true }
         authority_status:
           type: string

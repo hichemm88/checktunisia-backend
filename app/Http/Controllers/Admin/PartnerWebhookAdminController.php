@@ -64,10 +64,16 @@ class PartnerWebhookAdminController extends Controller
         $v = $request->validate([
             'url' => ['sometimes', 'url', 'max:500'],
             'events' => ['sometimes', 'array'],
+            'events.*' => ['string', 'in:'.implode(',', self::EVENTS)],
             'active' => ['sometimes', 'boolean'],
         ]);
 
+        $before = $endpoint->events;
         $endpoint->update($v + ($v['active'] ?? null ? ['consecutive_failures' => 0] : []));
+
+        if (array_key_exists('events', $v) && $v['events'] !== $before) {
+            AuditLogger::log('partner.webhook_events_changed', $endpoint, ['events' => $before], ['events' => $v['events']]);
+        }
 
         return response()->json(['data' => $this->summarize($endpoint->fresh())]);
     }

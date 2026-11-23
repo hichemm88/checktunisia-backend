@@ -28,6 +28,9 @@ class ErrorCodes
     public const FRAME_DISALLOWED = 'frame_disallowed';
     public const RATE_LIMITED = 'rate_limited';
     public const VALIDATION_ERROR = 'validation_error';
+    // v1.2 — rattachement d'une fiche à une réservation partenaire (PATCH booking_ref).
+    public const BOOKING_REF_CONFLICT = 'booking_ref_conflict';
+    public const BOOKING_REF_ALREADY_SET = 'booking_ref_already_set';
 
     /** Libellés FR par défaut — surchageables au cas par cas dans PartnerApiException::make(). */
     public const MESSAGES = [
@@ -45,6 +48,8 @@ class ErrorCodes
         self::FRAME_DISALLOWED => 'Origine non autorisée à charger ce widget.',
         self::RATE_LIMITED => 'Trop de requêtes.',
         self::VALIDATION_ERROR => 'Erreur de validation.',
+        self::BOOKING_REF_CONFLICT => 'Ce booking_ref est déjà porté par une autre fiche de cet établissement.',
+        self::BOOKING_REF_ALREADY_SET => 'Cette fiche est déjà rattachée à une autre référence de réservation.',
     ];
 
     public const HTTP_STATUS = [
@@ -62,5 +67,7 @@ class ErrorCodes
         self::FRAME_DISALLOWED => 403,
         self::RATE_LIMITED => 429,
         self::VALIDATION_ERROR => 422,
+        self::BOOKING_REF_CONFLICT => 409,
+        self::BOOKING_REF_ALREADY_SET => 409,
     ];
 }

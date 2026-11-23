@@ -321,6 +321,29 @@ curl "https://api.qayed.tn/v1/fiches?establishment_id=0f2e6b8a-1c3d-4e5f-9a0b-1c
 
 ---
 
+## 7. Rattacher une fiche saisie dans Qayed (1.2.0)
+
+Quand la réception a déclaré un voyageur directement dans Qayed avant que la
+réservation existe chez vous, la fiche apparaît dans `GET /v1/fiches` avec
+`source: "qayed"` et `booking_ref: null`. Rattachez-la à votre réservation :
+
+```bash
+curl -X PATCH https://api.qayed.tn/v1/fiches/<fiche_id> \
+  -H "Authorization: Bearer qyd_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{"booking_ref": "RES-2026-0042"}'
+```
+
+Ensuite, `POST /v1/fiche-sessions` avec ce `booking_ref` rouvre cette fiche en
+mode `amend` (complément), sans jamais en créer une seconde.
+
+- `409 booking_ref_conflict` : une autre fiche du même établissement porte déjà
+  ce `booking_ref`.
+- `409 booking_ref_already_set` : la fiche a déjà une autre référence. Rejouer la
+  même valeur est sans effet.
+- `404 fiche_not_found` : brouillon, établissement non lié, fiche déjà rattachée
+  à un autre partenaire, ou clé de test (les fiches réelles lui sont invisibles).
+
 ## Nouveautés 1.2.0
 
 Ajouts uniquement, aucun changement incompatible :
@@ -328,7 +351,12 @@ Ajouts uniquement, aucun changement incompatible :
 - `GET /v1/fiches` : liste paginée par curseur des fiches d'un établissement
   lié (API et saisies dans Qayed), filtres de dates et `updated_since`.
 - `delivery_status` sur les fiches et les sessions.
-- Webhooks `fiche.delivered` et `fiche.delivery_failed` (live uniquement).
+- Webhooks `fiche.delivered` et `fiche.delivery_failed` (live uniquement) ; un
+  endpoint déjà déclaré doit y être abonné (réglage Qayed, par événement).
+- `GET /v1/fiches/{fiche_id}` renvoie `guests` : prénom et nom de chaque voyageur
+  déclaré, rien d'autre.
+- `PATCH /v1/fiches/{fiche_id}` accepte `booking_ref` pour rattacher une fiche
+  saisie dans Qayed (section 7).
 
 ---
 
