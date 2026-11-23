@@ -154,7 +154,7 @@ toutes les traductions de l'application (`DirectionalIcon` importait `@/i18n`) :
 | Vérification | Résultat |
 |---|---|
 | Tests du périmètre (API partenaire, widget, purge, garde-fous, facturation, abonnements, relais) | 357 tests, 1867 assertions, OK |
-| Suite backend complète | voir plus bas |
+| Suite backend complète (Docker, 131 fichiers listés explicitement) | 1298 tests, 5139 assertions, 0 échec |
 | Frontend : typecheck, oxlint, 304 tests vitest, build | OK |
 | Widget local (faux serveur) : création, reprise de brouillon, lecture, lecture > 15 s, liste, verrou | OK |
 | Production : page widget `no-store`, bundle `?v=b73f26c0dc42` à jour, OpenAPI 1.2.0, `/docs/api` 1.2.0 | OK |
